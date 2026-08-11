@@ -180,9 +180,12 @@ If nil then source blocks are initially hidden on slide change."
   :type 'hook
   :group 'epresent)
 
-(defcustom epresent-x-pointer-shape x-pointer-dot
-  "Mouse pointer shape during the presentation."
-  :type 'symbol
+(defcustom epresent-x-pointer-shape (and (boundp 'x-pointer-dot) x-pointer-dot)
+  "Shape of the mouse pointer during the presentation.
+The value is one of the `x-pointer-' constants, which are integers, or
+nil to leave the pointer unchanged.  Those constants exist only on X11
+builds, so this is nil elsewhere."
+  :type '(choice (const :tag "Leave unchanged" nil) integer)
   :group 'epresent)
 
 (defcustom epresent-tooltip-mode 0
@@ -260,14 +263,16 @@ players are mplayer and vlc."
   (select-frame-set-input-focus epresent--frame)
   ;; set fringe background to same as frame background 
   (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters))))
-  ;; set mouse pointer shape. save user variable
-  (setq epresent-user-x-pointer-shape x-pointer-shape)
-  (setq epresent-user-x-sensitive-text-pointer-shape x-sensitive-text-pointer-shape)
-  (setq x-pointer-shape epresent-x-pointer-shape)
-  (setq x-sensitive-text-pointer-shape epresent-x-pointer-shape)
-  (setq void-text-area-pointer 'text)
-  ;; set mouse color (without changing it) to make pointer settings effective 
-  (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))
+  ;; set mouse pointer shape, saving the user's setting first
+  (when (boundp 'x-pointer-shape)
+    (setq epresent-user-x-pointer-shape x-pointer-shape)
+    (setq epresent-user-x-sensitive-text-pointer-shape
+          x-sensitive-text-pointer-shape)
+    (setq x-pointer-shape epresent-x-pointer-shape)
+    (setq x-sensitive-text-pointer-shape epresent-x-pointer-shape)
+    (setq void-text-area-pointer 'text)
+    ;; setting the mouse colour to its current value applies the shapes
+    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
   epresent--frame)
 
 ;; functions
@@ -521,12 +526,13 @@ for the SKIP argument."
   ;; delete all epresent overlays
   (epresent-clean-overlays)
   (epresent-clean-fringe-overlays)
-  ;; reset mouse pointer shape and color
-  (setq x-pointer-shape epresent-user-x-pointer-shape)
-  (setq x-sensitive-text-pointer-shape epresent-user-x-sensitive-text-pointer-shape)
-  (setq void-text-area-pointer 'arrow)
-  ;; set mouse color (without changing it) to make pointer settings effective 
-  (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))
+  ;; reset mouse pointer shape and colour
+  (when (boundp 'x-pointer-shape)
+    (setq x-pointer-shape epresent-user-x-pointer-shape)
+    (setq x-sensitive-text-pointer-shape
+          epresent-user-x-sensitive-text-pointer-shape)
+    (setq void-text-area-pointer 'arrow)
+    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
   ;; kill notes buffer and associated frame, if present
   (when (bufferp epresent-notes-buffer)
     (delete-frame (window-frame (get-buffer-window epresent-notes-buffer)))
@@ -1020,20 +1026,18 @@ epresent-wpm. "
 	    " words)")))  
 
 (defun epresent-toggle-mouse ()
-  "Show/hode mouse pointer."
+  "Show or hide the mouse pointer.
+Does nothing on a build without X11 pointer support."
   (interactive)
-  (if epresent-mouse-visible
-      (progn
-	(setq x-pointer-shape x-pointer-invisible)
-	(setq x-sensitive-text-pointer-shape x-pointer-invisible)
-	(setq void-text-area-pointer 'text))
-    (progn
-      (setq x-pointer-shape epresent-x-pointer-shape)
-      (setq x-sensitive-text-pointer-shape epresent-x-pointer-shape)
-      (setq void-text-area-pointer 'text)))
-  ;; set mouse color (without changing it) to make pointer settings
-  ;; effective
-  (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
+  (when (boundp 'x-pointer-shape)
+    (if epresent-mouse-visible
+        (setq x-pointer-shape x-pointer-invisible
+              x-sensitive-text-pointer-shape x-pointer-invisible)
+      (setq x-pointer-shape epresent-x-pointer-shape
+            x-sensitive-text-pointer-shape epresent-x-pointer-shape))
+    (setq void-text-area-pointer 'text)
+    ;; setting the mouse colour to its current value applies the shapes
+    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))))
 
 (defvar epresent-mode-map
   (let ((map (make-keymap)))
