@@ -1517,13 +1517,15 @@ EPRESENT_SHOW_PAGES."
                            "^\\[?\\[?" "" (match-string 1 input))))
                (extension (file-name-extension filename)))
           (if (string= extension "org")
-              ;; Org files are converted to LaTeX and inlined
-              (save-excursion
-                (find-file filename)
-                (org-latex-convert-region-to-latex)
-                (setq output (concat output (buffer-string)))
-                (set-buffer-modified-p nil)
-                (kill-buffer))
+              ;; Org files are converted to LaTeX and inlined.  Read the file
+              ;; into a temporary buffer rather than visiting it: visiting
+              ;; would hand us the user's own buffer if they have the file
+              ;; open, and the conversion replaces the buffer's contents.
+              (setq output
+                    (concat output
+                            (with-temp-buffer
+                              (insert-file-contents filename)
+                              (org-export-string-as (buffer-string) 'latex t))))
             ;; everything else is treated as an image
             (let ((width (if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" input)
                              (match-string 1 input)
@@ -1540,12 +1542,27 @@ EPRESENT_SHOW_PAGES."
       output))
 #+end_src
 
-Three incidental fixes, all forced by the compiler: the =message= calls that
-bracketed the function are gone (they wrote to the echo area on every drawer of
-every export); =kill-this-buffer= — a menu command that misbehaves when called
-from Lisp — becomes =kill-buffer=; and =mark-whole-buffer=, which the compiler
-flags as interactive-only, is dropped in favour of =buffer-string=, which is
-what the mark-and-substring dance was computing.
+Two incidental fixes forced by the compiler: the =message= calls that bracketed
+the function are gone (they wrote to the echo area on every drawer of every
+export), and =kill-this-buffer= — a menu command that misbehaves when called
+from Lisp — becomes =kill-buffer=.
+
+The third, =mark-whole-buffer=, is the interesting one. An earlier draft of this
+plan simply dropped it "in favour of =buffer-string=, which is what the
+mark-and-substring dance was computing". That was wrong, and it shipped a
+regression that the review caught: =mark-whole-buffer= was *also* activating the
+region, and =org-latex-convert-region-to-latex= → =org-export-replace-region-by=
+begins with =(unless (org-region-active-p) (user-error "No active region to
+replace"))=. Without it, exporting any slide whose =EPRESENT_SHOW_FILE= names an
+=.org= file aborts.
+
+Restoring the mark would not have been right either. =org-region-active-p=
+requires =transient-mark-mode=, which is nil under =--batch=, so the region
+approach never worked in batch export at all. And =find-file= on a file the user
+already has open returns *their* buffer, which the conversion then overwrites,
+=set-buffer-modified-p nil= marks clean and =kill-buffer= discards — silently
+losing unsaved work. The rewrite above avoids the region API entirely and never
+touches a buffer of the user's. Verified to produce identical LaTeX.
 
 Note the ordering trap: the =EPRESENT_SHOW_WIDTH= and =EPRESENT_SHOW_PAGES=
 searches must run *after* =filename= has been bound, because each
