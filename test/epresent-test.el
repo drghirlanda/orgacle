@@ -153,5 +153,48 @@ changes this and updates the test."
   (let ((epresent-wpm 150))
     (should (equal 1 (epresent--speaking-time 225)))))
 
+;;; LaTeX export backend
+
+;; The .org branch of `epresent-latex-property-drawer' visits a file and is
+;; not characterized here; P2 revisits it when ox-epresent.el is split out.
+
+(defun epresent-test--export-fixture (name)
+  "Export fixture NAME through the epresent backend and return the LaTeX.
+`:with-properties' has to be forced on: `org-export-with-properties'
+defaults to nil, and without it Org discards property drawers before
+the backend ever sees them, so the translator never runs.  Task 9 makes
+the backend default it to t; this helper keeps the tests honest either
+way."
+  (epresent-test-with-fixture name
+    (org-export-as 'epresent nil nil t '(:with-properties t))))
+
+(ert-deftest epresent-test-export-emits-includegraphics ()
+  "EPRESENT_SHOW_FILE becomes an \\includegraphics with the given width."
+  (let ((latex (epresent-test--export-fixture "export.org")))
+    (should (string-match-p
+             "\\\\includegraphics\\[width=0\\.8\\\\textwidth,page=1\\]{figure\\.pdf}"
+             latex))))
+
+(ert-deftest epresent-test-export-strips-org-link-brackets ()
+  "A filename written as an Org link loses its brackets."
+  (let ((latex (epresent-test--export-fixture "export.org")))
+    (should-not (string-match-p "{\\[\\[figure" latex))))
+
+(ert-deftest epresent-test-export-honours-page-list ()
+  "EPRESENT_SHOW_PAGES emits one \\includegraphics per page."
+  (let ((latex (epresent-test--export-fixture "export.org")))
+    (should (string-match-p "page=1\\]{figure\\.pdf}" latex))
+    (should (string-match-p "page=3\\]{figure\\.pdf}" latex))))
+
+(ert-deftest epresent-test-export-names-videos ()
+  "EPRESENT_VIDEO_ALT becomes a bracketed note naming the file."
+  (let ((latex (epresent-test--export-fixture "export.org")))
+    (should (string-match-p "\\[ Video: demo\\.mp4 \\]" latex))))
+
+(ert-deftest epresent-test-export-defaults-width ()
+  "A drawer with no EPRESENT_SHOW_WIDTH uses half the text width."
+  (let ((latex (epresent-test--export-fixture "export.org")))
+    (should (string-match-p "width=0\\.5\\\\textwidth" latex))))
+
 (provide 'epresent-test)
 ;;; epresent-test.el ends here
