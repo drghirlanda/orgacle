@@ -12,6 +12,11 @@
 (require 'package)
 (require 'seq)
 
+;; `make compile' leaves epresent.elc on disk, and `load' prefers a .elc
+;; over a newer .el unless told otherwise -- which would silently test
+;; the previous version of the code after every edit.
+(setq load-prefer-newer t)
+
 (defconst epresent-dev-dependencies '(package-lint org-superstar)
   "Packages needed to lint and test epresent, but not to use it.
 `org-superstar' is here only until it is made optional; see Task 11.")

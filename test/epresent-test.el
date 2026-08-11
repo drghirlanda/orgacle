@@ -58,6 +58,15 @@ x-pointer-shape x-sensitive-text-pointer-shape x-pointer-invisible))"
     (should (equal 0 status))
     (kill-buffer output)))
 
+(ert-deftest epresent-test-harness-prefers-newer-source ()
+  "The batch harness loads the newer of epresent.el and epresent.elc.
+
+`load-prefer-newer' defaults to nil, which makes `require' prefer a
+stale .elc left behind by `make compile' over freshly edited source --
+so a suite run without recompiling would silently test the previous
+version of the code."
+  (should load-prefer-newer))
+
 ;;; Keyword parsing
 
 (ert-deftest epresent-test-frame-level-from-keyword ()
