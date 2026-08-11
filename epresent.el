@@ -1,4 +1,4 @@
-;;; epresent.el --- Simple presentation mode for Emacs Org-mode
+;;; epresent.el --- Simple presentation mode for Emacs Org-mode  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2008 Tom Tromey <tromey@redhat.com>
 ;;               2010 Eric Schulte <schulte.eric@gmail.com>
@@ -357,60 +357,58 @@ players are mplayer and vlc."
   (redraw-display))
 
 (defun epresent-show-indicators-maybe ()
-  "Show indicators if epresent-indicators is true and
-EPRESENT_SHOW_AUTO is not t"
-  (setq show-auto (org-entry-get nil "EPRESENT_SHOW_AUTO"))
-  (if (and
-       epresent-indicators
-       (not show-auto))
-      (epresent-show-indicators)))
+  "Draw the fringe indicators unless this slide shows its file by itself.
+Nothing is drawn when `epresent-indicators' is nil or when the heading
+has an EPRESENT_SHOW_AUTO property."
+  (let ((show-auto (org-entry-get nil "EPRESENT_SHOW_AUTO")))
+    (when (and epresent-indicators (not show-auto))
+      (epresent-show-indicators))))
 
 (defun epresent-show-indicators ()
-  ""
+  "Draw a fringe indicator for each medium this slide can show.
+A filled square marks an EPRESENT_SHOW_FILE property and a hollow
+square an EPRESENT_SHOW_VIDEO property."
   (interactive)
-  (setq show-file nil)
   (save-excursion
     (goto-char (point-min))
     (end-of-line)
-    (when (org-entry-get nil "EPRESENT_SHOW_FILE")
-      (setq show-file t)
-      (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
-      (overlay-put (car epresent-fringe-overlays)
-		   'before-string
-		   (propertize " " 'display '(right-fringe filled-square))))
-    (when (org-entry-get nil "EPRESENT_SHOW_VIDEO")
-      ;; advance to after properties if a file indicator is already here
-      (when show-file
-	(re-search-forward "[ \t]*:END:")
-	(forward-line))
-      (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
-      (overlay-put (car epresent-fringe-overlays)
-		   'before-string
-		   (propertize " " 'display '(right-fringe hollow-square))))))
-  
+    (let ((show-file nil))
+      (when (org-entry-get nil "EPRESENT_SHOW_FILE")
+        (setq show-file t)
+        (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
+        (overlay-put (car epresent-fringe-overlays)
+                     'before-string
+                     (propertize " " 'display '(right-fringe filled-square))))
+      (when (org-entry-get nil "EPRESENT_SHOW_VIDEO")
+        ;; advance past the drawer if a file indicator is already here
+        (when show-file
+          (re-search-forward "[ \t]*:END:")
+          (forward-line))
+        (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
+        (overlay-put (car epresent-fringe-overlays)
+                     'before-string
+                     (propertize " " 'display '(right-fringe hollow-square)))))))
+
 (defun epresent-slide-in-effect ()
-  "Apply slide-in effect."
+  "Animate the current slide sliding in from below."
   (interactive)
-  (setq slide-local (org-entry-get nil "EPRESENT_SLIDE_IN"))
-  (if (string= slide-local "no")
-      (setq slide-local nil)
-    (setq slide-local t))
-  (setq slide-global epresent-slide-in)
-  (if (or slide-local (and (not slide-global) slide-local))
+  (let* ((property (org-entry-get nil "EPRESENT_SLIDE_IN"))
+         (slide-local (not (string= property "no")))
+         (slide-global epresent-slide-in))
+    (when (or slide-local (and (not slide-global) slide-local))
       (save-excursion
-	(goto-char (point-min))
-	(forward-line)
-	;; if there is a drawer, skip it
-	(if (looking-at "[ \t]*:PROPERTIES:")
-	    (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
-	(setq ov (make-overlay (point) (point)))
-	(dotimes (i epresent-slide-in-lines)
-	  (progn
-	    (if (eq i 1) (sit-for epresent-slide-in-pause))
-	    (setq str (make-string (- epresent-slide-in-lines i) 10))
-	    (overlay-put ov 'after-string str)
-	    (sit-for (/ epresent-slide-in-duration epresent-slide-in-lines))))
-	(delete-overlay ov))))
+        (goto-char (point-min))
+        (forward-line)
+        ;; if there is a drawer, skip it
+        (if (looking-at "[ \t]*:PROPERTIES:")
+            (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
+        (let ((ov (make-overlay (point) (point))))
+          (dotimes (i epresent-slide-in-lines)
+            (if (eq i 1) (sit-for epresent-slide-in-pause))
+            (overlay-put ov 'after-string
+                         (make-string (- epresent-slide-in-lines i) ?\n))
+            (sit-for (/ epresent-slide-in-duration epresent-slide-in-lines)))
+          (delete-overlay ov))))))
 
 (defun epresent-top ()
   "Present the first outline heading."
@@ -455,19 +453,17 @@ for the SKIP argument."
   (epresent-current-page t))
 
 (defun epresent-position-notes ()
-  "Position notes buffer at current heading."
+  "Scroll the notes buffer to the notes for the current slide."
   (interactive)
   (when epresent-notes-buffer
-    (setq current-heading (org-entry-get nil "ITEM"))
-    (setq find-me
-	  (concat "^\\*[ \t]+" (regexp-quote current-heading)))
-    (with-selected-window (get-buffer-window epresent-notes-buffer t)
-      (widen)
-      (goto-char (point-min))
-      (re-search-forward find-me)
-      (goto-char (point))
-      (org-narrow-to-subtree)
-      (recenter 0))))
+    (let* ((current-heading (org-entry-get nil "ITEM"))
+           (find-me (concat "^\\*[ \t]+" (regexp-quote current-heading))))
+      (with-selected-window (get-buffer-window epresent-notes-buffer t)
+        (widen)
+        (goto-char (point-min))
+        (re-search-forward find-me)
+        (org-narrow-to-subtree)
+        (recenter 0)))))
 
 (defun epresent-next-subheading ()
   "Advance to next subheading, unhiding it if hidden."
@@ -820,67 +816,58 @@ display."
   (if (org-entry-get nil "EPRESENT_SHOW_AUTO")
       (epresent-show-file)))
 
-(defun epresent-show-video (&optional filename mute paused)
-  "Show a video in fullscreen mode.
+(defun epresent-show-video (&optional filename mute _paused)
+  "Play a video full screen.
 
-FILENAME is the video filename. If not provided, the value of the
-EPRESENT_SHOW_VIDEO property is used.
-
-If MUTE is non nil, the audio is muted. If not provided, the
-value of the EPRESENT_MUTE property is used.
-
-If PAUSE is non nil, the video starts paused. If not provided, the
-value of the EPRESENT_PAUSED property is used.
-
-Which player is used is customized using the variable
-epresent-video-player. EPresent supports mplayer (default) and
-vlc."
+FILENAME is the video to play; without it the EPRESENT_SHOW_VIDEO
+property of the current heading is used.  With MUTE non-nil the audio
+is silenced; without it the EPRESENT_MUTE property is used.  The
+player is chosen with `epresent-video-player'."
   (interactive)
-  ;; if no filename or mute, try to get them from properties:
-  (if (not filename)
-      (setq filename (org-entry-get nil "EPRESENT_SHOW_VIDEO")))
+  (unless filename
+    (setq filename (org-entry-get nil "EPRESENT_SHOW_VIDEO")))
   (unless (and filename (file-exists-p filename))
-    (user-error (concat "cannot open " filename)))
-  (if (not mute)
-      (setq mute (org-entry-get nil "EPRESENT_MUTE")))
-  (cond 
-   ((string= epresent-video-player "vlc")
-    (if mute (setq mute "--no-audio ") (setq mute ""))
-    (setq epresent-video-command (concat "cvlc -f --no-osd " mute filename)))
-   ((string= epresent-video-player "mplayer")
-    (if mute (setq mute "volume=-200dB ") (setq mute ""))
-    (setq epresent-video-command (concat "mplayer -fs " mute filename)))
-   (t
-    (user-error (concat "unsupported video player: " epresent-video-player))))
-  ;; exit fullscreen for epresent frame: 
-  (set-frame-parameter nil 'fullscreen nil)
-  (message (concat "Executing " epresent-video-command))
-  (shell-command epresent-video-command)
-  (delete-other-windows)
-  (set-frame-parameter nil 'fullscreen 'fullboth)
-  (redraw-display))
+    (user-error "Cannot open %s" filename))
+  (unless mute
+    (setq mute (org-entry-get nil "EPRESENT_MUTE")))
+  (let ((command
+         (cond
+          ((string= epresent-video-player "vlc")
+           (concat "cvlc -f --no-osd " (if mute "--no-audio " "") filename))
+          ((string= epresent-video-player "mplayer")
+           (concat "mplayer -fs " (if mute "volume=-200dB " "") filename))
+          (t
+           (user-error "Unsupported video player: %s"
+                       epresent-video-player)))))
+    ;; leave full screen so the player can take it
+    (set-frame-parameter nil 'fullscreen nil)
+    (message "Executing %s" command)
+    (shell-command command)
+    (delete-other-windows)
+    (set-frame-parameter nil 'fullscreen 'fullboth)
+    (redraw-display)))
 
 (defun epresent--collect-notes ()
   "Return this buffer's speaker notes as Org text.
 Each frame-level heading contributes a first-level heading, followed by
 the body of its \"Speaker notes\" subtree when it has one."
-  (setq speaker-notes "")
-  (save-excursion
-    (goto-char (point-min))
-    (while (< (point) (point-max))
-      (org-next-visible-heading 1)
-      (setq current-heading (org-entry-get nil "ITEM"))
-      (if (= (org-current-level) 1)
-          (setq speaker-notes
-                (concat speaker-notes "* " current-heading "\n")))
-      (when (string= current-heading "Speaker notes")
-        (org-mark-subtree)
-        (setq speaker-notes
-              (concat speaker-notes
-                      (buffer-substring (point) (mark))
-                      "\n")))))
-  (deactivate-mark)
-  speaker-notes)
+  (let ((speaker-notes ""))
+    (save-excursion
+      (goto-char (point-min))
+      (while (< (point) (point-max))
+        (org-next-visible-heading 1)
+        (let ((current-heading (org-entry-get nil "ITEM")))
+          (when (= (org-current-level) 1)
+            (setq speaker-notes
+                  (concat speaker-notes "* " current-heading "\n")))
+          (when (string= current-heading "Speaker notes")
+            (org-mark-subtree)
+            (setq speaker-notes
+                  (concat speaker-notes
+                          (buffer-substring (point) (mark))
+                          "\n"))))))
+    (deactivate-mark)
+    speaker-notes))
 
 (defun epresent-make-notes-buffer ()
   "Collect speaker notes into a buffer and show it in a new frame."
@@ -906,62 +893,44 @@ the body of its \"Speaker notes\" subtree when it has one."
 (require 'ox-org)
 
 (defun epresent-latex-property-drawer (blob contents _info)
-  ""
-  (message "EPresent property drawer: start")
-  (setq elpd-in (org-export-expand blob contents t))
-  (setq elpd-out nil)
-  ;; handle videos (just the name as pointer):
-  (when (string-match "EPRESENT_VIDEO_ALT:\s+\\(.+\\)" elpd-in)
-    (setq elpd-out (concat
-		    elpd-out
-		    "\n[ Video: "
-		    (match-string 1 elpd-in)
-		    " ]\n\n")))
-  ;; handle images and org-mode files:
-  (when (string-match "EPRESENT_SHOW_FILE:\s+\\(.+\\)" elpd-in)
-    (setq elpd-filename (match-string 1 elpd-in))
-    ;; remove [[ and ]] if present
-    (setq elpd-filename
-	  (replace-regexp-in-string "^\\[?\\[?" "" elpd-filename))
-    (setq elpd-filename
-	  (replace-regexp-in-string "\\]?\\]?$" "" elpd-filename))
-    ;; here we handle different file types: .org files are converted
-    ;; to latex and then inserted. everything else is treated as an
-    ;; image.
-    (setq elpd-fext (file-name-extension elpd-filename))
-    ;; org processing:
-    (if (string= elpd-fext "org")
-	(save-excursion
-	  (find-file elpd-filename)
-	  (mark-whole-buffer)
-	  (org-latex-convert-region-to-latex)
-	  (setq elpd-out (concat elpd-out (buffer-substring (mark) (point))))
-	  (set-buffer-modified-p nil)
-	  (kill-this-buffer))
-      ;; image processing:
-      (progn
-	;; get width setting if present, or use .5\textwidth
-	(if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" elpd-in)
-	    (setq elpd-width (match-string 1 elpd-in))
-	  (setq elpd-width "0.5"))
-	;; list of pages to include:
-	(setq elpd-pages '("1"))
-	(if (string-match "EPRESENT_SHOW_PAGES:\s+\\(.+\\)" elpd-in)
-	    (setq elpd-pages (split-string (match-string 1 elpd-in))))
-	(setq elpd-out (concat elpd-out "\n"))
-	(dolist (i elpd-pages)
-	  (setq elpd-out
-		(concat
-		 elpd-out
-		 "\\includegraphics[width="
-		 elpd-width
-		 "\\textwidth,page="
-		 i
-		 "]{"
-		 elpd-filename
-		 "}\n"))))))
-  (message "EPresent property-drawer: %s" elpd-out)
-  elpd-out)
+  "Translate the property drawer BLOB with CONTENTS into LaTeX.
+EPRESENT_VIDEO_ALT becomes a bracketed note naming the file.
+EPRESENT_SHOW_FILE becomes an included Org file when it names one, and
+an \\includegraphics otherwise, honouring EPRESENT_SHOW_WIDTH and
+EPRESENT_SHOW_PAGES."
+  (let ((input (org-export-expand blob contents t))
+        (output nil))
+    ;; videos are named, not embedded
+    (when (string-match "EPRESENT_VIDEO_ALT:\s+\\(.+\\)" input)
+      (setq output (concat output "\n[ Video: " (match-string 1 input) " ]\n\n")))
+    (when (string-match "EPRESENT_SHOW_FILE:\s+\\(.+\\)" input)
+      (let* ((filename (replace-regexp-in-string
+                        "\\]?\\]?$" ""
+                        (replace-regexp-in-string
+                         "^\\[?\\[?" "" (match-string 1 input))))
+             (extension (file-name-extension filename)))
+        (if (string= extension "org")
+            ;; Org files are converted to LaTeX and inlined
+            (save-excursion
+              (find-file filename)
+              (org-latex-convert-region-to-latex)
+              (setq output (concat output (buffer-string)))
+              (set-buffer-modified-p nil)
+              (kill-buffer))
+          ;; everything else is treated as an image
+          (let ((width (if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" input)
+                           (match-string 1 input)
+                         "0.5"))
+                (pages (if (string-match "EPRESENT_SHOW_PAGES:\s+\\(.+\\)" input)
+                           (split-string (match-string 1 input))
+                         '("1"))))
+            (setq output (concat output "\n"))
+            (dolist (page pages)
+              (setq output
+                    (concat output
+                            "\\includegraphics[width=" width
+                            "\\textwidth,page=" page "]{" filename "}\n")))))))
+    output))
 
 (org-export-define-derived-backend 'epresent 'latex
   :translate-alist
@@ -1008,17 +977,15 @@ to PDF."
 
 (defun epresent--speaker-word-count ()
   "Return the number of words in this buffer's speaker-notes subtrees."
-  (setq speaker-words 0)
-  (org-map-entries
-   (lambda ()
-     (setq this-headline (downcase (org-entry-get nil "ITEM")))
-     (when (string= this-headline "speaker notes")
-       (save-excursion
-         (org-mark-subtree)
-         (setq speaker-words
-               (+ speaker-words (count-words (point) (mark))))
-         (deactivate-mark)))))
-  speaker-words)
+  (let ((speaker-words 0))
+    (org-map-entries
+     (lambda ()
+       (when (string= (downcase (org-entry-get nil "ITEM")) "speaker notes")
+         (save-excursion
+           (org-mark-subtree)
+           (setq speaker-words (+ speaker-words (count-words (point) (mark))))
+           (deactivate-mark)))))
+    speaker-words))
 
 (defun epresent--speaking-time (words)
   "Return the estimated time in minutes to speak WORDS aloud.
@@ -1096,6 +1063,13 @@ Does nothing on a build without X11 pointer support."
     (define-key map "t" 'epresent-top)
     map)
   "Local keymap for EPresent display mode.")
+
+;; `epresent-mode' below sets this symbol, but Org has no variable by
+;; this name (see `org-pretty-entities' instead) -- a pre-existing bug
+;; that Task 9 owns.  The bare declaration keeps the byte-compiler quiet
+;; without changing the (currently no-op) behaviour, same technique as
+;; the X-pointer declarations above.
+(defvar org-hide-pretty-entities)
 
 (define-derived-mode epresent-mode org-mode "EPresent"
   "Lalala."
