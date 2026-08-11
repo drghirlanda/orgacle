@@ -57,6 +57,29 @@
 (defvar x-pointer-invisible)
 (defvar x-sensitive-text-pointer-shape)
 
+;;; Compatibility
+
+;; Org 9.8 renamed the inline-image API to org-link-preview-*.  The floor
+;; for this package is Org 9.6, so both spellings have to be reachable.
+
+(defun epresent--link-preview-refresh ()
+  "Regenerate the inline image previews in the current buffer."
+  (if (fboundp 'org-link-preview-refresh)
+      (org-link-preview-refresh)
+    (with-no-warnings (org-redisplay-inline-images))))
+
+(defun epresent--link-preview-clear ()
+  "Remove the inline image previews from the current buffer."
+  (if (fboundp 'org-link-preview-clear)
+      (org-link-preview-clear)
+    (with-no-warnings (org-remove-inline-images))))
+
+(defun epresent--link-preview-overlays ()
+  "Return the inline image preview overlays of the current buffer."
+  (if (boundp 'org-link-preview-overlays)
+      (symbol-value 'org-link-preview-overlays)
+    (with-no-warnings org-inline-image-overlays)))
+
 (defgroup epresent nil
   "This is a presentation mode for Emacs."
   :group 'epresent)
@@ -338,8 +361,8 @@ players are mplayer and vlc."
 	(outline-hide-body)
 	(when (>= (org-reduced-level (org-current-level))
 		  epresent-frame-level)
-	  (org-show-subtree)
-	  (org-set-visibility-according-to-property) ;; folds children
+	  (org-fold-show-subtree)
+	  (org-cycle-set-visibility-according-to-property) ;; folds children
 	  (let ((epresent-src-block-toggle-state
 		 (if epresent-src-blocks-visible :show :hide)))
 	    (epresent-toggle-hide-src-blocks)))
@@ -451,7 +474,7 @@ SKIP has the same meaning as in `epresent-next-page'."
   (if (< (or (ignore-errors (org-reduced-level (org-current-level))) 0)
          epresent-frame-level)
       (outline-previous-heading)
-    (org-get-last-sibling))
+    (org-get-previous-sibling))
   (when (> epresent-page-number 1)
     (cl-decf epresent-page-number))
   (epresent-current-page t))
@@ -476,7 +499,7 @@ SKIP has the same meaning as in `epresent-next-page'."
 	   (> (org-current-level) 1))
       (outline-hide-subtree))
   (org-next-visible-heading 1)
-  (org-show-subtree))
+  (org-fold-show-subtree))
 
 (defun epresent-previous-subheading ()
   "Go back to previous subheading, possibly hiding the current one."
@@ -485,7 +508,7 @@ SKIP has the same meaning as in `epresent-next-page'."
     (outline-hide-subtree))
   (org-next-visible-heading -1) ; -1 means previous
   (if (> (org-current-level) 1) ; show if we found a subheading
-      (org-show-subtree)))
+      (org-fold-show-subtree)))
 
 (defun epresent-clean-overlays (&optional start end)
   (interactive)
@@ -507,10 +530,12 @@ SKIP has the same meaning as in `epresent-next-page'."
   "Quit the current presentation."
   (interactive)
   (run-hooks 'epresent-stop-presentation-hook)
-  (org-remove-latex-fragment-image-overlays)
+  (org-clear-latex-preview)
   ;; restore the user's Org-mode variables
   (remove-hook 'org-src-mode-hook 'epresent-setup-src-edit)
-  (setq org-inline-image-overlays epresent-inline-image-overlays)
+  ;; The saved preview overlays are not restored: Org 9.8 replaced the
+  ;; variable that held them, and P3 rewrites this function around an
+  ;; explicit session struct.  Previews regenerate on the next refresh.
   (setq org-src-fontify-natively epresent-src-fontify-natively)
   (setq org-hide-emphasis-markers epresent-hide-emphasis-markers)
   (set-display-table-slot standard-display-table
@@ -651,8 +676,8 @@ SKIP has the same meaning as in `epresent-next-page'."
         (overlay-put
          (car epresent-overlays) 'face (intern (format "epresent-%s-face" el)))))
     ;; inline images
-    (org-remove-inline-images)
-    (org-redisplay-inline-images)))
+    (epresent--link-preview-clear)
+    (epresent--link-preview-refresh)))
 
 (defun epresent-refresh ()
   (interactive)
@@ -1087,7 +1112,7 @@ Does nothing on a build without X11 pointer support."
   "Lalala."
   ;; make Org-mode be as pretty as possible
   (add-hook 'org-src-mode-hook 'epresent-setup-src-edit)
-  (setq epresent-inline-image-overlays org-inline-image-overlays)
+  (setq epresent-inline-image-overlays (epresent--link-preview-overlays))
   (setq epresent-src-fontify-natively org-src-fontify-natively)
   (setq org-src-fontify-natively t)
   (setq org-fontify-quote-and-verse-blocks t)
@@ -1159,7 +1184,7 @@ Does nothing on a build without X11 pointer support."
       (error "EPresent can only be used from Org Mode"))
     (setq epresent--org-buffer (current-buffer))
     ;; regenerate image previews
-    (org-redisplay-inline-images)
+    (epresent--link-preview-refresh)
     ;; To present narrowed region use temporary buffer
     (when (and (or (> (point-min) (save-restriction (widen) (point-min)))
                    (< (point-max) (save-restriction (widen) (point-max))))
