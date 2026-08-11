@@ -619,12 +619,48 @@ builds, so this is nil elsewhere."
     :group 'epresent)
 #+end_src
 
-- [ ] *Step 4: Guard the three places that set the pointer*
+- [ ] *Step 4: Declare the X variables for the compiler*
+
+A =boundp= guard stops the runtime error but not the compiler warning, and it
+suppresses the warning only for the *literal symbol it names* — so guarding on
+=x-pointer-shape= leaves its siblings warning inside the very same block. That
+was found the hard way: the first attempt at this task guarded all three sites
+correctly and still left five =free variable= warnings on 29.4 and 30.2, which
+would have failed Task 14's compile gate on code introduced here.
+
+A valueless =defvar= marks a symbol special for this file's compilation without
+binding it, which is exactly what is wanted: the compiler stops warning, and
+every =boundp= check still decides correctly at runtime. Put these after the
+=require= forms and before =defgroup=:
+
+#+begin_src emacs-lisp :eval no
+  ;; These exist only on X11 builds, where term/x-win.el defines them.  The
+  ;; bare declarations keep the byte-compiler quiet on other builds; the
+  ;; `boundp' guards at each use site are what decide anything at runtime.
+  (defvar x-pointer-dot)
+  (defvar x-pointer-shape)
+  (defvar x-pointer-invisible)
+  (defvar x-sensitive-text-pointer-shape)
+#+end_src
+
+Verify with a subprocess that has the symbols unbound, since this machine's
+Emacs is an X build and binds them natively:
+
+#+begin_src sh
+  emacs -Q --batch -l test/init.el \
+    --eval "(mapc #'makunbound '(x-pointer-dot x-pointer-shape \
+x-pointer-invisible x-sensitive-text-pointer-shape))" \
+    --eval '(byte-compile-file "epresent.el")'
+#+end_src
+
+Expected: none of the five pointer warnings. Other warnings remain — later
+tasks own those.
+
+- [ ] *Step 5: Guard the three places that set the pointer*
 
 =epresent--get-frame=, =epresent-quit= and =epresent-toggle-mouse= assign to
 =x-pointer-shape= and =x-sensitive-text-pointer-shape=. On a non-X Emacs those
-variables do not exist, so the assignments both signal at runtime and produce
-=assignment to free variable= warnings that would fail Task 14's compile gate.
+variables have no value, so the assignments would signal at runtime.
 
 Wrap each of the three blocks. In =epresent--get-frame=, replacing the five
 lines from =(setq epresent-user-x-pointer-shape ...)= through the
@@ -677,12 +713,12 @@ Note that =epresent-toggle-mouse= never updated =epresent-mouse-visible=, so it
 only ever hid the pointer and could not show it again. Leave that defect alone —
 P3 owns it, and fixing it here would go beyond making the file loadable.
 
-- [ ] *Step 5: Run the tests*
+- [ ] *Step 6: Run the tests*
 
 Run: =make test=
 Expected: PASS. The count is whatever Task 2 established plus one.
 
-- [ ] *Step 6: Commit and confirm CI recovers*
+- [ ] *Step 7: Commit and confirm CI recovers*
 
 #+begin_src sh
   git add epresent.el test/epresent-test.el
