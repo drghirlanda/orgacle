@@ -1,22 +1,20 @@
-#+Title: Example Presentation
-#+Author: Eric Schulte
-#+EPRESENT_FRAME_LEVEL: 1
+#+Title: Epresent: Presentations in Emacs
+#+Author: Eric Schulte, Stefano Ghirlanda
 
-* TODO One -- intro                                             :hello:world:
-  :PROPERTIES:
-  :ARCHIVE:  hello
-  :END:
-# a comment, which will not be displayed
+* Introduction
 
-Simple presentations run by Emacs
-- run in Emacs
-- uses Org-mode *markup* /for text/ =and things=
-- looks pretty good
+Simple presentations in Emacs
+- Uses Org-mode *markup* /for text/ =and things=
+- Looks pretty good
+- Somewhat customizable
+- Display external documents
+- Live code execution
 
-** with subheadings
-and some other stuff
+* Basics
 
-* DONE Two -- source code
+- Write your presentation in org-mode
+
+* Source code
 
 Call =epresent-run= to present an Org-mode buffer.
 
@@ -61,13 +59,22 @@ in-line image display
      date
    #+end_src
 
+#+RESULTS:
+: Sun Jun 28 12:30:51 EDT 2020
+
 2. Press =C= to move to the previous code block.
    #+begin_src sh
      uname -a
    #+end_src
+
+#+RESULTS:
+: Linux darkstar 4.4.14 #2 SMP Fri Jun 24 13:38:27 CDT 2016 x86_64 Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz GenuineIntel GNU/Linux
 
 3. When a code block is executed with =C-c C-c=, the page is refreshed
    to show the results.
    #+begin_src sh
      echo "in $(pwd)"
    #+end_src
+
+#+RESULTS:
+: in /home/stefano/Dropbox/Software/epresent

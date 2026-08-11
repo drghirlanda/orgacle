@@ -1,26 +1,38 @@
-#+TITLE: epresent.el
+#+TITLE: Epresent
+#+AUTHOR: Eric Schulte, Stefano Ghirlanda
 
 [[https://melpa.org/#/epresent][file:https://melpa.org/packages/epresent-badge.svg]] (badge not currently up to date)
 
-/Simple presentation mode for Emacs Org-mode/
+/Presentation mode for Emacs Org-mode/
 
-* Install
+* Installation
 
-Just install =epresent= from [[http://melpa.org][MELPA repository]].
+You can install =epresent= from [[http://melpa.org][MELPA repository]].
 
-* Usage
+* Basic usage
 
-- Call =epresent-run= on an org-buffer.
-- press =t= / =1= to view the top level of the presentation
-- navigate the presentation with =n/f=, =p/b=
-- go to a specific page with =v <num> RET=
-- scroll with =k= and =l=
-- use =c= and =C= to navigate between code blocks,
-  =e= to edit them, =x= to make it run,
-  and =s= / =S= to toggle their visibility
-- use =i= to split the window and load a file in an additional
-  buffer. See example below.
-- quit with =q=
+- Call =epresent-run= on an org-buffer, or press =f5=.
+- Press =t= or =1= to view the top level of the presentation
+- Navigate the presentation with =n/f=, =p/b=
+- Go to a specific page with =v <num> RET=
+- Scroll with =k= and =l=
+- Working with code blocks:
+  - =c= and =C= to navigate between code blocks
+  - =e= to edit a code block
+  - =x= to run it
+  - =s= or =S= to toggle code block visibility
+- Use =i= to split the window and load a file in the new window (see
+  below).
+- Use =I= to show a video fullscreen (see below).
+- Quit with =q=
+
+* Manual
+
+** The basics
+
+** Inline images
+
+** Code blocks
  
 ** Showing another file 
 
@@ -30,11 +42,10 @@ desirable in a presentation. Epresent supports splitting the window to
 show a file in a new buffer. This functionality is activated by the
 =i= key during the presentation, and it can be tested invoking =M-x
 epresent-show-file= outside of the presentation. The filename is set
-through the property =EPRESENT_SHOW= and the file is showed by default
+through the property =EPRESENT_SHOW_FILE= and the file is showed by default
 to the right of the presentation buffer. It can be shown under the
 presentation by setting the property =EPRESENT_BELOW= to a non-nil
-value. To hide the file again, delete the window as usual with =C-x
-0=.
+value.
 
 Here is an example:
 
@@ -49,6 +60,21 @@ Here is an example:
 Any file that can be opened in Emacs can be shown in this way. For
 example, a PDF with multiple pages can be used to show more than one
 figure in a sequence.
+
+
+** Indicators
+
+** Speaker notes
+
+** Slide-in effect
+
+** 'Laser pointer' effect
+
+* Customization
+
+You can customize the variables described above and other affecting
+how the presentation looks using =M-x customize-group [enter]
+epresent=.
 
 * Screenshot
 

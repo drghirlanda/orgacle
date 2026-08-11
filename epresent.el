@@ -213,6 +213,12 @@ time."
   :type 'integer
   :group 'epresent)
 
+(defcustom epresent-video-player "mplayer"
+  "Program to play videos, see epresent-show-video. Supported
+players are mplayer and vlc."
+  :type 'string
+  :group 'epresent)
+
 (defvar epresent-mouse-visible t
   "Whether the mouse is currentyl visible or not. Used by
   epresent-toggle-mouse")
@@ -245,7 +251,7 @@ time."
                                         (tool-bar-lines . 0)
                                         (vertical-scroll-bars . nil)
                                         (left-fringe . 0)
-					(right-fringe . 10)
+					(right-fringe . 40)
 					(right-divider-width . 0)
                                         (cursor-type . nil)
 					(internal-border-width . 75)
@@ -275,7 +281,7 @@ time."
       (if (re-search-forward
            "^#\\+EPRESENT_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
           (string-to-number (match-string 1))
-        1))))
+        epresent-frame-level))))
 
 (defun epresent-get-mode-line ()
   "Get the presentation-specific mode-line."
@@ -601,7 +607,7 @@ for the SKIP argument."
     (when epresent-hide-tags
       (goto-char (point-min))
       (while (re-search-forward
-              (org-re "^\\*+.*?\\([ \t]+:[[:alnum:]_@#%:]+:\\)[ \r\n]")
+              "^\\*+.*?\\([ \t]+:[[:alnum:]_@#%:]+:\\)[ \r\n]"
               nil t)
         (push (make-overlay (match-beginning 1) (match-end 1)) epresent-overlays)
         (overlay-put (car epresent-overlays) 'invisible 'epresent-hide)))
@@ -624,7 +630,8 @@ for the SKIP argument."
         (overlay-put
          (car epresent-overlays) 'face (intern (format "epresent-%s-face" el)))))
     ;; inline images
-    (org-display-inline-images)))
+    (org-remove-inline-images)
+    (org-redisplay-inline-images)))
 
 (defun epresent-refresh ()
   (interactive)
@@ -749,7 +756,9 @@ for the SKIP argument."
   (revert-buffer t t t)
   ;; PDFs
   (when (eq major-mode 'pdf-view-mode)
-    (pdf-view-fit-width-to-window)
+    (if below
+	(pdf-view-fit-height-to-window)
+      (pdf-view-fit-width-to-window))
     (pdf-view-goto-page 1)
     (epresent-update-aux-fringe-overlay))
   ;; images
@@ -809,7 +818,9 @@ value of the EPRESENT_MUTE property is used.
 If PAUSE is non nil, the video starts paused. If not provided, the
 value of the EPRESENT_PAUSED property is used.
 
-This function uses vlc."
+Which player is used is customized using the variable
+epresent-video-player. EPresent supports mplayer (default) and
+vlc."
   (interactive)
   ;; if no filename or mute, try to get them from properties:
   (if (not filename)
@@ -818,17 +829,22 @@ This function uses vlc."
     (user-error (concat "cannot open " filename)))
   (if (not mute)
       (setq mute (org-entry-get nil "EPRESENT_MUTE")))
-  (if mute
-      (setq mute " --no-audio ")
-    (setq mute ""))
+  (cond 
+   ((string= epresent-video-player "vlc")
+    (if mute (setq mute "--no-audio ") (setq mute ""))
+    (setq epresent-video-command (concat "cvlc -f --no-osd " mute filename)))
+   ((string= epresent-video-player "mplayer")
+    (if mute (setq mute "volume=-200dB ") (setq mute ""))
+    (setq epresent-video-command (concat "mplayer -fs " mute filename)))
+   (t
+    (user-error (concat "unsupported video player: " epresent-video-player))))
+  ;; exit fullscreen for epresent frame: 
   (set-frame-parameter nil 'fullscreen nil)
-  (setq epresent-vlc-command (concat "cvlc -f --no-osd " mute filename))
-  (message (concat "Executing " epresent-vlc-command))
-  (shell-command epresent-vlc-command)
+  (message (concat "Executing " epresent-video-command))
+  (shell-command epresent-video-command)
   (delete-other-windows)
   (set-frame-parameter nil 'fullscreen 'fullboth)
-  (redraw-display)
-  )
+  (redraw-display))
 
 (defun epresent-make-notes-buffer ()
   "Create a buffer with speaker notes only, and display it in a
@@ -877,12 +893,60 @@ new frame."
 
 (defun epresent-latex-property-drawer (blob contents _info)
   ""
+  (message "EPresent property drawer: start")
   (setq elpd-in (org-export-expand blob contents t))
-  (when (string-match "^\s*:EPRESENT_SHOW_FILE:\s+\\(.+\\)" elpd-in)
+  (setq elpd-out nil)
+  ;; handle videos (just the name as pointer):
+  (when (string-match "EPRESENT_VIDEO_ALT:\s+\\(.+\\)" elpd-in)
+    (setq elpd-out (concat
+		    elpd-out
+		    "\n[ Video: "
+		    (match-string 1 elpd-in)
+		    " ]\n\n")))
+  ;; handle images and org-mode files:
+  (when (string-match "EPRESENT_SHOW_FILE:\s+\\(.+\\)" elpd-in)
     (setq elpd-filename (match-string 1 elpd-in))
-    (if (string= (file-name-extension elpd-filename) "pdf")
-	(setq elpd-out (concat "\n\\includepdf[pages={1-}]{" elpd-filename "}\n"))
-      (setq elpd-out (concat "\n\\includegraphicx{" elpd-filename "}\n"))))
+    ;; remove [[ and ]] if present
+    (setq elpd-filename
+	  (replace-regexp-in-string "^\\[?\\[?" "" elpd-filename))
+    (setq elpd-filename
+	  (replace-regexp-in-string "\\]?\\]?$" "" elpd-filename))
+    ;; here we handle different file types: .org files are converted
+    ;; to latex and then inserted. everything else is treated as an
+    ;; image.
+    (setq elpd-fext (file-name-extension elpd-filename))
+    ;; org processing:
+    (if (string= elpd-fext "org")
+	(save-excursion
+	  (find-file elpd-filename)
+	  (mark-whole-buffer)
+	  (org-latex-convert-region-to-latex)
+	  (setq elpd-out (concat elpd-out (buffer-substring (mark) (point))))
+	  (set-buffer-modified-p nil)
+	  (kill-this-buffer))
+      ;; image processing:
+      (progn
+	;; get width setting if present, or use .5\textwidth
+	(if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" elpd-in)
+	    (setq elpd-width (match-string 1 elpd-in))
+	  (setq elpd-width "0.5"))
+	;; list of pages to include:
+	(setq elpd-pages '("1"))
+	(if (string-match "EPRESENT_SHOW_PAGES:\s+\\(.+\\)" elpd-in)
+	    (setq elpd-pages (split-string (match-string 1 elpd-in))))
+	(setq elpd-out (concat elpd-out "\n"))
+	(dolist (i elpd-pages)
+	  (setq elpd-out
+		(concat
+		 elpd-out
+		 "\\includegraphics[width="
+		 elpd-width
+		 "\\textwidth,page="
+		 i
+		 "]{"
+		 elpd-filename
+		 "}\n"))))))
+  (message "EPresent property-drawer: %s" elpd-out)
   elpd-out)
 
 (org-export-define-derived-backend 'epresent 'latex
@@ -890,13 +954,41 @@ new frame."
   '((property-drawer . epresent-latex-property-drawer))
   :menu-entry
   '(?E "EPresent to LaTeX"
-       ((?L "As LaTeX buffer" org-latex-export-as-latex)
-	(?l "As LaTeX file" org-latex-export-to-latex)
-	(?p "As PDF file" org-latex-export-to-pdf)
+       ((?L "As LaTeX buffer" org-epresent-export-as-latex)
+	(?l "As LaTeX file" org-epresent-export-to-latex)
+	(?p "As PDF file" org-epresent-export-to-pdf)
 	(?o "As PDF file and open"
 	    (lambda (a s v b)
-	      (if a (org-latex-export-to-pdf t s v b)
-		(org-open-file (org-latex-export-to-pdf nil s v b))))))))
+	      (if a (org-epresent-export-to-pdf t s v b)
+		(org-open-file (org-epresent-export-to-pdf nil s v b))))))))
+
+;;;###autoload
+(defun org-epresent-export-as-latex
+  (&optional async subtreep visible-only body-only ext-plist)
+  "Export current EPresent buffer ro a latex buffer."
+  (interactive)
+  (org-export-to-buffer 'epresent "*Org LATEX Export*"
+    async subtreep visible-only body-only ext-plist (lambda () (LaTeX-mode))))
+
+;;;###autoload
+(defun org-epresent-export-to-latex
+  (&optional async subtreep visible-only body-only ext-plist)
+  "Export current buffer to a LaTeX file."
+  (interactive)
+  (let ((outfile (org-export-output-file-name ".tex" subtreep)))
+    (org-export-to-file 'epresent outfile
+      async subtreep visible-only body-only ext-plist)))
+
+;;;###autoload
+(defun org-epresent-export-to-pdf
+  (&optional async subtreep visible-only body-only ext-plist)
+  "Export current EPresent buffer to LaTeX then process through
+to PDF."
+  (interactive)
+  (let ((outfile (org-export-output-file-name ".tex" subtreep)))
+    (org-export-to-file 'epresent outfile
+      async subtreep visible-only body-only ext-plist
+      (lambda (file) (org-latex-compile file)))))
 
 ;;; end export functions
 
@@ -1064,6 +1156,8 @@ epresent-wpm. "
     (unless (eq major-mode 'org-mode)
       (error "EPresent can only be used from Org Mode"))
     (setq epresent--org-buffer (current-buffer))
+    ;; regenerate image previews
+    (org-redisplay-inline-images)
     ;; To present narrowed region use temporary buffer
     (when (and (or (> (point-min) (save-restriction (widen) (point-min)))
                    (< (point-max) (save-restriction (widen) (point-max))))
