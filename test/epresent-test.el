@@ -58,5 +58,36 @@ x-pointer-shape x-sensitive-text-pointer-shape x-pointer-invisible))"
     (should (equal 0 status))
     (kill-buffer output)))
 
+;;; Keyword parsing
+
+(ert-deftest epresent-test-frame-level-from-keyword ()
+  "`epresent-get-frame-level' reads #+EPRESENT_FRAME_LEVEL."
+  (epresent-test-with-fixture "keywords.org"
+    (should (equal 2 (epresent-get-frame-level)))))
+
+(ert-deftest epresent-test-frame-level-defaults ()
+  "Without the keyword, `epresent-frame-level' is returned unchanged."
+  (epresent-test-with-fixture "plain.org"
+    (should (equal epresent-frame-level (epresent-get-frame-level)))))
+
+(ert-deftest epresent-test-frame-level-ignores-restriction ()
+  "The keyword is found even when the buffer is narrowed past it."
+  (epresent-test-with-fixture "keywords.org"
+    (goto-char (point-max))
+    (org-back-to-heading)
+    (org-narrow-to-subtree)
+    (should (equal 2 (epresent-get-frame-level)))))
+
+(ert-deftest epresent-test-mode-line-from-keyword ()
+  "`epresent-get-mode-line' reads and parses #+EPRESENT_MODE_LINE."
+  (epresent-test-with-fixture "keywords.org"
+    (should (equal '(:eval (format "slide %d" epresent-page-number))
+                   (epresent-get-mode-line)))))
+
+(ert-deftest epresent-test-mode-line-defaults ()
+  "Without the keyword, `epresent-mode-line' is returned unchanged."
+  (epresent-test-with-fixture "plain.org"
+    (should (equal epresent-mode-line (epresent-get-mode-line)))))
+
 (provide 'epresent-test)
 ;;; epresent-test.el ends here
