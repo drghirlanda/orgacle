@@ -87,8 +87,11 @@
 (declare-function pdf-view-fit-width-to-window "pdf-view" ())
 (declare-function pdf-view-goto-page "pdf-view" (page &optional window))
 (declare-function pdf-view-next-page "pdf-view" (&optional n))
-(declare-function pdf-view-current-page "pdf-view" (&optional window))
-(declare-function pdf-cache-number-of-pages "pdf-cache" (&optional file))
+;; `pdf-view-current-page' is a macro, so it cannot be declared here and
+;; called from code compiled without pdf-tools loaded.  Its expansion is
+;; this built-in accessor, which is an ordinary function.
+(declare-function image-mode-window-get "image-mode" (prop &optional winprops))
+(declare-function pdf-cache-number-of-pages "pdf-cache" ())
 (declare-function image-transform-fit-to-height "image-mode" ())
 (declare-function image-transform-fit-to-width "image-mode" ())
 (declare-function flyspell-mode-off "flyspell" ())
@@ -859,7 +862,7 @@ shown, advance within the file using epresent-advance-file."
   (if epresent-aux-fringe-overlay
       (delete-overlay epresent-aux-fringe-overlay))
   (when (eq major-mode 'pdf-view-mode)
-    (when (< (pdf-view-current-page) (pdf-cache-number-of-pages))
+    (when (< (image-mode-window-get 'page) (pdf-cache-number-of-pages))
       (setq epresent-aux-fringe-overlay (make-overlay (point) (point)))
       (overlay-put
        epresent-aux-fringe-overlay
