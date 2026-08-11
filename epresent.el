@@ -47,7 +47,7 @@
 (require 'ox)
 (require 'ox-latex)
 (require 'cl-lib)
-(require 'org-superstar)
+(require 'org-superstar nil t)
 
 ;; These exist only on X11 builds, where term/x-win.el defines them.  The
 ;; bare declarations keep the byte-compiler quiet on other builds; the
@@ -79,6 +79,19 @@
   (if (boundp 'org-link-preview-overlays)
       (symbol-value 'org-link-preview-overlays)
     (with-no-warnings org-inline-image-overlays)))
+
+;; `pdf-tools' and `image-mode' are optional; every call site below is
+;; already guarded by a `major-mode' check, so these declarations only
+;; quiet the byte-compiler.
+(declare-function pdf-view-fit-height-to-window "pdf-view" ())
+(declare-function pdf-view-fit-width-to-window "pdf-view" ())
+(declare-function pdf-view-goto-page "pdf-view" (page &optional window))
+(declare-function pdf-view-next-page "pdf-view" (&optional n))
+(declare-function pdf-view-current-page "pdf-view" (&optional window))
+(declare-function pdf-cache-number-of-pages "pdf-cache" (&optional file))
+(declare-function image-transform-fit-to-height "image-mode" ())
+(declare-function image-transform-fit-to-width "image-mode" ())
+(declare-function flyspell-mode-off "flyspell" ())
 
 (defgroup epresent nil
   "This is a presentation mode for Emacs."
@@ -198,6 +211,12 @@ are used for the slide-in animation."
 (defcustom epresent-src-blocks-visible t
   "If non-nil source blocks are initially visible on slide change.
 If nil then source blocks are initially hidden on slide change."
+  :type 'boolean
+  :group 'epresent)
+
+(defcustom epresent-use-org-superstar t
+  "Whether to prettify bullets with `org-superstar-mode'.
+Has no effect when the `org-superstar' package is not installed."
   :type 'boolean
   :group 'epresent)
 
@@ -639,8 +658,9 @@ SKIP has the same meaning as in `epresent-next-page'."
       (if (> (length (match-string 1)) 1)
           (overlay-put (car epresent-overlays) 'face 'epresent-subheading-face)
 	  (overlay-put (car epresent-overlays) 'face 'epresent-heading-face)))
-    ;; fancy bullet points
-    (org-superstar-mode)
+    ;; fancy bullet points, when the package is available
+    (when (and epresent-use-org-superstar (fboundp 'org-superstar-mode))
+      (org-superstar-mode 1))
     ;; hide todos
     (when epresent-hide-todos
       (goto-char (point-min))
@@ -1136,7 +1156,8 @@ Does nothing on a build without X11 pointer support."
   ;; fontify the buffer
   (add-to-invisibility-spec '(epresent-hide))
   ;; remove flyspell overlays
-  (flyspell-mode-off)
+  (when (fboundp 'flyspell-mode-off)
+    (flyspell-mode-off))
   (epresent-fontify)
   ;; hide headings with EPRESENT_HIDE tag or marked as "speaker notes"
   (org-map-entries (lambda ()

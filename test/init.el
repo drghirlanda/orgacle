@@ -17,9 +17,8 @@
 ;; the previous version of the code after every edit.
 (setq load-prefer-newer t)
 
-(defconst epresent-dev-dependencies '(package-lint org-superstar)
-  "Packages needed to lint and test epresent, but not to use it.
-`org-superstar' is here only until it is made optional; see Task 11.")
+(defconst epresent-dev-dependencies '(package-lint)
+  "Packages needed to lint and test epresent, but not to use it.")
 
 (setq package-user-dir (expand-file-name ".deps" default-directory)
       package-archives '(("gnu"   . "https://elpa.gnu.org/packages/")
