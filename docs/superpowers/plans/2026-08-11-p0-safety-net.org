@@ -1588,6 +1588,99 @@ The characterization tests added in the previous tasks are what make
 this safe; they all still pass."
 #+end_src
 
+* Task 8a: Stop stale bytecode shadowing the source
+
+Inserted after Task 8, which surfaced it. This fixes a defect in the harness
+Task 2 built, not in =epresent.el=.
+
+=make compile= leaves =epresent.elc= on disk. =load-prefer-newer= defaults to
+nil, so =(require 'epresent)= then loads that =.elc= *even when =epresent.el= is
+newer*. Confirmed:
+
+#+begin_example
+  $ emacs -Q --batch -l test/init.el --eval '(princ (locate-library "epresent"))'
+  /home/stefano/Dropbox/Software/epresent/epresent.elc
+#+end_example
+
+So an implementer who edits =epresent.el= and runs =make test= without running
+=make compile= first tests the *previous* version of the code. Every green suite
+in this phase is suspect until proven otherwise.
+
+It was proven otherwise before this task was written: with all =.elc= files
+removed, the full suite passes 27/27 against pure source, so nothing was in fact
+masked. This task stops it happening later.
+
+*Files:*
+- Modify: =test/init.el=, =test/epresent-test.el=
+
+*Interfaces:*
+- Consumes: nothing.
+- Produces: nothing later tasks call.
+
+- [ ] *Step 1: Write the failing test*
+
+Add alongside the other tests. It pins the harness setting rather than any
+behaviour of =epresent.el=, which is the only thing that can be asserted here
+in-process:
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest epresent-test-harness-prefers-newer-source ()
+    "The batch harness loads the newer of epresent.el and epresent.elc.
+
+`load-prefer-newer' defaults to nil, which makes `require' prefer a
+stale .elc left behind by `make compile' over freshly edited source --
+so a suite run without recompiling would silently test the previous
+version of the code."
+    (should load-prefer-newer))
+#+end_src
+
+- [ ] *Step 2: Run it to verify it fails*
+
+Run: =make test=
+Expected: FAIL, =epresent-test-harness-prefers-newer-source=, because
+=load-prefer-newer= is nil.
+
+- [ ] *Step 3: Set it in the bootstrap*
+
+In =test/init.el=, immediately after =(require 'package)=:
+
+#+begin_src emacs-lisp :eval no
+  ;; `make compile' leaves epresent.elc on disk, and `load' prefers a .elc
+  ;; over a newer .el unless told otherwise -- which would silently test
+  ;; the previous version of the code after every edit.
+  (setq load-prefer-newer t)
+#+end_src
+
+- [ ] *Step 4: Run the tests*
+
+Run: =make test=
+Expected: PASS, one more than the previous count.
+
+- [ ] *Step 5: Prove the shadowing is gone*
+
+#+begin_src sh
+  make compile                       # leaves epresent.elc on disk
+  touch epresent.el                  # source now newer
+  emacs -Q --batch -l test/init.el \
+        --eval '(princ (format "%s\n" (locate-library "epresent")))'
+#+end_src
+
+Expected: =epresent.el=, not =epresent.elc=. Before this task the same commands
+print =epresent.elc=.
+
+- [ ] *Step 6: Commit*
+
+#+begin_src sh
+  git add test/init.el test/epresent-test.el
+  git commit -m "Load the newer of source and bytecode in the test harness
+
+make compile leaves epresent.elc behind, and load-prefer-newer defaults
+to nil, so require preferred the stale .elc over freshly edited source.
+A suite run without recompiling tested the previous version of the code.
+Verified that nothing had actually been masked: the full suite passes
+against pure source with every .elc removed."
+#+end_src
+
 * Task 9: Fix the behavioural defects
 
 Nine defects, all confirmed by reading and — where behaviour is observable —
