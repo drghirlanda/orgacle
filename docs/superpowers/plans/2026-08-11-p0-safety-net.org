@@ -1987,7 +1987,7 @@ same substitution, and whichever task reaches it first makes it.
 - [ ] *Step 12: Run the tests*
 
 Run: =make test=
-Expected: PASS, =30 expected=.
+Expected: PASS, =32 expected=.
 
 - [ ] *Step 13: Commit*
 
@@ -2124,7 +2124,7 @@ Expected: no output.
 - [ ] *Step 5: Run the tests*
 
 Run: =make test=
-Expected: PASS, =30 expected=.
+Expected: PASS, =32 expected=.
 
 - [ ] *Step 6: Commit and check the snapshot job*
 
@@ -2242,7 +2242,7 @@ Then remove the stale copy so the next run proves it:
   make test
 #+end_src
 
-Expected: PASS, =30 expected=, with =org-superstar= never installed.
+Expected: PASS, =32 expected=, with =org-superstar= never installed.
 
 - [ ] *Step 5: Check the warning count*
 
@@ -2373,7 +2373,7 @@ two new ones:
   make compile && make test
 #+end_src
 
-Expected: both clean, =30 expected=.
+Expected: both clean, =32 expected=.
 
 - [ ] *Step 7: Commit*
 
@@ -2474,7 +2474,7 @@ Expected: exit 0, no output.
   make compile && make test
 #+end_src
 
-Expected: clean, =30 expected=.
+Expected: clean, =32 expected=.
 
 - [ ] *Step 6: Commit*
 
@@ -2604,4 +2604,4 @@ exits 0, and:
 - =emacs -Q --batch -L . --eval '(require (quote epresent))'= succeeds on a
   machine with neither =org-superstar= nor =pdf-tools= installed;
 - loading =epresent= changes no keymap outside the package;
-- the ERT suite reports 30 passing tests and no failures.
+- the ERT suite reports 32 passing tests and no failures.
