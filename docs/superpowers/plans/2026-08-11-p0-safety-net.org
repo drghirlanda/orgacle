@@ -1,0 +1,2276 @@
+#+TITLE: P0 — Safety net and compliance: implementation plan
+#+AUTHOR: Stefano Ghirlanda
+#+DATE: 2026-08-11
+#+OPTIONS: toc:2 num:nil
+
+#+begin_quote
+*For agentic workers:* REQUIRED SUB-SKILL: use =superpowers:subagent-driven-development=
+(recommended) or =superpowers:executing-plans= to implement this plan
+task-by-task. Steps use checkbox (=- [ ]=) syntax for tracking.
+#+end_quote
+
+*Goal:* Put =epresent.el= under compile, lint, docstring and test gates that all
+pass on Emacs 29.4, 30.2 and snapshot, and fix every defect that stands in the
+way — without renaming anything.
+
+*Architecture:* A =Makefile= drives four batch targets (=compile=, =checkdoc=,
+=lint=, =test=) through a bootstrap file that provisions development
+dependencies into =./.deps=, so the only tool a contributor needs is Emacs
+itself. GitHub Actions runs the same =make= targets across the version matrix.
+Characterization tests are written *before* =lexical-binding= is switched on,
+because that switch changes the meaning of roughly forty =setq= sites.
+
+*Tech stack:* Emacs Lisp, ERT, =checkdoc=, =package-lint=, GNU Make, GitHub
+Actions.
+
+* Global constraints
+
+Copied verbatim from the design document; every task inherits them.
+
+- Package stays named =epresent= for the whole of P0. The rename to =orgacle=
+  is P1 and must not leak into this phase.
+- Version floor: =Package-Requires: ((emacs "29.1") (org "9.6"))=.
+- CI matrix: Emacs 29.4, 30.2, snapshot (all three exist in =nix-emacs-ci=).
+- Nothing beyond Emacs and Org may be a hard requirement.
+- Every file must byte-compile clean with =byte-compile-error-on-warn= set.
+- No =[f5]=–=[f9]= binding may survive in any keymap the package defines, and
+  the package must not modify =org-mode-map= at load time.
+- Exit criteria for the phase: =make compile checkdoc lint test= green on all
+  three Emacs versions.
+
+* Amendments to the design document
+
+Two changes to the spec, made while planning. Both are folded into the tasks
+below; update =docs/superpowers/specs/2026-08-10-orgacle-design.org= to match.
+
+1. *Obsolete Org APIs and the compat shims move from P2 into P0* (Tasks 10
+   and 11). The spec's P0 exit criterion is a clean compile under
+   =byte-compile-error-on-warn=, and on the snapshot Emacs the twelve obsolete
+   calls are warnings — therefore errors. P0 cannot be green without them.
+   P2 keeps the file split, the page hook, the session struct, and the runtime
+   soft-dependency handling for =pdf-tools= and the video player.
+2. *Build tool: GNU Make, not Eldev.* Eldev is not installed on this machine and
+   is not packaged for Slackware. A 30-line =Makefile= plus a bootstrap file
+   gives the same result, needs nothing but Emacs, and lets CI run byte-for-byte
+   the same commands as a local checkout. The dependency provisioning Eldev
+   would have done is eight lines of =package-install=.
+
+* Defects discovered while planning
+
+Found by reading during planning, beyond those already in the spec. All are
+fixed in this phase; each is named in the task that fixes it.
+
+- *=epresent-slide-in= is dead and the animation is always on.*
+  =epresent-slide-in-effect= computes =slide-local= as t unless the heading's
+  property is exactly ="no"=, computes =slide-global= from the defcustom, then
+  tests =(or slide-local (and (not slide-global) slide-local))=, which reduces
+  to =slide-local=. The global setting is never consulted. The animation
+  therefore runs on every slide even though =epresent-slide-in= defaults to nil.
+  Fixed in Task 9 — *this changes visible behaviour, see the note there.*
+- *Speaking-time estimate truncates instead of rounding to the half minute.*
+  =epresent-estimate-time= does =(/ (ceiling (* speaker-time 2)) 2)= — integer
+  division, so 225 words at 150 wpm reports 1 minute, not 1.5. The comment
+  above it says "round to the half minute". Fixed in Task 9.
+- *=epresent-fontify= calls =(org-superstar-mode)= with no argument*, which
+  toggles rather than enables. On a refresh it switches the bullets back off.
+  Fixed in Task 11.
+- *=epresent-next-page='s docstring inverts its own argument.* It says "If SKIP
+  is nil, the page is advanced but not displayed"; the code is
+  =(unless skip (epresent-current-page))=. Fixed in Task 9.
+- *The LaTeX export backend emits nothing for its property drawers unless the
+  user opts in.* =org-export-with-properties= defaults to nil, so the
+  =property-drawer= translator — the entire point of the backend — never runs.
+  Verified: exporting a fixture with =EPRESENT_SHOW_FILE= produces no
+  =\includegraphics= at all unless =:with-properties t= is passed. Fixed in
+  Task 9 by giving the derived backend its own default.
+- *=epresent--collect-notes= emits the last heading twice.* The loop tests
+  =(< (point) (point-max))= before calling =org-next-visible-heading=, so on the
+  final heading the body runs once more with point unmoved. Verified: a
+  three-slide fixture yields ="* Third slide"= twice. Characterized in Task 5
+  and left standing — P3 replaces this loop with the slide vector.
+- *=epresent-x-pointer-shape= is declared =:type 'symbol= but holds an integer.*
+  =x-pointer-dot= and friends are integer constants. Fixed in Task 9.
+
+Deferred deliberately to P3, not to be touched here: =epresent-quit= calls
+=(kill-buffer (get-file-buffer epresent--org-file))= without checking that the
+buffer exists, and =(kill-buffer nil)= kills the current buffer. It is reachable
+only when presenting a narrowed region. P3 rewrites =epresent-quit= wholesale.
+
+* File structure
+
+| File                       | Responsibility                                               | Task |
+|----------------------------+--------------------------------------------------------------+------|
+| =Makefile=                 | The four batch targets; the only entry point a human types   |    2 |
+| =test/init.el=             | Provisions dev dependencies into =./.deps=, sets =load-path= |    2 |
+| =test/checkdoc-batch.el=   | Makes =checkdoc= change the exit status                      |    2 |
+| =test/epresent-test.el=    | The whole ERT suite for P0                                   |  2–7 |
+| =test/fixtures/*.org=      | Org inputs the tests run against                             |  2–7 |
+| =.github/workflows/ci.yml= | Runs the same =make= targets over the version matrix         |    3 |
+| =.gitignore=               | Build and dependency artefacts                               |    1 |
+| =epresent.el=              | Everything else — untouched structurally until P2            | 8–14 |
+
+The suite lives in one file for P0. It is split along the module boundaries in
+P2, when the source is split.
+
+* Task 1: Clean baseline
+
+The working tree carries uncommitted work (=epresent.el= +140 lines,
+=README.org=, =present.org=) and an untracked =ltximg/=. Nothing may be rewritten
+on top of an unrecorded baseline.
+
+*Files:*
+- Modify: =.gitignore=
+- Commit: =epresent.el=, =README.org=, =present.org=
+
+*Interfaces:*
+- Consumes: nothing.
+- Produces: a clean =git status= on branch =orgacle-rework=, which every later
+  task assumes when it commits.
+
+- [ ] *Step 1: Look at what is uncommitted before committing it*
+
+#+begin_src sh
+  git diff --stat
+  git diff epresent.el
+#+end_src
+
+Expected: three modified files, roughly 184 insertions. Read the =epresent.el=
+diff — it is in-progress work whose intent only the author knows. Do not
+discard it.
+
+- [ ] *Step 2: Record the in-progress work as its own commit*
+
+#+begin_src sh
+  git add epresent.el README.org present.org
+  git commit -m "Record in-progress work before the P0 rewrite
+
+Baseline commit so that the safety-net phase starts from a recorded
+state and every later change is a reviewable diff against it."
+#+end_src
+
+- [ ] *Step 3: Correct =.gitignore=*
+
+It currently lists =ltxpng=, the directory name Org used before it switched to
+=ltximg=, which is why =ltximg/= shows up as untracked.
+
+#+begin_src text
+  # Org-mode LaTeX preview images
+  ltxpng/
+  ltximg/
+
+  # Byte-compiled Emacs Lisp
+  *.elc
+
+  # Emacs backup and lock files
+  *~
+  \#*\#
+  .\#*
+
+  # Development dependencies provisioned by test/init.el
+  .deps/
+#+end_src
+
+- [ ] *Step 4: Verify the tree is clean*
+
+Run: =git status --short=
+Expected: no output at all.
+
+- [ ] *Step 5: Commit*
+
+#+begin_src sh
+  git add .gitignore
+  git commit -m "Ignore ltximg, byte-compiled files, backups and .deps
+
+Org renamed its LaTeX preview directory from ltxpng to ltximg, so the
+existing rule had stopped matching."
+#+end_src
+
+* Task 2: Test harness
+
+*Files:*
+- Create: =Makefile=, =test/init.el=, =test/checkdoc-batch.el=,
+  =test/epresent-test.el=, =test/fixtures/plain.org=
+
+*Interfaces:*
+- Consumes: nothing.
+- Produces:
+  - =make compile=, =make checkdoc=, =make lint=, =make test= — used by Task 3
+    and by every task's verification step.
+  - =epresent-test-fixture-directory= (defconst, string) — absolute path to
+    =test/fixtures=.
+  - =epresent-test-with-fixture= (macro, =(NAME &rest BODY)=) — visits fixture
+    =NAME= in a temporary Org buffer and evaluates =BODY= there. Every later test
+    uses it.
+
+- [ ] *Step 1: Write the bootstrap*
+
+Create =test/init.el=:
+
+#+begin_src emacs-lisp :eval no
+  ;;; init.el --- Batch bootstrap for the epresent test suite  -*- lexical-binding: t; -*-
+
+  ;;; Commentary:
+
+  ;; Loaded with -l before every batch target in the Makefile.  Provisions the
+  ;; packages needed to lint and test epresent into ./.deps, so that `make'
+  ;; needs nothing on the machine but Emacs itself, and puts the project root
+  ;; on `load-path'.
+
+  ;;; Code:
+
+  (require 'package)
+  (require 'seq)
+
+  (defconst epresent-dev-dependencies '(package-lint)
+    "Packages needed to lint and test epresent, but not to use it.")
+
+  (setq package-user-dir (expand-file-name ".deps" default-directory)
+        package-archives '(("gnu"   . "https://elpa.gnu.org/packages/")
+                           ("melpa" . "https://melpa.org/packages/")))
+
+  (package-initialize)
+
+  (let ((missing (seq-remove #'package-installed-p epresent-dev-dependencies)))
+    (when missing
+      (package-refresh-contents)
+      (mapc #'package-install missing)))
+
+  (add-to-list 'load-path default-directory)
+
+  (provide 'init)
+  ;;; init.el ends here
+#+end_src
+
+=org-superstar= is deliberately absent from that list: Task 11 makes it optional,
+after which the suite must pass without it. Until then =make compile= reports it
+as a missing load file, which is the defect Task 11 fixes.
+
+- [ ] *Step 2: Write the checkdoc wrapper*
+
+=checkdoc-file= prints complaints but never changes the exit status, so a
+Makefile cannot tell a clean run from a dirty one. Create
+=test/checkdoc-batch.el=:
+
+#+begin_src emacs-lisp :eval no
+  ;;; checkdoc-batch.el --- Fail the build on checkdoc complaints  -*- lexical-binding: t; -*-
+
+  ;;; Commentary:
+
+  ;; `checkdoc-file' prints its complaints but never changes the exit status,
+  ;; so a Makefile or a CI job cannot tell a clean run from a dirty one.  This
+  ;; wrapper counts complaints through `checkdoc-create-error-function' and
+  ;; exits non-zero when there are any.
+  ;;
+  ;; Usage: emacs -Q --batch -l test/checkdoc-batch.el FILE...
+
+  ;;; Code:
+
+  (require 'checkdoc)
+
+  (defvar epresent-checkdoc-count 0
+    "Number of complaints seen during this batch run.")
+
+  (setq checkdoc-create-error-function
+        (lambda (text start _end &optional _unfixable)
+          (setq epresent-checkdoc-count (1+ epresent-checkdoc-count))
+          (message "%s:%d: %s"
+                   (file-name-nondirectory (or (buffer-file-name) "?"))
+                   (line-number-at-pos (or start (point)))
+                   text)
+          nil))
+
+  (let ((files (or command-line-args-left '("epresent.el"))))
+    (dolist (file files)
+      (checkdoc-file file))
+    (if (zerop epresent-checkdoc-count)
+        (message "checkdoc: clean (%d file(s))" (length files))
+      (message "checkdoc: %d complaint(s)" epresent-checkdoc-count)
+      (kill-emacs 1)))
+
+  (provide 'checkdoc-batch)
+  ;;; checkdoc-batch.el ends here
+#+end_src
+
+- [ ] *Step 3: Write the Makefile*
+
+=byte-compile-error-on-warn= is *not* switched on yet — Task 14 does that, once
+the warnings are gone. Turning it on now would make every intermediate task's
+verification step fail for reasons unrelated to that task.
+
+#+begin_src makefile :eval no
+  EMACS ?= emacs
+  BATCH  = $(EMACS) -Q --batch -l test/init.el
+  EL     = epresent.el
+
+  .PHONY: all deps compile checkdoc lint test clean
+
+  all: compile checkdoc lint test
+
+  deps:
+  	$(BATCH) --eval '(message "dependencies ready in %s" package-user-dir)'
+
+  compile:
+  	@rm -f $(EL:.el=.elc)
+  	$(BATCH) -f batch-byte-compile $(EL)
+
+  checkdoc:
+  	$(BATCH) -l test/checkdoc-batch.el $(EL)
+
+  lint:
+  	$(BATCH) --eval '(require (quote package-lint))' \
+  	         -f package-lint-batch-and-exit $(EL)
+
+  test:
+  	$(BATCH) -l test/epresent-test.el -f ert-run-tests-batch-and-exit
+
+  clean:
+  	rm -f *.elc
+  	rm -rf .deps
+#+end_src
+
+Makefile recipe lines must begin with a literal tab, not spaces.
+
+- [ ] *Step 4: Write the fixture*
+
+Create =test/fixtures/plain.org= — an Org file with no epresent keywords at all,
+used to test the defaults:
+
+#+begin_src org :eval no
+  ,#+TITLE: Plain
+  ,#+AUTHOR: Nobody
+
+  ,* First slide
+
+  Some text.
+
+  ,* Second slide
+
+  ,** A subheading
+
+  More text.
+#+end_src
+
+- [ ] *Step 5: Write the suite preamble and one smoke test*
+
+Create =test/epresent-test.el=:
+
+#+begin_src emacs-lisp :eval no
+  ;;; epresent-test.el --- Tests for epresent  -*- lexical-binding: t; -*-
+
+  ;;; Commentary:
+
+  ;; Run with `make test'.  Everything here must work in batch mode on a
+  ;; machine with no window system, so nothing may create a frame, wait on
+  ;; redisplay, or start a subprocess.
+
+  ;;; Code:
+
+  (require 'ert)
+  (require 'org)
+  (require 'epresent)
+
+  (defconst epresent-test-fixture-directory
+    (expand-file-name "fixtures"
+                      (file-name-directory (or load-file-name buffer-file-name)))
+    "Directory holding the Org fixtures these tests run against.")
+
+  (defmacro epresent-test-with-fixture (name &rest body)
+    "Visit fixture NAME in a temporary Org buffer and evaluate BODY there."
+    (declare (indent 1) (debug (form body)))
+    `(with-temp-buffer
+       (insert-file-contents
+        (expand-file-name ,name epresent-test-fixture-directory))
+       (let ((org-mode-hook nil))
+         (org-mode))
+       ,@body))
+
+  (ert-deftest epresent-test-harness-works ()
+    "The fixture directory exists and `epresent' is loadable."
+    (should (file-directory-p epresent-test-fixture-directory))
+    (should (featurep 'epresent)))
+
+  (provide 'epresent-test)
+  ;;; epresent-test.el ends here
+#+end_src
+
+- [ ] *Step 6: Run the suite and watch it fail on the missing dependency*
+
+Run: =make test=
+Expected: FAIL. =(require 'epresent)= pulls in =(require 'org-superstar)=, which
+is not provisioned, so loading aborts with =Cannot open load file:
+org-superstar=. This is the install-breaking defect Task 11 fixes; confirming it
+here is the point.
+
+- [ ] *Step 7: Unblock the suite until Task 11*
+
+Add =org-superstar= to =epresent-dev-dependencies= in =test/init.el=:
+
+#+begin_src emacs-lisp :eval no
+  (defconst epresent-dev-dependencies '(package-lint org-superstar)
+    "Packages needed to lint and test epresent, but not to use it.
+`org-superstar' is here only until it is made optional; see Task 11.")
+#+end_src
+
+- [ ] *Step 8: Run the suite again*
+
+Run: =make test=
+Expected: PASS, =1 expected= (the first run also downloads into =.deps=, which
+takes a minute).
+
+- [ ] *Step 9: Check the other three targets run at all*
+
+#+begin_src sh
+  make compile   # succeeds, prints many warnings
+  make checkdoc  # exits 1, "checkdoc: 80 complaint(s)"
+  make lint      # exits 1, package-lint errors
+#+end_src
+
+Expected: exactly that. =compile= passes only because
+=byte-compile-error-on-warn= is still off; =checkdoc= and =lint= fail, and stay
+failing until Tasks 13 and 14.
+
+- [ ] *Step 10: Commit*
+
+#+begin_src sh
+  git add Makefile test/
+  git commit -m "Add a batch test harness
+
+make compile/checkdoc/lint/test, with dependencies provisioned into
+.deps so that a checkout needs nothing but Emacs.  checkdoc gets a
+wrapper because checkdoc-file never changes the exit status."
+#+end_src
+
+* Task 3: Continuous integration
+
+*Files:*
+- Create: =.github/workflows/ci.yml=
+
+*Interfaces:*
+- Consumes: the =make= targets from Task 2.
+- Produces: a CI run per push. Task 14 flips =continue-on-error= off.
+
+- [ ] *Step 1: Write the workflow*
+
+=checkdoc= and =lint= are expected to fail until Tasks 13 and 14, so they are
+marked =continue-on-error= — visible in the log, not blocking. =compile= and
+=test= must pass from this task onward.
+
+#+begin_src yaml :eval no
+  name: CI
+
+  on:
+    push:
+      branches: [master, orgacle-rework]
+    pull_request:
+    workflow_dispatch:
+
+  jobs:
+    check:
+      runs-on: ubuntu-latest
+      strategy:
+        fail-fast: false
+        matrix:
+          emacs_version: ['29.4', '30.2', 'snapshot']
+      steps:
+        - uses: actions/checkout@v4
+
+        - uses: purcell/setup-emacs@master
+          with:
+            version: ${{ matrix.emacs_version }}
+
+        - name: Show versions
+          run: |
+            emacs --version
+            make --version | head -1
+
+        - name: Provision dependencies
+          run: make deps
+
+        - name: Byte-compile
+          run: make compile
+
+        - name: Run tests
+          run: make test
+
+        - name: checkdoc
+          continue-on-error: true
+          run: make checkdoc
+
+        - name: package-lint
+          continue-on-error: true
+          run: make lint
+#+end_src
+
+- [ ] *Step 2: Commit and push*
+
+#+begin_src sh
+  git add .github/workflows/ci.yml
+  git commit -m "Run compile, test, checkdoc and package-lint in CI
+
+Matrix over Emacs 29.4, 30.2 and snapshot.  checkdoc and package-lint
+are non-blocking until the phase that cleans them up."
+  git push -u origin orgacle-rework
+#+end_src
+
+- [ ] *Step 3: Watch the run*
+
+Run: =gh run watch=
+Expected: three jobs. =compile= and =test= green on all three; =checkdoc= and
+=lint= red but not failing the job. If =compile= or =test= is red on snapshot
+only, read the log — snapshot's Org is 9.8, where the inline-image functions are
+obsolete, and Task 10 is what fixes it.
+
+* Task 4: Characterize keyword parsing
+
+The two simplest functions, and the ones every later navigation change depends
+on. No production code changes in this task.
+
+*Files:*
+- Create: =test/fixtures/keywords.org=
+- Modify: =test/epresent-test.el=
+
+*Interfaces:*
+- Consumes: =epresent-test-with-fixture= from Task 2.
+- Produces: nothing later tasks call.
+
+- [ ] *Step 1: Write the fixture*
+
+Create =test/fixtures/keywords.org=:
+
+#+begin_src org :eval no
+  ,#+TITLE: Keywords
+  ,#+EPRESENT_FRAME_LEVEL: 2
+  ,#+EPRESENT_MODE_LINE: (:eval (format "slide %d" epresent-page-number))
+
+  ,* Part one
+
+  ,** First slide
+
+  Text.
+
+  ,** Second slide
+
+  Text.
+#+end_src
+
+- [ ] *Step 2: Write the failing tests*
+
+Append to =test/epresent-test.el=, before the =provide=:
+
+#+begin_src emacs-lisp :eval no
+  ;;; Keyword parsing
+
+  (ert-deftest epresent-test-frame-level-from-keyword ()
+    "`epresent-get-frame-level' reads #+EPRESENT_FRAME_LEVEL."
+    (epresent-test-with-fixture "keywords.org"
+      (should (equal 2 (epresent-get-frame-level)))))
+
+  (ert-deftest epresent-test-frame-level-defaults ()
+    "Without the keyword, `epresent-frame-level' is returned unchanged."
+    (epresent-test-with-fixture "plain.org"
+      (should (equal epresent-frame-level (epresent-get-frame-level)))))
+
+  (ert-deftest epresent-test-frame-level-ignores-restriction ()
+    "The keyword is found even when the buffer is narrowed past it."
+    (epresent-test-with-fixture "keywords.org"
+      (goto-char (point-max))
+      (org-back-to-heading)
+      (org-narrow-to-subtree)
+      (should (equal 2 (epresent-get-frame-level)))))
+
+  (ert-deftest epresent-test-mode-line-from-keyword ()
+    "`epresent-get-mode-line' reads and parses #+EPRESENT_MODE_LINE."
+    (epresent-test-with-fixture "keywords.org"
+      (should (equal '(:eval (format "slide %d" epresent-page-number))
+                     (epresent-get-mode-line)))))
+
+  (ert-deftest epresent-test-mode-line-defaults ()
+    "Without the keyword, `epresent-mode-line' is returned unchanged."
+    (epresent-test-with-fixture "plain.org"
+      (should (equal epresent-mode-line (epresent-get-mode-line)))))
+#+end_src
+
+- [ ] *Step 3: Run them*
+
+Run: =make test=
+Expected: PASS, =6 expected=. These characterize behaviour that already works;
+a failure here means the fixture is wrong, not the code.
+
+- [ ] *Step 4: Commit*
+
+#+begin_src sh
+  git add test/
+  git commit -m "Characterize keyword parsing
+
+Pins the behaviour of epresent-get-frame-level and
+epresent-get-mode-line before the lexical-binding conversion."
+#+end_src
+
+* Task 5: Characterize speaker notes and the time estimate
+
+Both functions are riddled with free variables and both mix computation with
+display. Extract the computation so it can be tested, leaving behaviour
+byte-identical.
+
+*Files:*
+- Create: =test/fixtures/notes.org=
+- Modify: =epresent.el= (=epresent-make-notes-buffer=, =epresent-estimate-time=)
+- Modify: =test/epresent-test.el=
+
+*Interfaces:*
+- Consumes: =epresent-test-with-fixture=.
+- Produces, for Tasks 8 and 9:
+  - =(epresent--collect-notes)= → string. The speaker notes of the current
+    buffer as Org text.
+  - =(epresent--speaker-word-count)= → integer. Words in all speaker-notes
+    subtrees of the current buffer.
+  - =(epresent--speaking-time WORDS)= → number. Estimated minutes for WORDS at
+    =epresent-wpm=.
+
+- [ ] *Step 1: Write the fixture*
+
+The heading text ="Speaker notes"= is matched case-sensitively by
+=epresent-make-notes-buffer= and case-insensitively by =epresent-mode=. The
+fixture uses the exact casing the collector expects.
+
+Create =test/fixtures/notes.org=:
+
+#+begin_src org :eval no
+  ,#+TITLE: Notes
+
+  ,* First slide
+
+  Visible text.
+
+  ,** Speaker notes
+
+  One two three four five.
+
+  ,* Second slide
+
+  ,** Speaker notes
+
+  Six seven eight.
+
+  ,* Third slide
+
+  No notes on this one.
+#+end_src
+
+- [ ] *Step 2: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  ;;; Speaker notes
+
+  (ert-deftest epresent-test-collect-notes-keeps-slide-headings ()
+    "Every frame-level heading contributes a heading to the notes text."
+    (epresent-test-with-fixture "notes.org"
+      (let ((notes (epresent--collect-notes)))
+        (should (string-match-p "^\\* First slide$" notes))
+        (should (string-match-p "^\\* Second slide$" notes))
+        (should (string-match-p "^\\* Third slide$" notes)))))
+
+  (ert-deftest epresent-test-collect-notes-keeps-note-bodies ()
+    "The body of each Speaker notes subtree is carried over."
+    (epresent-test-with-fixture "notes.org"
+      (let ((notes (epresent--collect-notes)))
+        (should (string-match-p "One two three four five\\." notes))
+        (should (string-match-p "Six seven eight\\." notes)))))
+
+  (ert-deftest epresent-test-collect-notes-omits-slide-bodies ()
+    "Text outside a Speaker notes subtree is not collected."
+    (epresent-test-with-fixture "notes.org"
+      (should-not (string-match-p "Visible text" (epresent--collect-notes)))))
+
+  (ert-deftest epresent-test-collect-notes-repeats-the-last-heading ()
+    "Current behaviour: the final heading is emitted twice.
+
+The loop tests (< (point) (point-max)) before advancing, so on the last
+heading its body runs once more with point unmoved.  P3 replaces this
+loop with the slide vector; until then the duplication is pinned here so
+that the lexical-binding conversion cannot change it unnoticed."
+    (epresent-test-with-fixture "notes.org"
+      (should (string-match-p "\\* Third slide\n\\* Third slide"
+                              (epresent--collect-notes)))))
+
+  ;;; Speaking time
+
+  (ert-deftest epresent-test-speaker-word-count ()
+    "Only words inside Speaker notes subtrees are counted.
+
+Twelve: each subtree contributes the two words of its own heading —
+`count-words' does not count the leading stars — plus five and three
+words of body."
+    (epresent-test-with-fixture "notes.org"
+      (should (equal 12 (epresent--speaker-word-count)))))
+
+  (ert-deftest epresent-test-speaker-word-count-without-notes ()
+    "A buffer with no speaker notes counts zero words."
+    (epresent-test-with-fixture "plain.org"
+      (should (equal 0 (epresent--speaker-word-count)))))
+
+  (ert-deftest epresent-test-speaking-time-scales-with-wpm ()
+    "Doubling the reading speed halves the estimate."
+    (let ((epresent-wpm 150))
+      (should (equal 2 (epresent--speaking-time 300))))
+    (let ((epresent-wpm 300))
+      (should (equal 1 (epresent--speaking-time 300)))))
+
+  (ert-deftest epresent-test-speaking-time-truncates-half-minutes ()
+    "Current behaviour: the half-minute rounding is integer division.
+
+225 words at 150 wpm is 1.5 minutes, and the code reports 1.  Task 9
+changes this and updates the test."
+    (let ((epresent-wpm 150))
+      (should (equal 1 (epresent--speaking-time 225)))))
+#+end_src
+
+- [ ] *Step 3: Run them to verify they fail*
+
+Run: =make test=
+Expected: FAIL, 8 errors, each =Symbol's function definition is void:
+epresent--collect-notes= or =...--speaker-word-count= or =...--speaking-time=.
+
+- [ ] *Step 4: Extract the notes collector*
+
+In =epresent.el=, replace =epresent-make-notes-buffer= with the pair below. The
+collection loop is copied unchanged — this is an extraction, not a rewrite; the
+free variables in it are Task 8's business.
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent--collect-notes ()
+    "Return this buffer's speaker notes as Org text.
+Each frame-level heading contributes a first-level heading, followed by
+the body of its \"Speaker notes\" subtree when it has one."
+    (setq speaker-notes "")
+    (save-excursion
+      (goto-char (point-min))
+      (while (< (point) (point-max))
+        (org-next-visible-heading 1)
+        (setq current-heading (org-entry-get nil "ITEM"))
+        (if (= (org-current-level) 1)
+            (setq speaker-notes
+                  (concat speaker-notes "* " current-heading "\n")))
+        (when (string= current-heading "Speaker notes")
+          (org-mark-subtree)
+          (setq speaker-notes
+                (concat speaker-notes
+                        (buffer-substring (point) (mark))
+                        "\n")))))
+    (deactivate-mark)
+    speaker-notes)
+
+  (defun epresent-make-notes-buffer ()
+    "Collect speaker notes into a buffer and show it in a new frame."
+    (interactive)
+    (let ((notes (epresent--collect-notes)))
+      (if (bufferp epresent-notes-buffer)
+          (kill-buffer epresent-notes-buffer))
+      (setq epresent-notes-buffer (generate-new-buffer "*EPresent Notes*"))
+      (with-current-buffer epresent-notes-buffer
+        (erase-buffer)
+        (org-mode)
+        (insert notes)
+        (goto-char (point-min))
+        (while (re-search-forward "\\*\\* ?.* Speaker [nN]otes[ \t]*\n" nil t)
+          (replace-match ""))
+        (goto-char (point-min))
+        (org-narrow-to-subtree))
+      (switch-to-buffer-other-frame epresent-notes-buffer)))
+#+end_src
+
+- [ ] *Step 5: Extract the word count and the estimate*
+
+Replace =epresent-estimate-time= with the three definitions below. Again, the
+counting loop is copied verbatim.
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent--speaker-word-count ()
+    "Return the number of words in this buffer's speaker-notes subtrees."
+    (setq speaker-words 0)
+    (org-map-entries
+     (lambda ()
+       (setq this-headline (downcase (org-entry-get nil "ITEM")))
+       (when (string= this-headline "speaker notes")
+         (save-excursion
+           (org-mark-subtree)
+           (setq speaker-words
+                 (+ speaker-words (count-words (point) (mark))))
+           (deactivate-mark)))))
+    speaker-words)
+
+  (defun epresent--speaking-time (words)
+    "Return the estimated time in minutes to speak WORDS aloud.
+The reading speed is `epresent-wpm'."
+    (let ((minutes (/ (float words) epresent-wpm)))
+      ;; round to the half minute
+      (/ (ceiling (* minutes 2)) 2)))
+
+  (defun epresent-estimate-time ()
+    "Report how long it would take to read all speaker notes aloud.
+The estimate and the word count are shown in the echo area.  The
+reading speed is `epresent-wpm'."
+    (interactive)
+    (let* ((words (epresent--speaker-word-count))
+           (minutes (epresent--speaking-time words)))
+      (message "Estimated speaking time in minutes: %s (%d words)"
+               minutes words)))
+#+end_src
+
+- [ ] *Step 6: Run the tests*
+
+Run: =make test=
+Expected: PASS, =14 expected=. The expected values in these tests were taken by
+running the current code against the fixture, not derived by reading it. If one
+disagrees, correct the *test* to whatever the current code produces and say so
+in its docstring — these tests record present behaviour, they do not judge it.
+
+- [ ] *Step 7: Commit*
+
+#+begin_src sh
+  git add epresent.el test/
+  git commit -m "Extract and characterize notes collection and time estimate
+
+Separates the computation in epresent-make-notes-buffer and
+epresent-estimate-time from their display, so both can be tested in
+batch.  The extracted bodies are copied verbatim; behaviour is
+unchanged."
+#+end_src
+
+* Task 6: Characterize the LaTeX export backend
+
+=epresent-latex-property-drawer= carries six free variables and is the hardest
+function in the file to reason about. It is reachable in batch through the
+export backend, so it can be characterized end to end.
+
+*Files:*
+- Create: =test/fixtures/export.org=
+- Modify: =test/epresent-test.el=
+
+*Interfaces:*
+- Consumes: nothing new.
+- Produces: nothing later tasks call.
+
+- [ ] *Step 1: Write the fixture*
+
+The image branch never checks that the file exists, so the fixture can name one
+that does not. The =.org= branch would visit a file and is left uncharacterized
+in this phase — note that in the test file.
+
+Create =test/fixtures/export.org=:
+
+#+begin_src org :eval no
+  ,#+TITLE: Export
+
+  ,* Slide with an image
+  :PROPERTIES:
+  :EPRESENT_SHOW_FILE: figure.pdf
+  :EPRESENT_SHOW_WIDTH: 0.8
+  :END:
+
+  Body text.
+
+  ,* Slide with several pages
+  :PROPERTIES:
+  :EPRESENT_SHOW_FILE: [[figure.pdf]]
+  :EPRESENT_SHOW_PAGES: 1 3
+  :END:
+
+  ,* Slide with a video
+  :PROPERTIES:
+  :EPRESENT_VIDEO_ALT: demo.mp4
+  :END:
+#+end_src
+
+- [ ] *Step 2: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  ;;; LaTeX export backend
+
+  ;; The .org branch of `epresent-latex-property-drawer' visits a file and is
+  ;; not characterized here; P2 revisits it when ox-epresent.el is split out.
+
+  (defun epresent-test--export-fixture (name)
+    "Export fixture NAME through the epresent backend and return the LaTeX.
+`:with-properties' has to be forced on: `org-export-with-properties'
+defaults to nil, and without it Org discards property drawers before
+the backend ever sees them, so the translator never runs.  Task 9 makes
+the backend default it to t; this helper keeps the tests honest either
+way."
+    (epresent-test-with-fixture name
+      (org-export-as 'epresent nil nil t '(:with-properties t))))
+
+  (ert-deftest epresent-test-export-emits-includegraphics ()
+    "EPRESENT_SHOW_FILE becomes an \\includegraphics with the given width."
+    (let ((latex (epresent-test--export-fixture "export.org")))
+      (should (string-match-p
+               "\\\\includegraphics\\[width=0\\.8\\\\textwidth,page=1\\]{figure\\.pdf}"
+               latex))))
+
+  (ert-deftest epresent-test-export-strips-org-link-brackets ()
+    "A filename written as an Org link loses its brackets."
+    (let ((latex (epresent-test--export-fixture "export.org")))
+      (should-not (string-match-p "{\\[\\[figure" latex))))
+
+  (ert-deftest epresent-test-export-honours-page-list ()
+    "EPRESENT_SHOW_PAGES emits one \\includegraphics per page."
+    (let ((latex (epresent-test--export-fixture "export.org")))
+      (should (string-match-p "page=1\\]{figure\\.pdf}" latex))
+      (should (string-match-p "page=3\\]{figure\\.pdf}" latex))))
+
+  (ert-deftest epresent-test-export-names-videos ()
+    "EPRESENT_VIDEO_ALT becomes a bracketed note naming the file."
+    (let ((latex (epresent-test--export-fixture "export.org")))
+      (should (string-match-p "\\[ Video: demo\\.mp4 \\]" latex))))
+
+  (ert-deftest epresent-test-export-defaults-width ()
+    "A drawer with no EPRESENT_SHOW_WIDTH uses half the text width."
+    (let ((latex (epresent-test--export-fixture "export.org")))
+      (should (string-match-p "width=0\\.5\\\\textwidth" latex))))
+#+end_src
+
+- [ ] *Step 3: Run them*
+
+Run: =make test=
+Expected: PASS, =19 expected=. The five assertions were taken from a real export
+run, not guessed. If every one of them fails at once with LaTeX that contains
+=\section= but no =\includegraphics=, the =:with-properties t= in the helper has
+gone missing — that is exactly what its absence looks like.
+
+- [ ] *Step 4: Commit*
+
+#+begin_src sh
+  git add test/
+  git commit -m "Characterize the LaTeX export backend
+
+Pins the property-drawer translator end to end before its six free
+variables are converted to lexical bindings."
+#+end_src
+
+* Task 7: Characterize the fringe indicators
+
+=epresent-show-indicators= and =epresent-show-indicators-maybe= communicate
+through the free variable =show-auto= and the free variable =show-file=. They
+draw overlays, which works in batch.
+
+The slide-in animation is deliberately *not* characterized: it depends on
+=sit-for= and on redisplay, and Task 9 rewrites its logic anyway.
+
+*Files:*
+- Create: =test/fixtures/indicators.org=
+- Modify: =test/epresent-test.el=
+
+*Interfaces:*
+- Consumes: nothing new.
+- Produces: nothing later tasks call.
+
+- [ ] *Step 1: Write the fixture*
+
+=epresent-show-indicators= reads properties at =point-min=, so each case needs
+its own narrowed subtree. Create =test/fixtures/indicators.org=:
+
+#+begin_src org :eval no
+  ,#+TITLE: Indicators
+
+  ,* Slide with a file
+  :PROPERTIES:
+  :EPRESENT_SHOW_FILE: figure.pdf
+  :END:
+
+  ,* Slide with a video
+  :PROPERTIES:
+  :EPRESENT_SHOW_VIDEO: demo.mp4
+  :END:
+
+  ,* Slide with both
+  :PROPERTIES:
+  :EPRESENT_SHOW_FILE: figure.pdf
+  :EPRESENT_SHOW_VIDEO: demo.mp4
+  :END:
+
+  ,* Slide that shows automatically
+  :PROPERTIES:
+  :EPRESENT_SHOW_FILE: figure.pdf
+  :EPRESENT_SHOW_AUTO: t
+  :END:
+
+  ,* Plain slide
+#+end_src
+
+- [ ] *Step 2: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  ;;; Fringe indicators
+
+  (defun epresent-test--indicators-on-slide (heading)
+    "Narrow to HEADING in the indicators fixture and return the fringe bitmaps.
+The result is a list of symbols such as `filled-square', in no
+particular order."
+    (epresent-test-with-fixture "indicators.org"
+      (goto-char (point-min))
+      (re-search-forward (concat "^\\* " (regexp-quote heading) "$"))
+      (org-narrow-to-subtree)
+      (let ((epresent-fringe-overlays nil))
+        (epresent-show-indicators-maybe)
+        (prog1 (mapcar (lambda (ov)
+                         (nth 1 (get-text-property
+                                 0 'display (overlay-get ov 'before-string))))
+                       epresent-fringe-overlays)
+          (mapc #'delete-overlay epresent-fringe-overlays)))))
+
+  (ert-deftest epresent-test-indicator-for-file ()
+    "EPRESENT_SHOW_FILE draws a filled square."
+    (should (equal '(filled-square)
+                   (epresent-test--indicators-on-slide "Slide with a file"))))
+
+  (ert-deftest epresent-test-indicator-for-video ()
+    "EPRESENT_SHOW_VIDEO draws a hollow square."
+    (should (equal '(hollow-square)
+                   (epresent-test--indicators-on-slide "Slide with a video"))))
+
+  (ert-deftest epresent-test-indicator-for-both ()
+    "A slide with a file and a video draws both squares."
+    (should (equal '(filled-square hollow-square)
+                   (sort (epresent-test--indicators-on-slide "Slide with both")
+                         #'string-lessp))))
+
+  (ert-deftest epresent-test-no-indicator-when-auto ()
+    "EPRESENT_SHOW_AUTO suppresses the indicators entirely."
+    (should (equal '()
+                   (epresent-test--indicators-on-slide
+                    "Slide that shows automatically"))))
+
+  (ert-deftest epresent-test-no-indicator-without-properties ()
+    "A slide with no media properties draws nothing."
+    (should (equal '()
+                   (epresent-test--indicators-on-slide "Plain slide"))))
+
+  (ert-deftest epresent-test-indicators-respect-the-option ()
+    "Nothing is drawn when `epresent-indicators' is nil."
+    (let ((epresent-indicators nil))
+      (should (equal '()
+                     (epresent-test--indicators-on-slide "Slide with a file")))))
+#+end_src
+
+- [ ] *Step 3: Run them to verify they fail or pass*
+
+Run: =make test=
+Expected: PASS, =25 expected=. The overlays come back in reverse order of
+creation — =(hollow-square filled-square)= for the slide with both — which is
+why =epresent-test-indicator-for-both= sorts before asserting.
+
+- [ ] *Step 4: Commit*
+
+#+begin_src sh
+  git add test/
+  git commit -m "Characterize the fringe indicators
+
+Pins the behaviour that show-auto and show-file, both free variables,
+currently produce."
+#+end_src
+
+* Task 8: Lexical binding
+
+The pivot of the phase. Adding the cookie without fixing the free variables
+leaves the file uncompilable under Task 14's gate, so both happen here.
+
+Under dynamic binding a =setq= on an undeclared symbol creates a global. Under
+lexical binding it still does — the byte-compiler warns rather than errors — but
+the value now leaks between calls instead of being scoped, and a closure that
+expected to see it will not. Every one of these is converted to a =let=.
+
+*Files:*
+- Modify: =epresent.el=
+
+*Interfaces:*
+- Consumes: every characterization test from Tasks 4–7.
+- Produces: a file that compiles with no free-variable warnings.
+
+- [ ] *Step 1: Add the cookie*
+
+Line 1 of =epresent.el= becomes:
+
+#+begin_src emacs-lisp :eval no
+  ;;; epresent.el --- Simple presentation mode for Emacs Org-mode  -*- lexical-binding: t; -*-
+#+end_src
+
+- [ ] *Step 2: Run the compiler and record the damage*
+
+Run: =make compile 2>&1 | grep "free variable" | wc -l=
+Expected: about 40. Keep the full output; it is the checklist for this task.
+
+- [ ] *Step 3: Run the tests before changing anything else*
+
+Run: =make test=
+Expected: PASS, =25 expected=. The cookie alone should not break anything. If it
+does, that is a genuine dynamic-scope dependency — find it before continuing.
+
+- [ ] *Step 4: Convert =epresent-show-indicators-maybe= and =epresent-show-indicators=*
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-show-indicators-maybe ()
+    "Draw the fringe indicators unless this slide shows its file by itself.
+Nothing is drawn when `epresent-indicators' is nil or when the heading
+has an EPRESENT_SHOW_AUTO property."
+    (let ((show-auto (org-entry-get nil "EPRESENT_SHOW_AUTO")))
+      (when (and epresent-indicators (not show-auto))
+        (epresent-show-indicators))))
+
+  (defun epresent-show-indicators ()
+    "Draw a fringe indicator for each medium this slide can show.
+A filled square marks an EPRESENT_SHOW_FILE property and a hollow
+square an EPRESENT_SHOW_VIDEO property."
+    (interactive)
+    (save-excursion
+      (goto-char (point-min))
+      (end-of-line)
+      (let ((show-file nil))
+        (when (org-entry-get nil "EPRESENT_SHOW_FILE")
+          (setq show-file t)
+          (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
+          (overlay-put (car epresent-fringe-overlays)
+                       'before-string
+                       (propertize " " 'display '(right-fringe filled-square))))
+        (when (org-entry-get nil "EPRESENT_SHOW_VIDEO")
+          ;; advance past the drawer if a file indicator is already here
+          (when show-file
+            (re-search-forward "[ \t]*:END:")
+            (forward-line))
+          (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
+          (overlay-put (car epresent-fringe-overlays)
+                       'before-string
+                       (propertize " " 'display '(right-fringe hollow-square)))))))
+#+end_src
+
+- [ ] *Step 5: Run the tests*
+
+Run: =make test=
+Expected: PASS, =25 expected=. The six indicator tests from Task 7 are what
+prove this conversion is faithful.
+
+- [ ] *Step 6: Convert =epresent-slide-in-effect=*
+
+Only the bindings change here; the tangled condition is Task 9's problem and is
+copied across as it stands.
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-slide-in-effect ()
+    "Animate the current slide sliding in from below."
+    (interactive)
+    (let* ((property (org-entry-get nil "EPRESENT_SLIDE_IN"))
+           (slide-local (not (string= property "no")))
+           (slide-global epresent-slide-in))
+      (when (or slide-local (and (not slide-global) slide-local))
+        (save-excursion
+          (goto-char (point-min))
+          (forward-line)
+          ;; if there is a drawer, skip it
+          (if (looking-at "[ \t]*:PROPERTIES:")
+              (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
+          (let ((ov (make-overlay (point) (point))))
+            (dotimes (i epresent-slide-in-lines)
+              (if (eq i 1) (sit-for epresent-slide-in-pause))
+              (overlay-put ov 'after-string
+                           (make-string (- epresent-slide-in-lines i) ?\n))
+              (sit-for (/ epresent-slide-in-duration epresent-slide-in-lines)))
+            (delete-overlay ov))))))
+#+end_src
+
+- [ ] *Step 7: Convert =epresent-position-notes=*
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-position-notes ()
+    "Scroll the notes buffer to the notes for the current slide."
+    (interactive)
+    (when epresent-notes-buffer
+      (let* ((current-heading (org-entry-get nil "ITEM"))
+             (find-me (concat "^\\*[ \t]+" (regexp-quote current-heading))))
+        (with-selected-window (get-buffer-window epresent-notes-buffer t)
+          (widen)
+          (goto-char (point-min))
+          (re-search-forward find-me)
+          (org-narrow-to-subtree)
+          (recenter 0)))))
+#+end_src
+
+The stray =(goto-char (point))= that followed the search is a no-op and is
+dropped.
+
+- [ ] *Step 8: Convert =epresent-show-video=*
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-show-video (&optional filename mute _paused)
+    "Play a video full screen.
+
+FILENAME is the video to play; without it the EPRESENT_SHOW_VIDEO
+property of the current heading is used.  With MUTE non-nil the audio
+is silenced; without it the EPRESENT_MUTE property is used.  The
+player is chosen with `epresent-video-player'."
+    (interactive)
+    (unless filename
+      (setq filename (org-entry-get nil "EPRESENT_SHOW_VIDEO")))
+    (unless (and filename (file-exists-p filename))
+      (user-error "Cannot open %s" filename))
+    (unless mute
+      (setq mute (org-entry-get nil "EPRESENT_MUTE")))
+    (let ((command
+           (cond
+            ((string= epresent-video-player "vlc")
+             (concat "cvlc -f --no-osd " (if mute "--no-audio " "") filename))
+            ((string= epresent-video-player "mplayer")
+             (concat "mplayer -fs " (if mute "volume=-200dB " "") filename))
+            (t
+             (user-error "Unsupported video player: %s"
+                         epresent-video-player)))))
+      ;; leave full screen so the player can take it
+      (set-frame-parameter nil 'fullscreen nil)
+      (message "Executing %s" command)
+      (shell-command command)
+      (delete-other-windows)
+      (set-frame-parameter nil 'fullscreen 'fullboth)
+      (redraw-display)))
+#+end_src
+
+The unused =paused= argument is renamed =_paused= so the compiler stops
+warning about it. It was never read; P4 either uses it or drops it.
+
+- [ ] *Step 9: Convert =epresent--collect-notes=*
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent--collect-notes ()
+    "Return this buffer's speaker notes as Org text.
+Each frame-level heading contributes a first-level heading, followed by
+the body of its \"Speaker notes\" subtree when it has one."
+    (let ((speaker-notes ""))
+      (save-excursion
+        (goto-char (point-min))
+        (while (< (point) (point-max))
+          (org-next-visible-heading 1)
+          (let ((current-heading (org-entry-get nil "ITEM")))
+            (when (= (org-current-level) 1)
+              (setq speaker-notes
+                    (concat speaker-notes "* " current-heading "\n")))
+            (when (string= current-heading "Speaker notes")
+              (org-mark-subtree)
+              (setq speaker-notes
+                    (concat speaker-notes
+                            (buffer-substring (point) (mark))
+                            "\n"))))))
+      (deactivate-mark)
+      speaker-notes))
+#+end_src
+
+- [ ] *Step 10: Convert =epresent--speaker-word-count=*
+
+The closure passed to =org-map-entries= now captures =speaker-words= lexically,
+which is exactly what the old code was relying on dynamic scope to fake.
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent--speaker-word-count ()
+    "Return the number of words in this buffer's speaker-notes subtrees."
+    (let ((speaker-words 0))
+      (org-map-entries
+       (lambda ()
+         (when (string= (downcase (org-entry-get nil "ITEM")) "speaker notes")
+           (save-excursion
+             (org-mark-subtree)
+             (setq speaker-words (+ speaker-words (count-words (point) (mark))))
+             (deactivate-mark)))))
+      speaker-words))
+#+end_src
+
+- [ ] *Step 11: Convert =epresent-latex-property-drawer=*
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-latex-property-drawer (blob contents _info)
+    "Translate the property drawer BLOB with CONTENTS into LaTeX.
+EPRESENT_VIDEO_ALT becomes a bracketed note naming the file.
+EPRESENT_SHOW_FILE becomes an included Org file when it names one, and
+an \\includegraphics otherwise, honouring EPRESENT_SHOW_WIDTH and
+EPRESENT_SHOW_PAGES."
+    (let ((input (org-export-expand blob contents t))
+          (output nil))
+      ;; videos are named, not embedded
+      (when (string-match "EPRESENT_VIDEO_ALT:\s+\\(.+\\)" input)
+        (setq output (concat output "\n[ Video: " (match-string 1 input) " ]\n\n")))
+      (when (string-match "EPRESENT_SHOW_FILE:\s+\\(.+\\)" input)
+        (let* ((filename (replace-regexp-in-string
+                          "\\]?\\]?$" ""
+                          (replace-regexp-in-string
+                           "^\\[?\\[?" "" (match-string 1 input))))
+               (extension (file-name-extension filename)))
+          (if (string= extension "org")
+              ;; Org files are converted to LaTeX and inlined
+              (save-excursion
+                (find-file filename)
+                (org-latex-convert-region-to-latex)
+                (setq output (concat output (buffer-string)))
+                (set-buffer-modified-p nil)
+                (kill-buffer))
+            ;; everything else is treated as an image
+            (let ((width (if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" input)
+                             (match-string 1 input)
+                           "0.5"))
+                  (pages (if (string-match "EPRESENT_SHOW_PAGES:\s+\\(.+\\)" input)
+                             (split-string (match-string 1 input))
+                           '("1"))))
+              (setq output (concat output "\n"))
+              (dolist (page pages)
+                (setq output
+                      (concat output
+                              "\\includegraphics[width=" width
+                              "\\textwidth,page=" page "]{" filename "}\n")))))))
+      output))
+#+end_src
+
+Three incidental fixes, all forced by the compiler: the =message= calls that
+bracketed the function are gone (they wrote to the echo area on every drawer of
+every export); =kill-this-buffer= — a menu command that misbehaves when called
+from Lisp — becomes =kill-buffer=; and =mark-whole-buffer=, which the compiler
+flags as interactive-only, is dropped in favour of =buffer-string=, which is
+what the mark-and-substring dance was computing.
+
+Note the ordering trap: the =EPRESENT_SHOW_WIDTH= and =EPRESENT_SHOW_PAGES=
+searches must run *after* =filename= has been bound, because each
+=string-match= clobbers the match data the previous one left behind. The
+=let*= above binds =filename= from the =EPRESENT_SHOW_FILE= match before any
+further search happens, which is why it is =let*= and not =let=.
+
+- [ ] *Step 12: Run everything*
+
+#+begin_src sh
+  make compile 2>&1 | grep -c "free variable"   # expect 0
+  make test                                      # expect 25 expected, 0 unexpected
+#+end_src
+
+- [ ] *Step 13: Commit*
+
+#+begin_src sh
+  git add epresent.el
+  git commit -m "Enable lexical binding and scope every free variable
+
+Roughly forty setq calls on undeclared symbols became let bindings.
+The characterization tests added in the previous tasks are what make
+this safe; they all still pass."
+#+end_src
+
+* Task 9: Fix the behavioural defects
+
+Nine defects, all confirmed by reading and — where behaviour is observable —
+by running the current code. Each observable one gets a test.
+
+*Files:*
+- Modify: =epresent.el=, =test/epresent-test.el=
+
+*Interfaces:*
+- Consumes: =epresent--speaking-time= from Task 5.
+- Produces: nothing later tasks call.
+
+#+begin_quote
+*Visible behaviour change.* Fixing =epresent-slide-in-effect= turns the slide-in
+animation *off* by default, because =epresent-slide-in= defaults to nil and has
+never been consulted. To keep the animation on every slide, put
+=(setq epresent-slide-in t)= in your init file. Confirm this is wanted before
+committing the step.
+#+end_quote
+
+- [ ] *Step 1: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  ;;; Defect fixes
+
+  (ert-deftest epresent-test-speaking-time-rounds-to-half-minutes ()
+    "225 words at 150 wpm is a minute and a half, not one minute."
+    (let ((epresent-wpm 150))
+      (should (equal 1.5 (epresent--speaking-time 225)))
+      (should (equal 2.0 (epresent--speaking-time 300)))
+      (should (equal 0.5 (epresent--speaking-time 1)))))
+
+  (ert-deftest epresent-test-slide-in-follows-the-option ()
+    "`epresent-slide-in' decides, and the property overrides it."
+    (epresent-test-with-fixture "plain.org"
+      (let ((epresent-slide-in nil))
+        (should-not (epresent--slide-in-p)))
+      (let ((epresent-slide-in t))
+        (should (epresent--slide-in-p)))))
+
+  (ert-deftest epresent-test-slide-in-property-overrides ()
+    "EPRESENT_SLIDE_IN turns the animation on or off for one slide."
+    (epresent-test-with-fixture "slide-in.org"
+      (goto-char (point-min))
+      (re-search-forward "^\\* Never$")
+      (let ((epresent-slide-in t))
+        (should-not (epresent--slide-in-p)))
+      (goto-char (point-min))
+      (re-search-forward "^\\* Always$")
+      (let ((epresent-slide-in nil))
+        (should (epresent--slide-in-p)))))
+
+  (ert-deftest epresent-test-font-commands-use-real-faces ()
+    "Growing and shrinking the font does not signal."
+    (should (progn (epresent-increase-font) t))
+    (should (progn (epresent-decrease-font) t)))
+
+  (ert-deftest epresent-test-export-includes-properties-by-default ()
+    "The backend exports property drawers without being asked.
+
+`org-export-with-properties' defaults to nil, which discarded the very
+drawers this backend exists to translate."
+    (epresent-test-with-fixture "export.org"
+      (should (string-match-p
+               "\\\\includegraphics"
+               (org-export-as 'epresent nil nil t)))))
+#+end_src
+
+Delete =epresent-test-speaking-time-truncates-half-minutes= from Task 5 — the
+new test replaces it, and the behaviour it pinned is the defect.
+
+- [ ] *Step 2: Write the fixture*
+
+Create =test/fixtures/slide-in.org=:
+
+#+begin_src org :eval no
+  ,#+TITLE: Slide-in
+
+  ,* Never
+  :PROPERTIES:
+  :EPRESENT_SLIDE_IN: no
+  :END:
+
+  ,* Always
+  :PROPERTIES:
+  :EPRESENT_SLIDE_IN: yes
+  :END:
+
+  ,* Unset
+#+end_src
+
+- [ ] *Step 3: Run the tests to verify they fail*
+
+Run: =make test=
+Expected: FAIL, 5 tests — =epresent--slide-in-p= is void,
+=epresent--speaking-time= returns 1 rather than 1.5, the font commands signal
+=void-variable epresent-content-face=, and the export produces =\section= but no
+=\includegraphics=.
+
+- [ ] *Step 4: Fix the speaking-time rounding*
+
+In =epresent--speaking-time=, =(/ (ceiling (* minutes 2)) 2)= is integer
+division. Divide by a float:
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent--speaking-time (words)
+    "Return the estimated time in minutes to speak WORDS aloud.
+The result is rounded up to the next half minute.  The reading speed is
+`epresent-wpm'."
+    (/ (ceiling (* (/ (float words) epresent-wpm) 2)) 2.0))
+#+end_src
+
+- [ ] *Step 5: Fix the slide-in condition*
+
+Split the decision out of the animation so it can be tested without redisplay.
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent--slide-in-p ()
+    "Return non-nil when the current slide should slide in.
+`epresent-slide-in' is the default; an EPRESENT_SLIDE_IN property of
+\"no\", \"nil\" or \"off\" turns the animation off for one slide, and
+any other value turns it on."
+    (let ((property (org-entry-get nil "EPRESENT_SLIDE_IN")))
+      (cond ((null property) epresent-slide-in)
+            ((member (downcase property) '("no" "nil" "off")) nil)
+            (t t))))
+
+  (defun epresent-slide-in-effect ()
+    "Animate the current slide sliding in from below."
+    (interactive)
+    (when (epresent--slide-in-p)
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line)
+        ;; if there is a drawer, skip it
+        (if (looking-at "[ \t]*:PROPERTIES:")
+            (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
+        (let ((ov (make-overlay (point) (point))))
+          (dotimes (i epresent-slide-in-lines)
+            (if (eq i 1) (sit-for epresent-slide-in-pause))
+            (overlay-put ov 'after-string
+                         (make-string (- epresent-slide-in-lines i) ?\n))
+            (sit-for (/ epresent-slide-in-duration epresent-slide-in-lines)))
+          (delete-overlay ov))))))
+#+end_src
+
+- [ ] *Step 6: Fix the font commands*
+
+They iterate over =epresent-content-face= and =epresent-fixed-face=, neither of
+which is defined anywhere in the file; both commands signal when called. Point
+them at the faces that exist, and factor out the shared body.
+
+#+begin_src emacs-lisp :eval no
+  (defconst epresent-scalable-faces
+    '(epresent-title-face epresent-heading-face epresent-subheading-face
+      epresent-author-face epresent-bullet-face)
+    "Faces whose height `epresent-increase-font' and its opposite change.")
+
+  (defun epresent--scale-font (delta)
+    "Add DELTA to the height of every face in `epresent-scalable-faces'."
+    (dolist (face epresent-scalable-faces)
+      (set-face-attribute face nil
+                          :height (+ delta (face-attribute face :height)))))
+
+  (defun epresent-increase-font ()
+    "Make the presentation font one step larger."
+    (interactive)
+    (epresent--scale-font 1))
+
+  (defun epresent-decrease-font ()
+    "Make the presentation font one step smaller."
+    (interactive)
+    (epresent--scale-font -1))
+#+end_src
+
+Bind them, so they stop being unreachable. In =epresent-mode-map=, next to the
+other display keys:
+
+#+begin_src emacs-lisp :eval no
+  (define-key map "+" 'epresent-increase-font)
+  (define-key map "-" 'epresent-decrease-font)
+#+end_src
+
+- [ ] *Step 7: Fix the pretty-entities variable*
+
+In =epresent-mode=, =(setq org-hide-pretty-entities t)= sets a variable that does
+not exist. The one saved on the line above is =org-pretty-entities=, and it is
+never changed, so pretty entities have never been switched on. Replace with:
+
+#+begin_src emacs-lisp :eval no
+  (setq epresent-pretty-entities org-pretty-entities)
+  (setq org-pretty-entities t)
+#+end_src
+
+- [ ] *Step 8: Fix the inverted docstring*
+
+=epresent-next-page= reads =(unless skip (epresent-current-page))=, so a non-nil
+SKIP is what suppresses the display. Correct both docstrings:
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-next-page (&optional skip)
+    "Advance to the next outline heading and present it.
+With SKIP non-nil the page counter advances but nothing is displayed,
+which is how a TITLE PAGE heading is stepped over."
+    ...)
+
+  (defun epresent-previous-page (&optional skip)
+    "Present the previous outline heading.
+SKIP has the same meaning as in `epresent-next-page'."
+    ...)
+#+end_src
+
+- [ ] *Step 9: Make the export backend export its own property drawers*
+
+=org-export-with-properties= defaults to nil, so Org strips property drawers out
+of the parse tree before a backend sees them, and the =property-drawer=
+translator — the reason this backend exists — never runs. Give the derived
+backend its own default by adding an =:options-alist= entry:
+
+#+begin_src emacs-lisp :eval no
+  (org-export-define-derived-backend 'epresent 'latex
+    :translate-alist
+    '((property-drawer . epresent-latex-property-drawer))
+    :options-alist
+    ;; Org drops property drawers unless this is on, which would silently
+    ;; disable the translator above.  Default it to t for this backend only.
+    '((:with-properties nil "prop" t))
+    :menu-entry
+    '(?E "EPresent to LaTeX"
+         ((?L "As LaTeX buffer" org-epresent-export-as-latex)
+          (?l "As LaTeX file" org-epresent-export-to-latex)
+          (?p "As PDF file" org-epresent-export-to-pdf)
+          (?o "As PDF file and open"
+              (lambda (a s v b)
+                (if a (org-epresent-export-to-pdf t s v b)
+                  (org-open-file (org-epresent-export-to-pdf nil s v b))))))))
+#+end_src
+
+The command names in =:menu-entry= keep their =org-epresent-= spelling here;
+Task 13 renames them and rewrites this form.
+
+- [ ] *Step 10: Fix the customization metadata*
+
+Four =defcustom= declarations describe types their values are not. Under Task
+14's compile gate the invalid one is a build failure; the others are simply
+wrong and mislead =M-x customize=.
+
+#+begin_src emacs-lisp :eval no
+  (defcustom epresent-mode-line '(:eval (int-to-string epresent-page-number))
+    "Mode-line construct to use during the presentation, or nil to hide it."
+    :type 'sexp
+    :group 'epresent)
+
+  (defcustom epresent-speaker-notes t
+    "Whether to collect speaker notes into an *EPresent Notes* buffer.
+The buffer is shown in its own frame, which can be moved to a second
+screen, and follows the slide being presented."
+    :type 'boolean
+    :group 'epresent)
+
+  (defcustom epresent-x-pointer-shape x-pointer-dot
+    "Shape of the mouse pointer during the presentation.
+The value is one of the `x-pointer-' constants, which are integers."
+    :type 'integer
+    :group 'epresent)
+
+  (defcustom epresent-tooltip-mode nil
+    "Whether tooltips are shown during the presentation."
+    :type 'boolean
+    :group 'epresent)
+#+end_src
+
+=epresent-tooltip-mode= changes value domain: it held 0 or 1 and was passed
+straight to =tooltip-mode=. Update the call in =epresent-run=:
+
+#+begin_src emacs-lisp :eval no
+  ;; set/unset tooltips
+  (tooltip-mode (if epresent-tooltip-mode 1 -1))
+#+end_src
+
+- [ ] *Step 11: Unquote the condition-case handler*
+
+In =epresent-mode=, =(condition-case ex ... ('error ...))= quotes the condition
+name, which makes it match the symbol =quote= rather than an error. Drop the
+quote, and use the error variable it already binds:
+
+#+begin_src emacs-lisp :eval no
+  (condition-case ex
+      (let ((org-format-latex-options
+             (plist-put (copy-tree org-format-latex-options)
+                        :scale epresent-format-latex-scale)))
+        (org-latex-preview '(16)))
+    (error
+     (message "Unable to imagify latex [%s]" (error-message-string ex))))
+#+end_src
+
+=org-preview-latex-fragment= becomes =org-latex-preview= here; Task 10 lists the
+same substitution, and whichever task reaches it first makes it.
+
+- [ ] *Step 12: Run the tests*
+
+Run: =make test=
+Expected: PASS, =29 expected=.
+
+- [ ] *Step 13: Commit*
+
+#+begin_src sh
+  git add epresent.el test/
+  git commit -m "Fix nine defects found while planning P0
+
+- epresent-slide-in was never consulted, so the animation ran on every
+  slide regardless of the setting
+- the speaking-time estimate truncated instead of rounding to the half
+  minute
+- the font commands referenced two faces that do not exist and signalled
+  on every invocation
+- org-hide-pretty-entities is not a variable; org-pretty-entities is, and
+  was never set
+- epresent-next-page's docstring described its SKIP argument backwards
+- the font commands were not reachable from the keymap
+- the LaTeX backend never saw its own property drawers, because
+  org-export-with-properties defaults to nil
+- four defcustoms declared types their values are not, one of them
+  invalid outright
+- condition-case quoted its condition name, so it caught nothing"
+#+end_src
+
+* Task 10: Modernize the Org API calls
+
+Twelve obsolete calls. On Emacs 29 and 30 they are merely deprecated; on
+snapshot, where Org is 9.8, they are warnings and therefore build failures once
+Task 14 turns the gate on.
+
+Three of them — the inline-image functions — were renamed in Org 9.8, which does
+not exist on the 29.1 floor. Those need a shim; the rest are direct renames.
+
+*Files:*
+- Modify: =epresent.el=
+
+*Interfaces:*
+- Consumes: nothing.
+- Produces, for P2 and beyond:
+  - =(epresent--link-preview-refresh)= — regenerate inline image previews.
+  - =(epresent--link-preview-clear)= — remove them.
+  - =(epresent--link-preview-overlays)= → list. The current preview overlays.
+
+- [ ] *Step 1: Add the compat shims*
+
+Put these directly after the =require= forms, before =defgroup=:
+
+#+begin_src emacs-lisp :eval no
+  ;;; Compatibility
+
+  ;; Org 9.8 renamed the inline-image API to org-link-preview-*.  The floor
+  ;; for this package is Org 9.6, so both spellings have to be reachable.
+
+  (defun epresent--link-preview-refresh ()
+    "Regenerate the inline image previews in the current buffer."
+    (if (fboundp 'org-link-preview-refresh)
+        (org-link-preview-refresh)
+      (with-no-warnings (org-redisplay-inline-images))))
+
+  (defun epresent--link-preview-clear ()
+    "Remove the inline image previews from the current buffer."
+    (if (fboundp 'org-link-preview-clear)
+        (org-link-preview-clear)
+      (with-no-warnings (org-remove-inline-images))))
+
+  (defun epresent--link-preview-overlays ()
+    "Return the inline image preview overlays of the current buffer."
+    (if (boundp 'org-link-preview-overlays)
+        (symbol-value 'org-link-preview-overlays)
+      (with-no-warnings org-inline-image-overlays)))
+#+end_src
+
+=with-no-warnings= is what keeps the obsolete branch from failing the build on
+snapshot, where it is unreachable but still compiled.
+
+- [ ] *Step 2: Replace the direct renames*
+
+Each of these has an exact modern equivalent present in Org 9.6.
+
+| Obsolete call                              | Replacement                                      | Sites |
+|--------------------------------------------+--------------------------------------------------+-------|
+| =org-show-subtree=                         | =org-fold-show-subtree=                          |     3 |
+| =org-set-visibility-according-to-property= | =org-cycle-set-visibility-according-to-property= |     1 |
+| =org-get-last-sibling=                     | =org-get-previous-sibling=                       |     1 |
+| =org-remove-latex-fragment-image-overlays= | =org-clear-latex-preview=                        |     1 |
+| =org-preview-latex-fragment=               | =org-latex-preview=                              |     1 |
+
+Find them with:
+
+#+begin_src sh
+  grep -n "org-show-subtree\|org-set-visibility-according-to-property\|\
+  org-get-last-sibling\|org-remove-latex-fragment-image-overlays\|\
+  org-preview-latex-fragment" epresent.el
+#+end_src
+
+- [ ] *Step 3: Route the inline-image calls through the shims*
+
+Four sites: =epresent-fontify= calls =org-remove-inline-images= then
+=org-redisplay-inline-images=; =epresent-run= calls
+=org-redisplay-inline-images=; =epresent-quit= and =epresent-mode= read and
+write =org-inline-image-overlays=.
+
+#+begin_src emacs-lisp :eval no
+  ;; in epresent-fontify
+  (epresent--link-preview-clear)
+  (epresent--link-preview-refresh)
+
+  ;; in epresent-run
+  (epresent--link-preview-refresh)
+
+  ;; in epresent-mode
+  (setq epresent-inline-image-overlays (epresent--link-preview-overlays))
+#+end_src
+
+=epresent-quit= restores that saved list by assigning back to
+=org-inline-image-overlays=. There is no supported way to write the Org 9.8
+variable from outside, and P3 rewrites =epresent-quit= in full. For now, drop
+the assignment and leave a comment:
+
+#+begin_src emacs-lisp :eval no
+  ;; The saved preview overlays are not restored: Org 9.8 replaced the
+  ;; variable that held them, and P3 rewrites this function around an
+  ;; explicit session struct.  Previews regenerate on the next refresh.
+#+end_src
+
+- [ ] *Step 4: Verify nothing obsolete is left*
+
+#+begin_src sh
+  make compile 2>&1 | grep -i obsolete
+#+end_src
+
+Expected: no output.
+
+- [ ] *Step 5: Run the tests*
+
+Run: =make test=
+Expected: PASS, =29 expected=.
+
+- [ ] *Step 6: Commit and check the snapshot job*
+
+#+begin_src sh
+  git add epresent.el
+  git commit -m "Replace the obsolete Org API calls
+
+Ten direct renames, plus a shim for the inline-image functions, which
+Org 9.8 renamed to org-link-preview-* and which therefore have to work
+under both spellings across the supported range."
+  git push
+  gh run watch
+#+end_src
+
+Expected: =compile= and =test= green on snapshot as well as 29.4 and 30.2.
+
+* Task 11: Make the third-party dependencies optional
+
+=(require 'org-superstar)= at the top level is the defect that breaks
+installation for anyone who does not already have that package: =package.el= has
+no reason to install it, so loading =epresent= fails outright.
+
+=pdf-tools=, the =image-mode= transforms and =flyspell= are called without ever
+being required, which is nine undefined-function warnings.
+
+*Files:*
+- Modify: =epresent.el=, =test/init.el=
+
+*Interfaces:*
+- Consumes: nothing.
+- Produces: =epresent-use-org-superstar= (defcustom, boolean).
+
+- [ ] *Step 1: Soften the =org-superstar= requirement*
+
+Replace =(require 'org-superstar)= with:
+
+#+begin_src emacs-lisp :eval no
+  (require 'org-superstar nil t)
+#+end_src
+
+Add the option next to the other display defcustoms:
+
+#+begin_src emacs-lisp :eval no
+  (defcustom epresent-use-org-superstar t
+    "Whether to prettify bullets with `org-superstar-mode'.
+Has no effect when the `org-superstar' package is not installed."
+    :type 'boolean
+    :group 'epresent)
+#+end_src
+
+In =epresent-fontify=, replace the bare =(org-superstar-mode)= call. Note the
+argument: with none, the call *toggles*, so a refresh mid-presentation switched
+the bullets back off.
+
+#+begin_src emacs-lisp :eval no
+  ;; fancy bullet points, when the package is available
+  (when (and epresent-use-org-superstar (fboundp 'org-superstar-mode))
+    (org-superstar-mode 1))
+#+end_src
+
+- [ ] *Step 2: Declare the functions that come from optional packages*
+
+Put these after the compat shims from Task 10:
+
+#+begin_src emacs-lisp :eval no
+  (declare-function pdf-view-fit-height-to-window "pdf-view" ())
+  (declare-function pdf-view-fit-width-to-window "pdf-view" ())
+  (declare-function pdf-view-goto-page "pdf-view" (page &optional window))
+  (declare-function pdf-view-next-page "pdf-view" (&optional n))
+  (declare-function pdf-view-current-page "pdf-view" (&optional window))
+  (declare-function pdf-cache-number-of-pages "pdf-cache" (&optional file))
+  (declare-function image-transform-fit-to-height "image-mode" ())
+  (declare-function image-transform-fit-to-width "image-mode" ())
+  (declare-function flyspell-mode-off "flyspell" ())
+#+end_src
+
+Every call site already tests =(eq major-mode 'pdf-view-mode)= or
+=(eq major-mode 'image-mode)= first, so the functions cannot be reached unless
+their package is loaded. The one exception is =flyspell-mode-off=, called
+unconditionally in =epresent-mode=; guard it:
+
+#+begin_src emacs-lisp :eval no
+  ;; remove flyspell overlays
+  (when (fboundp 'flyspell-mode-off)
+    (flyspell-mode-off))
+#+end_src
+
+The runtime handling for a missing =pdf-tools= — showing a PDF gracefully rather
+than in whatever mode Emacs falls back to — is P2's, per the design document.
+
+- [ ] *Step 3: Prove the package loads without =org-superstar=*
+
+This is the whole point of the task, so test it rather than assume it.
+
+#+begin_src sh
+  emacs -Q --batch -L . --eval '(progn (require (quote epresent)) (message "loaded without org-superstar"))'
+#+end_src
+
+Expected: =loaded without org-superstar=, exit 0. Before this task the same
+command fails with =Cannot open load file: org-superstar=.
+
+- [ ] *Step 4: Drop =org-superstar= from the test bootstrap*
+
+In =test/init.el=:
+
+#+begin_src emacs-lisp :eval no
+  (defconst epresent-dev-dependencies '(package-lint)
+    "Packages needed to lint and test epresent, but not to use it.")
+#+end_src
+
+Then remove the stale copy so the next run proves it:
+
+#+begin_src sh
+  rm -rf .deps
+  make test
+#+end_src
+
+Expected: PASS, =29 expected=, with =org-superstar= never installed.
+
+- [ ] *Step 5: Check the warning count*
+
+#+begin_src sh
+  make compile 2>&1 | grep -c "not known to be defined"
+#+end_src
+
+Expected: 0.
+
+- [ ] *Step 6: Commit*
+
+#+begin_src sh
+  git add epresent.el test/init.el
+  git commit -m "Stop requiring org-superstar, declare the optional functions
+
+The top-level require broke installation for anyone without
+org-superstar, which package.el had no reason to install.  It is now
+optional and controlled by epresent-use-org-superstar; the call also
+gained the argument it needed, having previously toggled the mode off
+again on every refresh.  pdf-tools, image-mode and flyspell get
+declare-function so the compiler stops warning about them."
+#+end_src
+
+* Task 12: Keymap compliance
+
+The package binds =[f5]= and =[f12]= in =org-mode-map= when it loads. MELPA
+rejects packages that modify another mode's keymap at load time, and the
+function keys are reserved for users in any case.
+
+*Files:*
+- Modify: =epresent.el=, =README.org=
+
+*Interfaces:*
+- Consumes: =epresent-increase-font= and =epresent-decrease-font= from Task 9.
+- Produces: nothing later tasks call.
+
+#+begin_quote
+*This changes how you start a presentation.* =F5= will no longer launch
+=epresent= until you bind it yourself. Step 4 gives the line to add.
+#+end_quote
+
+- [ ] *Step 1: Delete the load-time bindings*
+
+Remove both lines near the end of the file:
+
+#+begin_src emacs-lisp :eval no
+  (define-key org-mode-map [f5]  'epresent-run)
+  (define-key org-mode-map [f12] 'epresent-run)
+#+end_src
+
+- [ ] *Step 2: Rebind the edit command inside the presentation*
+
+=epresent-mode-map= binds =[f5]= to =epresent-edit-text=, and
+=epresent-edit-map= binds =[f5]= to leave editing again. Both are flagged as
+reserved. Use a letter and a standard exit chord instead:
+
+#+begin_src emacs-lisp :eval no
+  ;; in epresent-mode-map, replacing the [f5] line
+  (define-key map "E" 'epresent-edit-text)   ; C-c C-c exits edit mode
+#+end_src
+
+#+begin_src emacs-lisp :eval no
+  (defvar epresent-edit-map (let ((map (copy-keymap org-mode-map)))
+                              (define-key map (kbd "C-c C-c") 'epresent-refresh)
+                              map)
+    "Local keymap for editing an EPresent presentation.")
+#+end_src
+
+=epresent-edit-text= ends the transient map when the exit key is pressed, so its
+predicate has to match the new binding:
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-edit-text ()
+    "Edit the presentation text in place.
+Press \\[epresent-refresh] to stop editing and refresh the display."
+    (interactive)
+    (let ((prior-cursor-type (cdr (assoc 'cursor-type (frame-parameters)))))
+      (set-frame-parameter nil 'cursor-type t)
+      (use-local-map epresent-edit-map)
+      (set-transient-map
+       epresent-edit-map
+       (lambda () (not (equal (kbd "C-c C-c") (this-command-keys))))
+       (lambda ()
+         (use-local-map epresent-mode-map)
+         (set-frame-parameter nil 'cursor-type prior-cursor-type)))))
+#+end_src
+
+The unused =arg= argument goes with it — the function never read it.
+
+- [ ] *Step 3: Confirm no reserved key is left*
+
+#+begin_src sh
+  make lint 2>&1 | grep -i reserved
+#+end_src
+
+Expected: no output.
+
+- [ ] *Step 4: Document the binding users have to make themselves*
+
+In =README.org=, under *Installation*:
+
+#+begin_src org :eval no
+  ,** Starting a presentation
+
+  Run =M-x epresent-run= in an Org buffer.  Earlier versions bound this to
+  =F5= in every Org buffer; a package may not claim a user's function keys,
+  so bind it yourself if you want it back:
+
+  ,#+begin_src emacs-lisp
+    (with-eval-after-load 'org
+      (define-key org-mode-map (kbd "<f5>") #'epresent-run))
+  ,#+end_src
+#+end_src
+
+- [ ] *Step 5: Update the key list in the README*
+
+The =Basic usage= list still advertises =f5=. Replace that entry, and add the
+two new ones:
+
+#+begin_src org :eval no
+  - Press =E= to edit the slide text in place, =C-c C-c= to stop editing
+  - Press =+= and =-= to grow and shrink the font
+#+end_src
+
+- [ ] *Step 6: Run everything*
+
+#+begin_src sh
+  make compile && make test
+#+end_src
+
+Expected: both clean, =29 expected=.
+
+- [ ] *Step 7: Commit*
+
+#+begin_src sh
+  git add epresent.el README.org
+  git commit -m "Stop binding function keys and org-mode-map
+
+A package may not modify another mode's keymap when it loads, and
+F5-F9 belong to the user.  Editing a slide is now E, and C-c C-c leaves
+edit mode.  The README says how to bind F5 back."
+#+end_src
+
+* Task 13: Package metadata
+
+*Files:*
+- Modify: =epresent.el= (header only, plus three function names)
+
+*Interfaces:*
+- Consumes: nothing.
+- Produces: =epresent-export-as-latex=, =epresent-export-to-latex=,
+  =epresent-export-to-pdf= — renamed from their =org-epresent-= spellings. P2
+  moves them into =ox-epresent.el= under these names.
+
+- [ ] *Step 1: Rewrite the header*
+
+=package-lint= objects to the summary naming Emacs, to the missing standard
+keywords, and to the dependency floor. The =lexical-binding= cookie from Task 8
+stays on line 1.
+
+#+begin_src emacs-lisp :eval no
+  ;;; epresent.el --- Present Org-mode files as slide shows  -*- lexical-binding: t; -*-
+
+  ;; Copyright (C) 2008 Tom Tromey <tromey@redhat.com>
+  ;;               2010 Eric Schulte <schulte.eric@gmail.com>
+  ;;               2020 Stefano Ghirlanda <drghirlanda@gmail.com>
+
+  ;; Authors: Tom Tromey <tromey@redhat.com>
+  ;;          Eric Schulte <schulte.eric@gmail.com>
+  ;;          Lee Hinman <lee@writequit.org>
+  ;;          Stefano Ghirlanda <drghirlanda@gmail.com>
+  ;; Maintainer: Stefano Ghirlanda <drghirlanda@gmail.com>
+  ;; URL: https://github.com/drghirlanda/epresent
+  ;; Created: 12 Jun 2008
+  ;; Version: 1.5.0
+  ;; Keywords: outlines, hypermedia, multimedia
+  ;; Package-Requires: ((emacs "29.1") (org "9.6"))
+#+end_src
+
+The version stays 1.5.0 for now; P1 sets it to 2.0.0 along with the rename.
+
+- [ ] *Step 2: Rename the three export commands*
+
+=package-lint= requires every symbol to carry the package prefix, and
+=org-epresent-export-to-pdf= does not. Rename all three definitions and the four
+references to them in the =:menu-entry= of the backend:
+
+#+begin_src emacs-lisp :eval no
+  (org-export-define-derived-backend 'epresent 'latex
+    :translate-alist
+    '((property-drawer . epresent-latex-property-drawer))
+    :options-alist
+    ;; Org drops property drawers unless this is on, which would silently
+    ;; disable the translator above.  Default it to t for this backend only.
+    '((:with-properties nil "prop" t))
+    :menu-entry
+    '(?E "EPresent to LaTeX"
+         ((?L "As LaTeX buffer" epresent-export-as-latex)
+          (?l "As LaTeX file" epresent-export-to-latex)
+          (?p "As PDF file" epresent-export-to-pdf)
+          (?o "As PDF file and open"
+              (lambda (a s v b)
+                (if a (epresent-export-to-pdf t s v b)
+                  (org-open-file (epresent-export-to-pdf nil s v b))))))))
+#+end_src
+
+Keep the =:options-alist= entry Task 9 added — losing it silently switches the
+property-drawer translator back off, and
+=epresent-test-export-includes-properties-by-default= is what catches that.
+
+- [ ] *Step 3: Fix the remaining lint complaints*
+
+#+begin_src sh
+  make lint
+#+end_src
+
+Work through whatever is left. The expected residue after Steps 1 and 2 is the
+=Closing parens should not be wrapped onto new lines= warnings at four sites —
+join them onto the previous line.
+
+- [ ] *Step 4: Verify lint is clean*
+
+Run: =make lint=
+Expected: exit 0, no output.
+
+- [ ] *Step 5: Run everything*
+
+#+begin_src sh
+  make compile && make test
+#+end_src
+
+Expected: clean, =29 expected=.
+
+- [ ] *Step 6: Commit*
+
+#+begin_src sh
+  git add epresent.el
+  git commit -m "Make package-lint clean
+
+Declares the real dependency floor, uses standard keywords, drops
+Emacs from the summary line, and renames the three export commands to
+carry the package prefix."
+#+end_src
+
+* Task 14: Docstrings, and turn the gates on
+
+The last task. Roughly eighty checkdoc complaints, then the two switches that
+make all of this binding.
+
+*Files:*
+- Modify: =epresent.el=, =Makefile=, =.github/workflows/ci.yml=
+
+*Interfaces:*
+- Consumes: everything.
+- Produces: the phase's exit criteria.
+
+- [ ] *Step 1: See the full list*
+
+Run: =make checkdoc=
+Expected: exit 1, around 30 complaints — down from 80, because Tasks 8 to 13
+rewrote many of the docstrings already.
+
+- [ ] *Step 2: Work through them*
+
+They fall into five kinds. Fix by kind, re-running =make checkdoc= after each.
+
+| Complaint                                   | What to do                                                       |
+|---------------------------------------------+------------------------------------------------------------------|
+| =There should be two spaces after a period= | Add the second space; this is Emacs Lisp house style             |
+| =First line is not a complete sentence=     | Rewrite so the first line stands alone and ends with a full stop |
+| =Second line should not have indentation=   | Unindent continuation lines to column 0                          |
+| =Argument ARG should appear (as ARG)=       | Name every argument, in capitals, in the docstring               |
+| =White space found at end of line=          | Strip it; =M-x delete-trailing-whitespace= over the buffer       |
+
+Two that need judgement rather than mechanism:
+
+- =epresent-slide-in='s docstring contains an apostrophe that checkdoc reads as
+  a quoted symbol. Write it =\='= or reword.
+- =epresent-mode='s docstring is the string ="Lalala."=. Replace it with a real
+  one:
+
+#+begin_src emacs-lisp :eval no
+  (define-derived-mode epresent-mode org-mode "EPresent"
+    "Major mode for presenting an Org-mode buffer as a slide show.
+
+Each frame-level heading becomes a slide.  Navigate with \\[epresent-next-page]
+and \\[epresent-previous-page], and leave with \\[epresent-quit].
+
+\\{epresent-mode-map}"
+    ...)
+#+end_src
+
+- [ ] *Step 3: Verify checkdoc is clean*
+
+Run: =make checkdoc=
+Expected: =checkdoc: clean (1 file(s))=, exit 0.
+
+- [ ] *Step 4: Turn on the compile gate*
+
+In the =Makefile=:
+
+#+begin_src makefile :eval no
+  compile:
+  	@rm -f $(EL:.el=.elc)
+  	$(BATCH) --eval '(setq byte-compile-error-on-warn t)' \
+  	         -f batch-byte-compile $(EL)
+#+end_src
+
+- [ ] *Step 5: Verify it passes*
+
+Run: =make compile=
+Expected: exit 0, no warnings at all. Tasks 8 through 13 removed every warning
+the current file produces — free variables, obsolete calls, undefined functions,
+the invalid =defcustom= type, the quoted =condition-case= condition and the
+interactive-only =mark-whole-buffer=. Anything left is new, introduced by this
+phase, and must be fixed here rather than waved through.
+
+- [ ] *Step 6: Make the CI jobs blocking*
+
+Delete both =continue-on-error: true= lines from
+=.github/workflows/ci.yml=.
+
+- [ ] *Step 7: Run the whole thing locally*
+
+Run: =make clean && make all=
+Expected: four targets, all exit 0.
+
+- [ ] *Step 8: Commit and confirm the matrix*
+
+#+begin_src sh
+  git add epresent.el Makefile .github/workflows/ci.yml
+  git commit -m "Clean the docstrings and make every gate blocking
+
+checkdoc is clean, byte-compile-error-on-warn is on, and CI no longer
+tolerates a failing checkdoc or package-lint.  P0 is complete."
+  git push
+  gh run watch
+#+end_src
+
+Expected: three green jobs — 29.4, 30.2, snapshot.
+
+- [ ] *Step 9: Record that the phase is done*
+
+In =docs/superpowers/specs/2026-08-10-orgacle-design.org=, mark P0 complete and
+fold in the two amendments listed at the top of this plan. Commit.
+
+* Verification
+
+The phase is done when, on Emacs 29.4, 30.2 and snapshot:
+
+#+begin_src sh
+  make clean && make all
+#+end_src
+
+exits 0, and:
+
+- =epresent.el= carries a =lexical-binding= cookie and produces no compiler
+  warning of any kind;
+- =emacs -Q --batch -L . --eval '(require (quote epresent))'= succeeds on a
+  machine with neither =org-superstar= nor =pdf-tools= installed;
+- loading =epresent= changes no keymap outside the package;
+- the ERT suite reports 29 passing tests and no failures.

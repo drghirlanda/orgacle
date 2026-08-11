@@ -31,7 +31,7 @@ on Emacs 30.2:
 3. The features that are half-finished today, finished.
 4. Four new presentation capabilities.
 5. Accepted into MELPA.
-
+   
 * 3. Non-goals
 
 - HTML/reveal.js export. The LaTeX/PDF backend stays; nothing new is added.
@@ -303,16 +303,9 @@ functions so that the logic around them is testable, and covered by an optional
 Fixtures in =test/fixtures/*.org=. =present.org= becomes the manual end-to-end
 demo and is migrated to =ORGACLE_*=.
 
-Build and CI: a =Makefile= driving four batch targets through a bootstrap file
-that provisions development dependencies into =./.deps=, so a checkout needs
-nothing on the machine but Emacs. GitHub Actions runs the same =make= targets
-over a matrix of Emacs 29.4 / 30.2 / snapshot; targets are =compile= (with
-=byte-compile-error-on-warn=), =checkdoc=, =package-lint= and =test=.
-
-Eldev was the first choice and was rejected during P0 planning: it is not
-installed here and not packaged for Slackware, and the dependency provisioning
-it would have done is eight lines of =package-install=. Running the same
-commands locally and in CI is worth more than the lines it would save.
+Build and CI: Eldev; GitHub Actions matrix over Emacs 29.4 / 30.2 / snapshot;
+jobs =compile= (with =byte-compile-error-on-warn=), =checkdoc=, =package-lint=,
+=test=.
 
 * 10. Phases
 
@@ -321,33 +314,17 @@ independently committable.
 
 ** P0 — Safety net and compliance
 
-Makefile and test harness, ERT suite, CI workflow, fixtures. Characterization
-tests for the logic that is extractable today. Then =lexical-binding: t= and
-elimination of all ~40 free variables. Fix the invalid =defcustom= types and the
-dead-code defects of section 7. Docstrings to checkdoc-clean. Remove the
-load-time =(define-key org-mode-map [f5] ...)= — MELPA forbids it and the keys
-are reserved for users; ship an autoloaded command and document the binding.
+Eldev setup, ERT harness, CI workflow, fixtures. Characterization tests for the
+logic that is extractable today. Then =lexical-binding: t= and elimination of all
+~40 free variables. Fix the invalid =defcustom= types and the dead-code defects
+of section 7. Docstrings to checkdoc-clean. Remove the load-time
+=(define-key org-mode-map [f5] ...)= — MELPA forbids it and the keys are reserved
+for users; ship an autoloaded command and document the binding.
 =Package-Requires= set to the 29.1/9.6 floor.
 
 Turning on =lexical-binding= is a semantic change at every one of those ~40
 sites, which is exactly why the characterization tests come first in this phase
 and not later.
-
-Also here, moved from P2 during planning: replacing the twelve obsolete Org API
-calls and adding the =org-link-preview-*= shim, and making =org-superstar=
-optional. The phase's exit criterion is a clean compile under
-=byte-compile-error-on-warn=, and on the snapshot Emacs the obsolete calls are
-warnings — therefore errors. P0 cannot be green without them. The undeclared
-top-level =(require 'org-superstar)= is likewise an install-breaking defect, not
-a tidiness matter, so it is fixed as soon as there is a test proving the package
-loads without it.
-
-The detailed task breakdown is
-=docs/superpowers/plans/2026-08-11-p0-safety-net.org=, which also records nine
-defects found while planning that are not listed in section 7 — among them that
-=epresent-slide-in= has never been consulted, so the slide-in animation runs on
-every slide, and that the LaTeX backend never sees its own property drawers
-because =org-export-with-properties= defaults to nil.
 
 *Exit:* byte-compile clean under =byte-compile-error-on-warn=; checkdoc clean;
 =package-lint= clean; tests green on all three Emacs versions.
@@ -368,13 +345,10 @@ from =epresent= to =orgacle=. Both are confirmed before P1 begins.
 ** P2 — Modularization and modernization
 
 Split into the files of section 5.1. Introduce =orgacle-page-hook= and remove
-sideways calls. Give =pdf-tools= and the image transforms runtime handling, so a
-PDF slide degrades gracefully rather than landing in whatever mode Emacs picks;
-detect the video player with =executable-find=. Introduce =orgacle--session= and
-the save/restore mechanism; make =orgacle-quit= idempotent.
-
-The obsolete-API replacement, the =org-link-preview-*= shim and the
-=org-superstar= softening moved to P0; see there.
+sideways calls. Replace the 12 obsolete Org APIs; add the =org-link-preview-*=
+shim. Make =org-superstar=, =pdf-tools= and image transforms optional; detect the
+video player with =executable-find=. Introduce =orgacle--session= and the
+save/restore mechanism; make =orgacle-quit= idempotent.
 
 *Exit:* each file byte-compiles standalone; tests green.
 
