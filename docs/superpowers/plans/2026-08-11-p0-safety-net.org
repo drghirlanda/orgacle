@@ -2194,8 +2194,11 @@ Put these after the compat shims from Task 10:
   (declare-function pdf-view-fit-width-to-window "pdf-view" ())
   (declare-function pdf-view-goto-page "pdf-view" (page &optional window))
   (declare-function pdf-view-next-page "pdf-view" (&optional n))
-  (declare-function pdf-view-current-page "pdf-view" (&optional window))
-  (declare-function pdf-cache-number-of-pages "pdf-cache" (&optional file))
+  ;; `pdf-view-current-page' is a macro, so it cannot be declared here and
+  ;; called from code compiled without pdf-tools loaded.  Its expansion is
+  ;; this built-in accessor, which is an ordinary function.
+  (declare-function image-mode-window-get "image-mode" (prop &optional winprops))
+  (declare-function pdf-cache-number-of-pages "pdf-cache" ())
   (declare-function image-transform-fit-to-height "image-mode" ())
   (declare-function image-transform-fit-to-width "image-mode" ())
   (declare-function flyspell-mode-off "flyspell" ())
@@ -2205,6 +2208,23 @@ Every call site already tests =(eq major-mode 'pdf-view-mode)= or
 =(eq major-mode 'image-mode)= first, so the functions cannot be reached unless
 their package is loaded. The one exception is =flyspell-mode-off=, called
 unconditionally in =epresent-mode=; guard it:
+
+Two of these declarations were wrong in an earlier draft, and the review caught
+it. =pdf-view-current-page= is a *macro* (=pdf-macs.el=), not a function:
+declaring it here would let it compile as an ordinary function call in a build
+that never sees =pdf-tools=, and then signal =Invalid function= at runtime for
+every user who does have =pdf-tools= — a crash no gate in this plan can catch,
+because =declare-function= suppresses the warning unconditionally. The call site
+therefore uses the macro's own expansion, =(image-mode-window-get 'page)=,
+which is a real function in Emacs's built-in =image-mode=. And
+=pdf-cache-number-of-pages= takes no arguments at all — =func-arity= reports
+=(0 . 0)= — so the =&optional file= in the earlier draft was invented.
+
+The corresponding call site becomes:
+
+#+begin_src emacs-lisp :eval no
+  (when (< (image-mode-window-get 'page) (pdf-cache-number-of-pages))
+#+end_src
 
 #+begin_src emacs-lisp :eval no
   ;; remove flyspell overlays
