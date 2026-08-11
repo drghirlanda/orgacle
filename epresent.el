@@ -168,8 +168,8 @@ are used for the slide-in animation."
   :group 'epresent)
 
 (defcustom epresent-mode-line '(:eval (int-to-string epresent-page-number))
-  "Set the mode-line format. Hides it when nil"
-  :type 'string
+  "Mode-line construct to use during the presentation, or nil to hide it."
+  :type 'sexp
   :group 'epresent)
 
 (defcustom epresent-src-blocks-visible t
@@ -196,9 +196,9 @@ builds, so this is nil elsewhere."
   :type '(choice (const :tag "Leave unchanged" nil) integer)
   :group 'epresent)
 
-(defcustom epresent-tooltip-mode 0
-  "If 0, disable tooltips during presentation, otherwise enable."
-  :type 'bool
+(defcustom epresent-tooltip-mode nil
+  "Whether tooltips are shown during the presentation."
+  :type 'boolean
   :group 'epresent)
 
 (defcustom epresent-internal-border-width 50
@@ -209,13 +209,10 @@ screen."
   :group 'epresent)
 
 (defcustom epresent-speaker-notes t
-  "If not nil, collect all speaker notes in an '*EPresent Notes*'
-  buffer. The buffer is displayed in a new frame when the
-  presentation starts. The frame can be manually moved to a
-  different screen to look at speaker notes during the
-  presentation. The notes buffer is synchronized to show the
-  notes for the page currently displayed."
-  :type 'string
+  "Whether to collect speaker notes into an *EPresent Notes* buffer.
+The buffer is shown in its own frame, which can be moved to a second
+screen, and follows the slide being presented."
+  :type 'boolean
   :group 'epresent)
 
 (defcustom epresent-wpm 150
@@ -389,26 +386,33 @@ square an EPRESENT_SHOW_VIDEO property."
                      'before-string
                      (propertize " " 'display '(right-fringe hollow-square)))))))
 
+(defun epresent--slide-in-p ()
+  "Return non-nil when the current slide should slide in.
+`epresent-slide-in' is the default; an EPRESENT_SLIDE_IN property of
+\"no\", \"nil\" or \"off\" turns the animation off for one slide, and
+any other value turns it on."
+  (let ((property (org-entry-get nil "EPRESENT_SLIDE_IN")))
+    (cond ((null property) epresent-slide-in)
+          ((member (downcase property) '("no" "nil" "off")) nil)
+          (t t))))
+
 (defun epresent-slide-in-effect ()
   "Animate the current slide sliding in from below."
   (interactive)
-  (let* ((property (org-entry-get nil "EPRESENT_SLIDE_IN"))
-         (slide-local (not (string= property "no")))
-         (slide-global epresent-slide-in))
-    (when (or slide-local (and (not slide-global) slide-local))
-      (save-excursion
-        (goto-char (point-min))
-        (forward-line)
-        ;; if there is a drawer, skip it
-        (if (looking-at "[ \t]*:PROPERTIES:")
-            (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
-        (let ((ov (make-overlay (point) (point))))
-          (dotimes (i epresent-slide-in-lines)
-            (if (eq i 1) (sit-for epresent-slide-in-pause))
-            (overlay-put ov 'after-string
-                         (make-string (- epresent-slide-in-lines i) ?\n))
-            (sit-for (/ epresent-slide-in-duration epresent-slide-in-lines)))
-          (delete-overlay ov))))))
+  (when (epresent--slide-in-p)
+    (save-excursion
+      (goto-char (point-min))
+      (forward-line)
+      ;; if there is a drawer, skip it
+      (if (looking-at "[ \t]*:PROPERTIES:")
+          (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
+      (let ((ov (make-overlay (point) (point))))
+        (dotimes (i epresent-slide-in-lines)
+          (if (eq i 1) (sit-for epresent-slide-in-pause))
+          (overlay-put ov 'after-string
+                       (make-string (- epresent-slide-in-lines i) ?\n))
+          (sit-for (/ epresent-slide-in-duration epresent-slide-in-lines)))
+        (delete-overlay ov)))))
 
 (defun epresent-top ()
   "Present the first outline heading."
@@ -423,9 +427,9 @@ square an EPRESENT_SHOW_VIDEO property."
   (epresent-current-page))
 
 (defun epresent-next-page (&optional skip)
-  "Advance to the next outline heading. If SKIP is nil, the
-page is advanced but not displayed. This feature is used to skip
-a TITLE PAGE heading."
+  "Advance to the next outline heading and present it.
+With SKIP non-nil the page counter advances but nothing is displayed,
+which is how a TITLE PAGE heading is stepped over."
   (interactive)
   (epresent-goto-top-level)
   (widen)
@@ -438,8 +442,8 @@ a TITLE PAGE heading."
     (epresent-current-page)))
 
 (defun epresent-previous-page (&optional skip)
-  "Present the previous outline heading. See epresent-next-page
-for the SKIP argument."
+  "Present the previous outline heading.
+SKIP has the same meaning as in `epresent-next-page'."
   (interactive)
   (epresent-goto-top-level)
   (widen)
@@ -542,19 +546,26 @@ for the SKIP argument."
     (delete-frame (window-frame (get-buffer-window epresent-notes-buffer)))
     (kill-buffer epresent-notes-buffer)))
   
+(defconst epresent-scalable-faces
+  '(epresent-title-face epresent-heading-face epresent-subheading-face
+    epresent-author-face epresent-bullet-face)
+  "Faces whose height `epresent-increase-font' and its opposite change.")
+
+(defun epresent--scale-font (delta)
+  "Add DELTA to the height of every face in `epresent-scalable-faces'."
+  (dolist (face epresent-scalable-faces)
+    (set-face-attribute face nil
+                        :height (+ delta (face-attribute face :height)))))
+
 (defun epresent-increase-font ()
-  "Increase the presentation font size."
+  "Make the presentation font one step larger."
   (interactive)
-  (dolist (face
-           '(epresent-heading-face epresent-content-face epresent-fixed-face))
-    (set-face-attribute face nil :height (1+ (face-attribute face :height)))))
+  (epresent--scale-font 1))
 
 (defun epresent-decrease-font ()
-  "Decrease the presentation font size."
+  "Make the presentation font one step smaller."
   (interactive)
-  (dolist (face
-           '(epresent-heading-face epresent-content-face epresent-fixed-face))
-    (set-face-attribute face nil :height (1- (face-attribute face :height)))))
+  (epresent--scale-font -1))
 
 (defun epresent-fontify ()
   "Overlay additional presentation faces to Org-mode."
@@ -937,6 +948,10 @@ EPRESENT_SHOW_PAGES."
 (org-export-define-derived-backend 'epresent 'latex
   :translate-alist
   '((property-drawer . epresent-latex-property-drawer))
+  :options-alist
+  ;; Org drops property drawers unless this is on, which would silently
+  ;; disable the translator above.  Default it to t for this backend only.
+  '((:with-properties nil "prop" t))
   :menu-entry
   '(?E "EPresent to LaTeX"
        ((?L "As LaTeX buffer" org-epresent-export-as-latex)
@@ -991,10 +1006,9 @@ to PDF."
 
 (defun epresent--speaking-time (words)
   "Return the estimated time in minutes to speak WORDS aloud.
-The reading speed is `epresent-wpm'."
-  (let ((minutes (/ (float words) epresent-wpm)))
-    ;; round to the half minute
-    (/ (ceiling (* minutes 2)) 2)))
+The result is rounded up to the next half minute.  The reading speed is
+`epresent-wpm'."
+  (/ (ceiling (* (/ (float words) epresent-wpm) 2)) 2.0))
 
 (defun epresent-estimate-time ()
   "Report how long it would take to read all speaker notes aloud.
@@ -1057,6 +1071,9 @@ Does nothing on a build without X11 pointer support."
     (define-key map "I" 'epresent-show-video)
     ;; show/hide mouse pointer
     (define-key map "m" 'epresent-toggle-mouse)
+    ;; adjust font size
+    (define-key map "+" 'epresent-increase-font)
+    (define-key map "-" 'epresent-decrease-font)
     ;; global controls
     (define-key map "q" 'epresent-quit)
     (define-key map "1" 'epresent-top)
@@ -1065,13 +1082,6 @@ Does nothing on a build without X11 pointer support."
     (define-key map "t" 'epresent-top)
     map)
   "Local keymap for EPresent display mode.")
-
-;; `epresent-mode' below sets this symbol, but Org has no variable by
-;; this name (see `org-pretty-entities' instead) -- a pre-existing bug
-;; that Task 9 owns.  The bare declaration keeps the byte-compiler quiet
-;; without changing the (currently no-op) behaviour, same technique as
-;; the X-pointer declarations above.
-(defvar org-hide-pretty-entities)
 
 (define-derived-mode epresent-mode org-mode "EPresent"
   "Lalala."
@@ -1087,16 +1097,16 @@ Does nothing on a build without X11 pointer support."
         (display-table-slot standard-display-table 'selective-display))
   (set-display-table-slot standard-display-table 'selective-display [32])
   (setq epresent-pretty-entities org-pretty-entities)
-  (setq org-hide-pretty-entities t)
+  (setq org-pretty-entities t)
   (setq mode-line-format (epresent-get-mode-line))
   (add-hook 'org-babel-after-execute-hook 'epresent-refresh)
   (condition-case ex
       (let ((org-format-latex-options
              (plist-put (copy-tree org-format-latex-options)
                         :scale epresent-format-latex-scale)))
-        (org-preview-latex-fragment '(16)))
-    ('error
-     (message "Unable to imagify latex [%s]" ex)))
+        (org-latex-preview '(16)))
+    (error
+     (message "Unable to imagify latex [%s]" (error-message-string ex))))
   (set-face-attribute 'default epresent--frame :height epresent-text-scale)
   ;; fontify the buffer
   (add-to-invisibility-spec '(epresent-hide))
@@ -1167,7 +1177,7 @@ Does nothing on a build without X11 pointer support."
     (set-buffer-modified-p nil)
     (setq epresent-presentation-window (selected-window))
     ;; set/unset tooltips
-    (tooltip-mode epresent-tooltip-mode)
+    (tooltip-mode (if epresent-tooltip-mode 1 -1))
     ;; create speaker notes
     (when epresent-speaker-notes (epresent-make-notes-buffer))
     (run-hooks 'epresent-start-presentation-hook)))

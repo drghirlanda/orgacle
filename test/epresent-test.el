@@ -150,17 +150,53 @@ words of body."
 (ert-deftest epresent-test-speaking-time-scales-with-wpm ()
   "Doubling the reading speed halves the estimate."
   (let ((epresent-wpm 150))
-    (should (equal 2 (epresent--speaking-time 300))))
+    (should (equal 2.0 (epresent--speaking-time 300))))
   (let ((epresent-wpm 300))
-    (should (equal 1 (epresent--speaking-time 300)))))
+    (should (equal 1.0 (epresent--speaking-time 300)))))
 
-(ert-deftest epresent-test-speaking-time-truncates-half-minutes ()
-  "Current behaviour: the half-minute rounding is integer division.
+;;; Defect fixes
 
-225 words at 150 wpm is 1.5 minutes, and the code reports 1.  Task 9
-changes this and updates the test."
+(ert-deftest epresent-test-speaking-time-rounds-to-half-minutes ()
+  "225 words at 150 wpm is a minute and a half, not one minute."
   (let ((epresent-wpm 150))
-    (should (equal 1 (epresent--speaking-time 225)))))
+    (should (equal 1.5 (epresent--speaking-time 225)))
+    (should (equal 2.0 (epresent--speaking-time 300)))
+    (should (equal 0.5 (epresent--speaking-time 1)))))
+
+(ert-deftest epresent-test-slide-in-follows-the-option ()
+  "`epresent-slide-in' decides, and the property overrides it."
+  (epresent-test-with-fixture "plain.org"
+    (let ((epresent-slide-in nil))
+      (should-not (epresent--slide-in-p)))
+    (let ((epresent-slide-in t))
+      (should (epresent--slide-in-p)))))
+
+(ert-deftest epresent-test-slide-in-property-overrides ()
+  "EPRESENT_SLIDE_IN turns the animation on or off for one slide."
+  (epresent-test-with-fixture "slide-in.org"
+    (goto-char (point-min))
+    (re-search-forward "^\\* Never$")
+    (let ((epresent-slide-in t))
+      (should-not (epresent--slide-in-p)))
+    (goto-char (point-min))
+    (re-search-forward "^\\* Always$")
+    (let ((epresent-slide-in nil))
+      (should (epresent--slide-in-p)))))
+
+(ert-deftest epresent-test-font-commands-use-real-faces ()
+  "Growing and shrinking the font does not signal."
+  (should (progn (epresent-increase-font) t))
+  (should (progn (epresent-decrease-font) t)))
+
+(ert-deftest epresent-test-export-includes-properties-by-default ()
+  "The backend exports property drawers without being asked.
+
+`org-export-with-properties' defaults to nil, which discarded the very
+drawers this backend exists to translate."
+  (epresent-test-with-fixture "export.org"
+    (should (string-match-p
+             "\\\\includegraphics"
+             (org-export-as 'epresent nil nil t)))))
 
 ;;; LaTeX export backend
 
