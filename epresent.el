@@ -49,6 +49,14 @@
 (require 'cl-lib)
 (require 'org-superstar)
 
+;; These exist only on X11 builds, where term/x-win.el defines them.  The
+;; bare declarations keep the byte-compiler quiet on other builds; the
+;; `boundp' guards at each use site are what decide anything at runtime.
+(defvar x-pointer-dot)
+(defvar x-pointer-shape)
+(defvar x-pointer-invisible)
+(defvar x-sensitive-text-pointer-shape)
+
 (defgroup epresent nil
   "This is a presentation mode for Emacs."
   :group 'epresent)
