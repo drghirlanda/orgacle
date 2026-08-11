@@ -196,5 +196,56 @@ way."
   (let ((latex (epresent-test--export-fixture "export.org")))
     (should (string-match-p "width=0\\.5\\\\textwidth" latex))))
 
+;;; Fringe indicators
+
+(defun epresent-test--indicators-on-slide (heading)
+  "Narrow to HEADING in the indicators fixture and return the fringe bitmaps.
+The result is a list of symbols such as `filled-square', in no
+particular order."
+  (epresent-test-with-fixture "indicators.org"
+    (goto-char (point-min))
+    (re-search-forward (concat "^\\* " (regexp-quote heading) "$"))
+    (org-narrow-to-subtree)
+    (let ((epresent-fringe-overlays nil))
+      (epresent-show-indicators-maybe)
+      (prog1 (mapcar (lambda (ov)
+                       (nth 1 (get-text-property
+                               0 'display (overlay-get ov 'before-string))))
+                     epresent-fringe-overlays)
+        (mapc #'delete-overlay epresent-fringe-overlays)))))
+
+(ert-deftest epresent-test-indicator-for-file ()
+  "EPRESENT_SHOW_FILE draws a filled square."
+  (should (equal '(filled-square)
+                 (epresent-test--indicators-on-slide "Slide with a file"))))
+
+(ert-deftest epresent-test-indicator-for-video ()
+  "EPRESENT_SHOW_VIDEO draws a hollow square."
+  (should (equal '(hollow-square)
+                 (epresent-test--indicators-on-slide "Slide with a video"))))
+
+(ert-deftest epresent-test-indicator-for-both ()
+  "A slide with a file and a video draws both squares."
+  (should (equal '(filled-square hollow-square)
+                 (sort (epresent-test--indicators-on-slide "Slide with both")
+                       #'string-lessp))))
+
+(ert-deftest epresent-test-no-indicator-when-auto ()
+  "EPRESENT_SHOW_AUTO suppresses the indicators entirely."
+  (should (equal '()
+                 (epresent-test--indicators-on-slide
+                  "Slide that shows automatically"))))
+
+(ert-deftest epresent-test-no-indicator-without-properties ()
+  "A slide with no media properties draws nothing."
+  (should (equal '()
+                 (epresent-test--indicators-on-slide "Plain slide"))))
+
+(ert-deftest epresent-test-indicators-respect-the-option ()
+  "Nothing is drawn when `epresent-indicators' is nil."
+  (let ((epresent-indicators nil))
+    (should (equal '()
+                   (epresent-test--indicators-on-slide "Slide with a file")))))
+
 (provide 'epresent-test)
 ;;; epresent-test.el ends here

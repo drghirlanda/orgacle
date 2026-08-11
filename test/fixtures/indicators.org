@@ -1,0 +1,25 @@
+#+TITLE: Indicators
+
+* Slide with a file
+:PROPERTIES:
+:EPRESENT_SHOW_FILE: figure.pdf
+:END:
+
+* Slide with a video
+:PROPERTIES:
+:EPRESENT_SHOW_VIDEO: demo.mp4
+:END:
+
+* Slide with both
+:PROPERTIES:
+:EPRESENT_SHOW_FILE: figure.pdf
+:EPRESENT_SHOW_VIDEO: demo.mp4
+:END:
+
+* Slide that shows automatically
+:PROPERTIES:
+:EPRESENT_SHOW_FILE: figure.pdf
+:EPRESENT_SHOW_AUTO: t
+:END:
+
+* Plain slide
