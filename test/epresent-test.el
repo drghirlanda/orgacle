@@ -89,5 +89,69 @@ x-pointer-shape x-sensitive-text-pointer-shape x-pointer-invisible))"
   (epresent-test-with-fixture "plain.org"
     (should (equal epresent-mode-line (epresent-get-mode-line)))))
 
+;;; Speaker notes
+
+(ert-deftest epresent-test-collect-notes-keeps-slide-headings ()
+  "Every frame-level heading contributes a heading to the notes text."
+  (epresent-test-with-fixture "notes.org"
+    (let ((notes (epresent--collect-notes)))
+      (should (string-match-p "^\\* First slide$" notes))
+      (should (string-match-p "^\\* Second slide$" notes))
+      (should (string-match-p "^\\* Third slide$" notes)))))
+
+(ert-deftest epresent-test-collect-notes-keeps-note-bodies ()
+  "The body of each Speaker notes subtree is carried over."
+  (epresent-test-with-fixture "notes.org"
+    (let ((notes (epresent--collect-notes)))
+      (should (string-match-p "One two three four five\\." notes))
+      (should (string-match-p "Six seven eight\\." notes)))))
+
+(ert-deftest epresent-test-collect-notes-omits-slide-bodies ()
+  "Text outside a Speaker notes subtree is not collected."
+  (epresent-test-with-fixture "notes.org"
+    (should-not (string-match-p "Visible text" (epresent--collect-notes)))))
+
+(ert-deftest epresent-test-collect-notes-repeats-the-last-heading ()
+  "Current behaviour: the final heading is emitted twice.
+
+The loop tests (< (point) (point-max)) before advancing, so on the last
+heading its body runs once more with point unmoved.  P3 replaces this
+loop with the slide vector; until then the duplication is pinned here so
+that the lexical-binding conversion cannot change it unnoticed."
+  (epresent-test-with-fixture "notes.org"
+    (should (string-match-p "\\* Third slide\n\\* Third slide"
+                            (epresent--collect-notes)))))
+
+;;; Speaking time
+
+(ert-deftest epresent-test-speaker-word-count ()
+  "Only words inside Speaker notes subtrees are counted.
+
+Twelve: each subtree contributes the two words of its own heading —
+`count-words' does not count the leading stars — plus five and three
+words of body."
+  (epresent-test-with-fixture "notes.org"
+    (should (equal 12 (epresent--speaker-word-count)))))
+
+(ert-deftest epresent-test-speaker-word-count-without-notes ()
+  "A buffer with no speaker notes counts zero words."
+  (epresent-test-with-fixture "plain.org"
+    (should (equal 0 (epresent--speaker-word-count)))))
+
+(ert-deftest epresent-test-speaking-time-scales-with-wpm ()
+  "Doubling the reading speed halves the estimate."
+  (let ((epresent-wpm 150))
+    (should (equal 2 (epresent--speaking-time 300))))
+  (let ((epresent-wpm 300))
+    (should (equal 1 (epresent--speaking-time 300)))))
+
+(ert-deftest epresent-test-speaking-time-truncates-half-minutes ()
+  "Current behaviour: the half-minute rounding is integer division.
+
+225 words at 150 wpm is 1.5 minutes, and the code reports 1.  Task 9
+changes this and updates the test."
+  (let ((epresent-wpm 150))
+    (should (equal 1 (epresent--speaking-time 225)))))
+
 (provide 'epresent-test)
 ;;; epresent-test.el ends here

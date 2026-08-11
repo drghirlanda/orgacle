@@ -860,45 +860,45 @@ vlc."
   (set-frame-parameter nil 'fullscreen 'fullboth)
   (redraw-display))
 
-(defun epresent-make-notes-buffer ()
-  "Create a buffer with speaker notes only, and display it in a
-new frame."
-  (interactive)
-  ;; first, collect speaker notes from presentation buffer 
+(defun epresent--collect-notes ()
+  "Return this buffer's speaker notes as Org text.
+Each frame-level heading contributes a first-level heading, followed by
+the body of its \"Speaker notes\" subtree when it has one."
   (setq speaker-notes "")
   (save-excursion
     (goto-char (point-min))
     (while (< (point) (point-max))
       (org-next-visible-heading 1)
       (setq current-heading (org-entry-get nil "ITEM"))
-      ;; 1-st level heading is stored to serve as notes heading:
       (if (= (org-current-level) 1)
-	  (setq speaker-notes
-		(concat speaker-notes "* " current-heading "\n")))
-      ;; collect content of 'Speaker notes' headings
+          (setq speaker-notes
+                (concat speaker-notes "* " current-heading "\n")))
       (when (string= current-heading "Speaker notes")
-	(org-mark-subtree)
-	(setq speaker-notes
-	      (concat speaker-notes
-		      (buffer-substring (point) (mark))
-		      "\n")))))
+        (org-mark-subtree)
+        (setq speaker-notes
+              (concat speaker-notes
+                      (buffer-substring (point) (mark))
+                      "\n")))))
   (deactivate-mark)
-  ;; second, delete notes buffer if existing
-  (if (bufferp epresent-notes-buffer) 
-      (kill-buffer epresent-notes-buffer))
-  ;; third, display notes in a new buffer and frame
-  (setq epresent-notes-buffer (generate-new-buffer "*EPresent Notes*"))
-  (with-current-buffer epresent-notes-buffer
-    (erase-buffer)
-    (org-mode)
-    (insert speaker-notes)
-    (goto-char (point-min))
-    (while (re-search-forward "\\*\\* ?.* Speaker [nN]otes[ \t]*\n" nil t)
-      (replace-match ""))
-    (goto-char (point-min))
-    (org-narrow-to-subtree)
-    )
-  (switch-to-buffer-other-frame epresent-notes-buffer))
+  speaker-notes)
+
+(defun epresent-make-notes-buffer ()
+  "Collect speaker notes into a buffer and show it in a new frame."
+  (interactive)
+  (let ((notes (epresent--collect-notes)))
+    (if (bufferp epresent-notes-buffer)
+        (kill-buffer epresent-notes-buffer))
+    (setq epresent-notes-buffer (generate-new-buffer "*EPresent Notes*"))
+    (with-current-buffer epresent-notes-buffer
+      (erase-buffer)
+      (org-mode)
+      (insert notes)
+      (goto-char (point-min))
+      (while (re-search-forward "\\*\\* ?.* Speaker [nN]otes[ \t]*\n" nil t)
+        (replace-match ""))
+      (goto-char (point-min))
+      (org-narrow-to-subtree))
+    (switch-to-buffer-other-frame epresent-notes-buffer)))
 
 ;;; export functions
 
@@ -1006,32 +1006,36 @@ to PDF."
 
 ;;; end export functions
 
-(defun epresent-estimate-time ()
-  "Estimates the time needed to read all speaker notes. The
-estimated time and the number of words in speaker notes are
-displayed in the minibuffer. A reading speed of 150 words per
-minute is used by default. To change it, customize the variable
-epresent-wpm. "
-  (interactive)
+(defun epresent--speaker-word-count ()
+  "Return the number of words in this buffer's speaker-notes subtrees."
   (setq speaker-words 0)
   (org-map-entries
    (lambda ()
      (setq this-headline (downcase (org-entry-get nil "ITEM")))
      (when (string= this-headline "speaker notes")
        (save-excursion
-	 (org-mark-subtree)
-	 (setq speaker-words
-	       (+ speaker-words (count-words (point) (mark))))
-	 (deactivate-mark)))))
-  (setq speaker-time (/ (float speaker-words) epresent-wpm))
-  ;; round to the half minute
-  (setq speaker-time (/ (ceiling (* speaker-time 2)) 2))
-  (message (concat
-	    "Estimated speaking time in minutes: "
-	    (number-to-string speaker-time)
-	    " ("
-	    (number-to-string speaker-words)
-	    " words)")))  
+         (org-mark-subtree)
+         (setq speaker-words
+               (+ speaker-words (count-words (point) (mark))))
+         (deactivate-mark)))))
+  speaker-words)
+
+(defun epresent--speaking-time (words)
+  "Return the estimated time in minutes to speak WORDS aloud.
+The reading speed is `epresent-wpm'."
+  (let ((minutes (/ (float words) epresent-wpm)))
+    ;; round to the half minute
+    (/ (ceiling (* minutes 2)) 2)))
+
+(defun epresent-estimate-time ()
+  "Report how long it would take to read all speaker notes aloud.
+The estimate and the word count are shown in the echo area.  The
+reading speed is `epresent-wpm'."
+  (interactive)
+  (let* ((words (epresent--speaker-word-count))
+         (minutes (epresent--speaking-time words)))
+    (message "Estimated speaking time in minutes: %s (%d words)"
+             minutes words)))
 
 (defun epresent-toggle-mouse ()
   "Show or hide the mouse pointer.
