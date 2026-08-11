@@ -910,13 +910,15 @@ EPRESENT_SHOW_PAGES."
                          "^\\[?\\[?" "" (match-string 1 input))))
              (extension (file-name-extension filename)))
         (if (string= extension "org")
-            ;; Org files are converted to LaTeX and inlined
-            (save-excursion
-              (find-file filename)
-              (org-latex-convert-region-to-latex)
-              (setq output (concat output (buffer-string)))
-              (set-buffer-modified-p nil)
-              (kill-buffer))
+            ;; Org files are converted to LaTeX and inlined.  Read the file
+            ;; into a temporary buffer rather than visiting it: visiting
+            ;; would hand us the user's own buffer if they have the file
+            ;; open, and the conversion replaces the buffer's contents.
+            (setq output
+                  (concat output
+                          (with-temp-buffer
+                            (insert-file-contents filename)
+                            (org-export-string-as (buffer-string) 'latex t))))
           ;; everything else is treated as an image
           (let ((width (if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" input)
                            (match-string 1 input)

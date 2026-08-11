@@ -1,0 +1,8 @@
+#+TITLE: Export include
+
+* Slide with an included Org file
+:PROPERTIES:
+:EPRESENT_SHOW_FILE: test/fixtures/include.org
+:END:
+
+Body text.

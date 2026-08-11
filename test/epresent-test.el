@@ -155,9 +155,6 @@ changes this and updates the test."
 
 ;;; LaTeX export backend
 
-;; The .org branch of `epresent-latex-property-drawer' visits a file and is
-;; not characterized here; P2 revisits it when ox-epresent.el is split out.
-
 (defun epresent-test--export-fixture (name)
   "Export fixture NAME through the epresent backend and return the LaTeX.
 `:with-properties' has to be forced on: `org-export-with-properties'
@@ -195,6 +192,15 @@ way."
   "A drawer with no EPRESENT_SHOW_WIDTH uses half the text width."
   (let ((latex (epresent-test--export-fixture "export.org")))
     (should (string-match-p "width=0\\.5\\\\textwidth" latex))))
+
+(ert-deftest epresent-test-export-inlines-org-files ()
+  "An EPRESENT_SHOW_FILE naming an Org file is converted and inlined.
+
+This branch was uncovered when a lexical-binding conversion silently
+broke it, so it is pinned here."
+  (let ((latex (epresent-test--export-fixture "export-include.org")))
+    (should (string-match-p "Included heading" latex))
+    (should (string-match-p "\\\\textbf{bold}" latex))))
 
 ;;; Fringe indicators
 
