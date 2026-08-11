@@ -1658,15 +1658,24 @@ Expected: PASS, one more than the previous count.
 
 - [ ] *Step 5: Prove the shadowing is gone*
 
+Note which probe to use. =locate-library= is the obvious choice and it is
+*wrong*: it resolves by suffix precedence and never consults
+=load-prefer-newer=, so it reports =epresent.elc= whether or not the fix is in
+place. Ask instead what =require= actually loaded, via =load-history=:
+
 #+begin_src sh
-  make compile                       # leaves epresent.elc on disk
-  touch epresent.el                  # source now newer
-  emacs -Q --batch -l test/init.el \
-        --eval '(princ (format "%s\n" (locate-library "epresent")))'
+  make compile          # leaves epresent.elc on disk
+  sleep 1; touch epresent.el   # source now strictly newer
+  emacs -Q --batch -l test/init.el --eval '(progn
+    (require (quote epresent))
+    (princ (format "loaded: %s\n"
+      (car (seq-find (lambda (e) (string-match-p "epresent\\." (or (car e) "")))
+                     load-history)))))'
 #+end_src
 
-Expected: =epresent.el=, not =epresent.elc=. Before this task the same commands
-print =epresent.elc=.
+Expected: a path ending =epresent.el=. Adding =--eval '(setq load-prefer-newer
+nil)'= before the =require= reproduces the old behaviour and prints
+=epresent.elc=, which is the contrast that proves the fix does the work.
 
 - [ ] *Step 6: Commit*
 
