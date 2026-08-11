@@ -88,8 +88,11 @@ fixed in this phase; each is named in the task that fixes it.
   final heading the body runs once more with point unmoved. Verified: a
   three-slide fixture yields ="* Third slide"= twice. Characterized in Task 5
   and left standing — P3 replaces this loop with the slide vector.
-- *=epresent-x-pointer-shape= is declared =:type 'symbol= but holds an integer.*
-  =x-pointer-dot= and friends are integer constants. Fixed in Task 9.
+- *=epresent-x-pointer-shape= is declared =:type 'symbol= but holds an integer*,
+  and — far worse, discovered only when CI ran — its default is the bare symbol
+  =x-pointer-dot=, which =defcustom= evaluates at load time and which exists
+  only on X11 builds. The package fails to load outright on macOS, Windows,
+  terminal and headless Emacs. Fixed in Task 3a, which was inserted for it.
 
 Deferred deliberately to P3, not to be touched here: =epresent-quit= calls
 =(kill-buffer (get-file-buffer epresent--org-file))= without checking that the
@@ -519,6 +522,184 @@ Expected: three jobs. =compile= and =test= green on all three; =checkdoc= and
 =lint= red but not failing the job. If =compile= or =test= is red on snapshot
 only, read the log — snapshot's Org is 9.8, where the inline-image functions are
 obsolete, and Task 10 is what fixes it.
+
+*What actually happened:* all three versions failed =make test= identically with
+=void-variable x-pointer-dot=. See Task 3a, added in response.
+
+* Task 3a: Make the package loadable without X11
+
+Inserted after Task 3's first CI run. The design document assigns the X11
+pointer work to P3, on the understanding that it degrades the laser-pointer
+feature on non-X displays. That understanding was wrong, and CI proved it in
+33 seconds:
+
+#+begin_example
+  Error: void-variable (x-pointer-dot)
+    custom-declare-variable(epresent-x-pointer-shape x-pointer-dot ...)
+  Symbol's value as variable is void: x-pointer-dot
+  make: *** [Makefile:24: test] Error 255
+#+end_example
+
+=epresent-x-pointer-shape= defaults to the bare symbol =x-pointer-dot=, which
+=defcustom= evaluates at load time. That constant is defined by =term/x-win.el=,
+so on an Emacs without X the file does not merely misbehave — *it fails to load
+at all*, and the package is unusable. That covers macOS and Windows builds,
+terminal Emacs, and every headless CI runner. It went unnoticed locally because
+this machine's Emacs is an X build, which binds the constant even under
+=--batch=.
+
+This blocks P0's exit criteria and every later task's verification, so it is
+fixed here rather than in P3. P3 still owns the rest of the pointer work —
+=epresent-toggle-mouse=, the save/restore of the user's pointer settings, and
+the =void-text-area-pointer= handling.
+
+*Files:*
+- Modify: =epresent.el=, =test/epresent-test.el=
+
+*Interfaces:*
+- Consumes: =epresent-test-fixture-directory= from Task 2.
+- Produces: =epresent-test-project-directory= (defconst, string) — the checkout
+  root, one level above =test/=.
+
+- [ ] *Step 1: Write the failing test*
+
+The bug reproduces locally by unbinding the constants before loading, which is
+the state a non-X Emacs starts in. Add to =test/epresent-test.el=, and put the
+new defconst beside =epresent-test-fixture-directory=:
+
+#+begin_src emacs-lisp :eval no
+  (defconst epresent-test-project-directory
+    (file-name-as-directory
+     (expand-file-name
+      ".." (file-name-directory (or load-file-name buffer-file-name))))
+    "Root of the project checkout, one level above test/.")
+
+  (ert-deftest epresent-test-loads-without-x11 ()
+    "The package loads where the X pointer constants are unbound.
+
+`x-pointer-dot' and its siblings come from term/x-win.el, so they do not
+exist on a macOS, Windows, terminal or headless Emacs.  Loading the file
+used to signal `void-variable' there, making the package unusable rather
+than merely degraded.  Unbinding them first reproduces that Emacs."
+    (let* ((default-directory epresent-test-project-directory)
+           (emacs (expand-file-name invocation-name invocation-directory))
+           (output (get-buffer-create "*epresent-test-x11*"))
+           (status (call-process
+                    emacs nil output nil
+                    "-Q" "--batch"
+                    "-l" "test/init.el"
+                    "--eval" "(mapc #'makunbound '(x-pointer-dot \
+x-pointer-shape x-sensitive-text-pointer-shape x-pointer-invisible))"
+                    "-l" "epresent.el")))
+      (should (equal 0 status))
+      (kill-buffer output)))
+#+end_src
+
+- [ ] *Step 2: Run it to verify it fails*
+
+Run: =make test=
+Expected: FAIL, =epresent-test-loads-without-x11=, because the subprocess exits
+non-zero on =void-variable x-pointer-dot= — the same error CI reported.
+
+- [ ] *Step 3: Guard the default*
+
+The value must survive the constant being absent, and =nil= has to mean "leave
+the pointer alone". This also supersedes the =:type= correction that Task 9 was
+going to make to this same declaration — Task 9's step for
+=epresent-x-pointer-shape= is dropped, and the other three defcustoms there are
+untouched by this task.
+
+#+begin_src emacs-lisp :eval no
+  (defcustom epresent-x-pointer-shape (and (boundp 'x-pointer-dot) x-pointer-dot)
+    "Shape of the mouse pointer during the presentation.
+The value is one of the `x-pointer-' constants, which are integers, or
+nil to leave the pointer unchanged.  Those constants exist only on X11
+builds, so this is nil elsewhere."
+    :type '(choice (const :tag "Leave unchanged" nil) integer)
+    :group 'epresent)
+#+end_src
+
+- [ ] *Step 4: Guard the three places that set the pointer*
+
+=epresent--get-frame=, =epresent-quit= and =epresent-toggle-mouse= assign to
+=x-pointer-shape= and =x-sensitive-text-pointer-shape=. On a non-X Emacs those
+variables do not exist, so the assignments both signal at runtime and produce
+=assignment to free variable= warnings that would fail Task 14's compile gate.
+
+Wrap each of the three blocks. In =epresent--get-frame=, replacing the five
+lines from =(setq epresent-user-x-pointer-shape ...)= through the
+=set-mouse-color= call:
+
+#+begin_src emacs-lisp :eval no
+  ;; set mouse pointer shape, saving the user's setting first
+  (when (boundp 'x-pointer-shape)
+    (setq epresent-user-x-pointer-shape x-pointer-shape)
+    (setq epresent-user-x-sensitive-text-pointer-shape
+          x-sensitive-text-pointer-shape)
+    (setq x-pointer-shape epresent-x-pointer-shape)
+    (setq x-sensitive-text-pointer-shape epresent-x-pointer-shape)
+    (setq void-text-area-pointer 'text)
+    ;; setting the mouse colour to its current value applies the shapes
+    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
+#+end_src
+
+In =epresent-quit=, the corresponding restore block:
+
+#+begin_src emacs-lisp :eval no
+  ;; reset mouse pointer shape and colour
+  (when (boundp 'x-pointer-shape)
+    (setq x-pointer-shape epresent-user-x-pointer-shape)
+    (setq x-sensitive-text-pointer-shape
+          epresent-user-x-sensitive-text-pointer-shape)
+    (setq void-text-area-pointer 'arrow)
+    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
+#+end_src
+
+And =epresent-toggle-mouse= in full:
+
+#+begin_src emacs-lisp :eval no
+  (defun epresent-toggle-mouse ()
+    "Show or hide the mouse pointer.
+Does nothing on a build without X11 pointer support."
+    (interactive)
+    (when (boundp 'x-pointer-shape)
+      (if epresent-mouse-visible
+          (setq x-pointer-shape x-pointer-invisible
+                x-sensitive-text-pointer-shape x-pointer-invisible)
+        (setq x-pointer-shape epresent-x-pointer-shape
+              x-sensitive-text-pointer-shape epresent-x-pointer-shape))
+      (setq void-text-area-pointer 'text)
+      ;; setting the mouse colour to its current value applies the shapes
+      (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))))
+#+end_src
+
+Note that =epresent-toggle-mouse= never updated =epresent-mouse-visible=, so it
+only ever hid the pointer and could not show it again. Leave that defect alone —
+P3 owns it, and fixing it here would go beyond making the file loadable.
+
+- [ ] *Step 5: Run the tests*
+
+Run: =make test=
+Expected: PASS. The count is whatever Task 2 established plus one.
+
+- [ ] *Step 6: Commit and confirm CI recovers*
+
+#+begin_src sh
+  git add epresent.el test/epresent-test.el
+  git commit -m "Load without X11
+
+epresent-x-pointer-shape defaulted to the bare symbol x-pointer-dot,
+which defcustom evaluates at load time and which only exists on X11
+builds.  The package therefore failed to load outright on macOS,
+Windows, terminal and headless Emacs -- CI caught it on all three
+matrix versions.  The default is now guarded, nil means leave the
+pointer alone, and the three assignment sites are guarded too."
+  git push
+  gh run watch
+#+end_src
+
+Expected: =compile= and =test= green on 29.4, 30.2 and snapshot; =checkdoc= and
+=lint= still red but non-blocking.
 
 * Task 4: Characterize keyword parsing
 
@@ -1597,9 +1778,10 @@ Task 13 renames them and rewrites this form.
 
 - [ ] *Step 10: Fix the customization metadata*
 
-Four =defcustom= declarations describe types their values are not. Under Task
+Three =defcustom= declarations describe types their values are not. Under Task
 14's compile gate the invalid one is a build failure; the others are simply
-wrong and mislead =M-x customize=.
+wrong and mislead =M-x customize=. (A fourth, =epresent-x-pointer-shape=, was
+corrected in Task 3a along with its unguarded default — leave it alone here.)
 
 #+begin_src emacs-lisp :eval no
   (defcustom epresent-mode-line '(:eval (int-to-string epresent-page-number))
@@ -1612,12 +1794,6 @@ wrong and mislead =M-x customize=.
 The buffer is shown in its own frame, which can be moved to a second
 screen, and follows the slide being presented."
     :type 'boolean
-    :group 'epresent)
-
-  (defcustom epresent-x-pointer-shape x-pointer-dot
-    "Shape of the mouse pointer during the presentation.
-The value is one of the `x-pointer-' constants, which are integers."
-    :type 'integer
     :group 'epresent)
 
   (defcustom epresent-tooltip-mode nil
