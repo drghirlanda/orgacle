@@ -810,7 +810,7 @@ Append to =test/epresent-test.el=, before the =provide=:
 - [ ] *Step 3: Run them*
 
 Run: =make test=
-Expected: PASS, =6 expected=. These characterize behaviour that already works;
+Expected: PASS, =7 expected=. These characterize behaviour that already works;
 a failure here means the fixture is wrong, not the code.
 
 - [ ] *Step 4: Commit*
@@ -1037,7 +1037,7 @@ reading speed is `epresent-wpm'."
 - [ ] *Step 6: Run the tests*
 
 Run: =make test=
-Expected: PASS, =14 expected=. The expected values in these tests were taken by
+Expected: PASS, =15 expected=. The expected values in these tests were taken by
 running the current code against the fixture, not derived by reading it. If one
 disagrees, correct the *test* to whatever the current code produces and say so
 in its docstring — these tests record present behaviour, they do not judge it.
@@ -1149,7 +1149,7 @@ way."
 - [ ] *Step 3: Run them*
 
 Run: =make test=
-Expected: PASS, =19 expected=. The five assertions were taken from a real export
+Expected: PASS, =20 expected=. The five assertions were taken from a real export
 run, not guessed. If every one of them fails at once with LaTeX that contains
 =\section= but no =\includegraphics=, the =:with-properties t= in the helper has
 gone missing — that is exactly what its absence looks like.
@@ -1272,7 +1272,7 @@ particular order."
 - [ ] *Step 3: Run them to verify they fail or pass*
 
 Run: =make test=
-Expected: PASS, =25 expected=. The overlays come back in reverse order of
+Expected: PASS, =26 expected=. The overlays come back in reverse order of
 creation — =(hollow-square filled-square)= for the slide with both — which is
 why =epresent-test-indicator-for-both= sorts before asserting.
 
@@ -1319,7 +1319,7 @@ Expected: about 40. Keep the full output; it is the checklist for this task.
 - [ ] *Step 3: Run the tests before changing anything else*
 
 Run: =make test=
-Expected: PASS, =25 expected=. The cookie alone should not break anything. If it
+Expected: PASS, =26 expected=. The cookie alone should not break anything. If it
 does, that is a genuine dynamic-scope dependency — find it before continuing.
 
 - [ ] *Step 4: Convert =epresent-show-indicators-maybe= and =epresent-show-indicators=*
@@ -1362,7 +1362,7 @@ square an EPRESENT_SHOW_VIDEO property."
 - [ ] *Step 5: Run the tests*
 
 Run: =make test=
-Expected: PASS, =25 expected=. The six indicator tests from Task 7 are what
+Expected: PASS, =26 expected=. The six indicator tests from Task 7 are what
 prove this conversion is faithful.
 
 - [ ] *Step 6: Convert =epresent-slide-in-effect=*
@@ -1557,7 +1557,7 @@ further search happens, which is why it is =let*= and not =let=.
 
 #+begin_src sh
   make compile 2>&1 | grep -c "free variable"   # expect 0
-  make test                                      # expect 25 expected, 0 unexpected
+  make test                                      # expect 26 expected, 0 unexpected
 #+end_src
 
 - [ ] *Step 13: Commit*
@@ -1868,7 +1868,7 @@ same substitution, and whichever task reaches it first makes it.
 - [ ] *Step 12: Run the tests*
 
 Run: =make test=
-Expected: PASS, =29 expected=.
+Expected: PASS, =30 expected=.
 
 - [ ] *Step 13: Commit*
 
@@ -2005,7 +2005,7 @@ Expected: no output.
 - [ ] *Step 5: Run the tests*
 
 Run: =make test=
-Expected: PASS, =29 expected=.
+Expected: PASS, =30 expected=.
 
 - [ ] *Step 6: Commit and check the snapshot job*
 
@@ -2123,7 +2123,7 @@ Then remove the stale copy so the next run proves it:
   make test
 #+end_src
 
-Expected: PASS, =29 expected=, with =org-superstar= never installed.
+Expected: PASS, =30 expected=, with =org-superstar= never installed.
 
 - [ ] *Step 5: Check the warning count*
 
@@ -2254,7 +2254,7 @@ two new ones:
   make compile && make test
 #+end_src
 
-Expected: both clean, =29 expected=.
+Expected: both clean, =30 expected=.
 
 - [ ] *Step 7: Commit*
 
@@ -2355,7 +2355,7 @@ Expected: exit 0, no output.
   make compile && make test
 #+end_src
 
-Expected: clean, =29 expected=.
+Expected: clean, =30 expected=.
 
 - [ ] *Step 6: Commit*
 
@@ -2485,4 +2485,4 @@ exits 0, and:
 - =emacs -Q --batch -L . --eval '(require (quote epresent))'= succeeds on a
   machine with neither =org-superstar= nor =pdf-tools= installed;
 - loading =epresent= changes no keymap outside the package;
-- the ERT suite reports 29 passing tests and no failures.
+- the ERT suite reports 30 passing tests and no failures.
