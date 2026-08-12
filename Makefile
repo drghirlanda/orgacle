@@ -1,8 +1,8 @@
 EMACS ?= emacs
 BATCH  = $(EMACS) -Q --batch -l test/init.el
-EL     = orgacle.el
+EL     = orgacle-core.el orgacle-nav.el orgacle-fontify.el orgacle-src.el orgacle-media.el orgacle-notes.el ox-orgacle.el orgacle.el
 
-.PHONY: all deps compile checkdoc lint test clean
+.PHONY: all deps compile checkdoc lint test clean distclean
 
 all: compile checkdoc lint test
 
@@ -19,6 +19,7 @@ checkdoc:
 
 lint:
 	$(BATCH) --eval '(require (quote package-lint))' \
+	         --eval '(setq package-lint-main-file "orgacle.el")' \
 	         -f package-lint-batch-and-exit $(EL)
 
 test:
@@ -26,4 +27,9 @@ test:
 
 clean:
 	rm -f *.elc
+
+# `.deps' holds package-lint, fetched from MELPA by test/init.el; keeping
+# it out of `clean' is what lets `make clean && make all', the documented
+# verification command, run offline after the first `make deps'/`make all'.
+distclean: clean
 	rm -rf .deps

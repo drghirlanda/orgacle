@@ -11,6 +11,7 @@
 (require 'ert)
 (require 'org)
 (require 'orgacle)
+(require 'ox-orgacle)
 
 (defconst orgacle-test-fixture-directory
   (expand-file-name "fixtures"
@@ -325,6 +326,42 @@ particular order."
     (should (equal '()
                    (orgacle-test--indicators-on-slide "Slide with a file")))))
 
+;;; Video
+
+(ert-deftest orgacle-test-video-player-is-detected ()
+  "An unrecognised `orgacle-video-player' name is reported, not run.
+This exercises the unsupported-name branch of `orgacle--video-command';
+see `orgacle-test-video-player-executable-not-found' for a recognised
+player whose executable is missing instead."
+  (let ((orgacle-video-player "definitely-not-a-real-player"))
+    (should-error (orgacle--video-command "film.mp4" nil) :type 'user-error)))
+
+(ert-deftest orgacle-test-video-player-executable-not-found ()
+  "A configured, recognised player that is not installed is reported,
+not run.
+`executable-find' is stubbed so this characterizes the missing-binary
+branch without depending on whether mplayer happens to be installed on
+the machine running the suite."
+  (let ((orgacle-video-player "mplayer"))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+      (should-error (orgacle--video-command "film.mp4" nil) :type 'user-error))))
+
+(ert-deftest orgacle-test-video-command-quotes-its-filename ()
+  "A filename with a space survives as one argument.
+
+`executable-find' is stubbed so this characterizes only the quoting,
+not whether mplayer happens to be installed on the machine running
+the suite.  `shell-quote-argument' backslash-escapes special
+characters rather than wrapping the whole argument in quotes on a
+POSIX shell -- so pinning its literal output, whatever that is on the
+running platform, is what actually characterizes \"the filename is
+quoted\" portably; a fixed quote-style regex would not match what it
+really produces."
+  (let ((orgacle-video-player "mplayer"))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/mplayer")))
+      (should (string-suffix-p (shell-quote-argument "my film.mp4")
+                               (orgacle--video-command "my film.mp4" nil))))))
+
 ;;; Fontification
 
 (ert-deftest orgacle-test-fontify-creates-overlays ()
@@ -433,6 +470,135 @@ migrated, leaving EPRESENT_ names on disk outside the narrowed region."
     (with-temp-buffer
       (insert-file-contents file)
       (should-not (string-match-p "EPRESENT_" (buffer-string))))))
+
+;;; Page hook
+
+(ert-deftest orgacle-test-page-hook-runs-on-display ()
+  "Displaying a slide runs `orgacle-page-hook'."
+  (orgacle-test-with-fixture "plain.org"
+    (let* ((ran 0)
+           (orgacle-page-hook (list (lambda () (setq ran (1+ ran))))))
+      ;; `point-min' sits on the #+TITLE line, before the first
+      ;; headline, where `orgacle-current-page' only folds a TOC and
+      ;; never runs the hook; go to the first slide so this exercises
+      ;; the branch that actually displays one.
+      (goto-char (point-min))
+      (re-search-forward "^\\* First slide")
+      (orgacle-current-page)
+      (should (= ran 1)))))
+
+(ert-deftest orgacle-test-page-hook-survives-a-failing-member ()
+  "A member that signals does not stop the others or the presentation."
+  (orgacle-test-with-fixture "plain.org"
+    (let* ((ran nil)
+           (orgacle-page-hook
+            (list (lambda () (error "Deliberate failure"))
+                  (lambda () (setq ran t)))))
+      (goto-char (point-min))
+      (re-search-forward "^\\* First slide")
+      (should (progn (orgacle-current-page) t))
+      (should ran))))
+
+(ert-deftest orgacle-test-page-hook-order-is-file-slide-in-indicators-notes ()
+  "The real, global `orgacle-page-hook' runs file, slide-in, indicators,
+then notes, in that order -- not merely some order the four `add-hook'
+calls happen to produce.  File-before-indicators is the part that is
+not cosmetic: `orgacle-show-file' calls `orgacle-clean-fringe-overlays',
+so if indicators ran first, `orgacle-show-file' would wipe the fringe
+overlays `orgacle-show-indicators-maybe' had just drawn.  The other new
+tests in this section let-bind `orgacle-page-hook' away to isolate the
+runner, so this is the only test that looks at the real, default
+value."
+  (should (equal '(orgacle-show-file-auto orgacle-slide-in-effect
+                    orgacle-show-indicators-maybe orgacle-position-notes)
+                 (default-value 'orgacle-page-hook))))
+
+;;; Session state
+
+(ert-deftest orgacle-test-user-state-round-trips ()
+  "Saving then restoring leaves the user's Org settings as they were."
+  (let ((org-src-fontify-natively 'sentinel)
+        (org-hide-emphasis-markers 'sentinel)
+        (org-pretty-entities 'sentinel))
+    (orgacle--save-user-state)
+    (setq org-src-fontify-natively t
+          org-hide-emphasis-markers t
+          org-pretty-entities t)
+    (orgacle--restore-user-state)
+    (should (eq org-src-fontify-natively 'sentinel))
+    (should (eq org-hide-emphasis-markers 'sentinel))
+    (should (eq org-pretty-entities 'sentinel))))
+
+(ert-deftest orgacle-test-quit-is-idempotent ()
+  "Quitting when no presentation is running does nothing and does not signal."
+  (should (progn (orgacle-quit) t))
+  (should (progn (orgacle-quit) t)))
+
+(ert-deftest orgacle-test-mode-enters ()
+  "Entering `orgacle-mode' on a plain buffer completes without signaling.
+
+A smoke test, not a characterization of everything the mode does: it
+exists because nothing in the suite called `orgacle-mode' at all,
+which let a byte-compile-only crash in its display-table handling
+reach users unnoticed.  Batch mode has no frame of its own, so
+`orgacle--frame' stays nil here; `set-face-attribute' with a nil frame
+argument means the selected frame, which exists even in batch, so the
+mode's frame-facing calls do not need a real one to complete.
+
+Quits at the end, in an `unwind-protect': other tests rely on
+`orgacle--save-user-state' having nothing already saved when they
+start, and since the re-entrancy fix that condition is sticky rather
+than clobbered on every call -- see the re-entrancy tests below."
+  (orgacle-test-with-fixture "plain.org"
+    (unwind-protect
+        (progn
+          (orgacle-mode)
+          (should (eq major-mode 'orgacle-mode)))
+      (orgacle-quit))))
+
+;;; Re-entrant orgacle-mode
+
+(ert-deftest orgacle-test-second-entry-preserves-saved-variables ()
+  "Entering `orgacle-mode' twice without an intervening `orgacle-quit'
+must not let the second entry's `orgacle--save-user-state' overwrite the
+user's original values with the presentation's own -- the first save has
+to win, so that quitting still restores what the user actually had.
+
+This reproduces without needing two real frames: killing the
+presentation frame with the window manager instead of pressing q, or
+running `orgacle-run' a second time from a different Org buffer, both
+leave `orgacle-mode' entered a second time with no intervening
+`orgacle-quit' in between -- `orgacle-run' only inspects the *current*
+buffer's major mode, so neither path is exotic."
+  (orgacle-test-with-fixture "plain.org"
+    (let ((org-src-fontify-natively 'user)
+          (org-hide-emphasis-markers 'user)
+          (org-pretty-entities 'user)
+          (org-fontify-quote-and-verse-blocks 'user))
+      (orgacle-mode)
+      (orgacle-mode)
+      (orgacle-quit)
+      (should (eq org-src-fontify-natively 'user))
+      (should (eq org-hide-emphasis-markers 'user))
+      (should (eq org-pretty-entities 'user))
+      (should (eq org-fontify-quote-and-verse-blocks 'user)))))
+
+(ert-deftest orgacle-test-second-entry-preserves-outline-ellipsis ()
+  "The same re-entrancy protection covers the outline-ellipsis
+display-table slot, which has exactly the same shape as the tracked
+variables above but cannot join `orgacle-saved-variables' because it is
+not a variable.  Without the guard, the second entry captures the
+presentation's own `[32]' as though it were the user's ellipsis, and
+quitting leaves the invisible space in place instead of restoring it."
+  (orgacle-test-with-fixture "plain.org"
+    (unless (char-table-p standard-display-table)
+      (setq standard-display-table (make-display-table)))
+    (set-display-table-slot standard-display-table 'selective-display "user-ellipsis")
+    (orgacle-mode)
+    (orgacle-mode)
+    (orgacle-quit)
+    (should (equal (display-table-slot standard-display-table 'selective-display)
+                   "user-ellipsis"))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
