@@ -5,7 +5,9 @@
 ;;               2020 Stefano Ghirlanda <drghirlanda@gmail.com>
 
 ;; Authors: Tom Tromey <tromey@redhat.com>
+;;          Phil Hagelberg <technomancy@gmail.com>
 ;;          Eric Schulte <schulte.eric@gmail.com>
+;;          Puneeth Chaganti <punchagan@gmail.com>
 ;;          Lee Hinman <lee@writequit.org>
 ;;          Stefano Ghirlanda <drghirlanda@gmail.com>
 ;; Maintainer: Stefano Ghirlanda <drghirlanda@gmail.com>
@@ -35,8 +37,7 @@
 
 ;;; Commentary:
 
-;; This is a presentation mode for Emacs.  It works best in
-;; Emacs >= 24, which has a nice font rendering engine.
+;; This is a presentation mode for Emacs.
 
 ;; To use, invoke `orgacle-run' in an `org-mode' buffer.  This will
 ;; make a full-screen frame special key bindings and features for
