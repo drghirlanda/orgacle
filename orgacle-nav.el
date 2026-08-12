@@ -21,6 +21,16 @@
 ;; with `orgacle-page-hook', this one is not hook material: it has to
 ;; run inside the `org-fold-show-subtree' branch, before the hook's
 ;; members see the slide, not after.
+;;
+;; P3 Task 2 re-examined this rather than carrying it forward
+;; unexamined: the mutual recursion between `orgacle-current-page' and
+;; the page-movement commands is gone now that navigation is index
+;; arithmetic over `orgacle--slides', but that recursion was never
+;; what motivated this declaration.  The sequencing constraint above
+;; -- src-block visibility has to be set inside the same conditional
+;; that decides whether this heading is a real slide, strictly before
+;; `orgacle--run-page-hook' -- is untouched by the rewrite, so the
+;; declaration stays for the same reason P2 added it.
 (declare-function orgacle-toggle-hide-src-blocks "orgacle-src" (&optional arg))
 
 (defun orgacle-goto-top-level ()
@@ -31,29 +41,50 @@
     (when (and level (> level orgacle-frame-level))
       (org-up-heading-all (- level orgacle-frame-level)))))
 
-(defun orgacle-jump-to-page (num)
-  "Jump directly to page NUM of the presentation."
-  (interactive "npage number: ")
-  (orgacle-top)
-  (dotimes (_ (1- num)) (orgacle-next-page)))
+(defun orgacle--start-slides ()
+  "Build `orgacle--slides' and reset navigation to the first slide.
+Sets `orgacle--slides' from `orgacle--build-slides' and
+`orgacle--slide-index' to 0.  Called once per presentation -- by
+`orgacle-run', and directly by tests that exercise navigation without
+starting a full presentation -- after which `orgacle-top',
+`orgacle-next-page', `orgacle-previous-page' and `orgacle-jump-to-page'
+are index arithmetic over the vector it builds."
+  (setq orgacle--slides (orgacle--build-slides))
+  (setq orgacle--slide-index 0))
 
-(defun orgacle-current-page (&optional backward)
-  "Present the current outline heading.
-BACKWARD, if non-nil, means a leading \"TITLE PAGE\" heading is
-skipped by moving to the previous page instead of the next one, so
-that skipping moves in the direction the user is already navigating."
+(defun orgacle--goto-slide (index)
+  "Move to slide INDEX of `orgacle--slides' and present it.
+Sets `orgacle--slide-index' and `orgacle-page-number' from INDEX --
+the latter is always the former plus one, so it cannot drift the way
+independent increments and decrements used to -- widens the buffer,
+moves point to the slide's marker, and calls `orgacle-current-page'
+exactly once.  That single call is what makes jumping any number of
+slides cost one redisplay instead of one per slide skipped over.
+Does nothing when `orgacle--slides' is empty, which an Org buffer with
+no headings at all produces; there is then no slide to move to."
+  (when (> (length orgacle--slides) 0)
+    (setq orgacle--slide-index index)
+    (setq orgacle-page-number (1+ index))
+    (widen)
+    (goto-char (aref orgacle--slides index))
+    (orgacle-current-page)))
+
+(defun orgacle-jump-to-page (num)
+  "Jump directly to page NUM of the presentation.
+NUM is clamped to the deck: below 1 goes to the first slide, above the
+last slide goes to the last one."
+  (interactive "npage number: ")
+  (orgacle--goto-slide
+   (max 0 (min (1- (length orgacle--slides)) (1- num)))))
+
+(defun orgacle-current-page ()
+  "Present the current outline heading as a slide."
   (interactive)
   (when orgacle-aux-window
     (delete-window orgacle-aux-window)
     (setq orgacle-aux-window nil))
   (if (org-current-level)
       (progn
-	(orgacle-goto-top-level)
-	;; skipe a TITLE PAGE heading, used for introductory speaker notes
-	(if (string= (downcase (org-entry-get nil "ITEM")) "title page")
-	    (if backward
-		(orgacle-previous-page t)
-	      (orgacle-next-page t)))
 	(org-narrow-to-subtree)
 	(outline-show-all)
 	(outline-hide-body)
@@ -71,48 +102,28 @@ that skipping moves in the direction the user is already navigating."
   (redraw-display))
 
 (defun orgacle-top ()
-  "Present the first outline heading."
+  "Present the first slide."
   (interactive)
-  (widen)
-  (goto-char (point-min))
-  (setq orgacle-page-number 1)
   ;; rewind notes buffer if present
   (if orgacle-notes-buffer
       (with-current-buffer orgacle-notes-buffer
 	(goto-char (point-min))))
-  (orgacle-current-page))
+  (orgacle--goto-slide 0))
 
-(defun orgacle-next-page (&optional skip)
-  "Advance to the next outline heading and present it.
-With SKIP non-nil the page counter advances but nothing is displayed,
-which is how a TITLE PAGE heading is stepped over."
+(defun orgacle-next-page ()
+  "Advance to the next slide and present it.
+Past the last slide, nothing moves and the last slide stays on
+display."
   (interactive)
-  (orgacle-goto-top-level)
-  (widen)
-  (when (if (< (or (ignore-errors (org-reduced-level (org-current-level))) 0)
-               orgacle-frame-level)
-            (outline-next-heading)
-          (org-get-next-sibling))
-    (cl-incf orgacle-page-number))
-  (unless skip
-    (orgacle-current-page)))
+  (orgacle--goto-slide
+   (min (1- (length orgacle--slides)) (1+ orgacle--slide-index))))
 
-(defun orgacle-previous-page (&optional _skip)
-  "Present the previous outline heading.
-SKIP is accepted for the same calling convention as
-`orgacle-next-page' but currently has no effect: this command
-always redisplays the destination page regardless of SKIP."
+(defun orgacle-previous-page ()
+  "Present the previous slide.
+Before the first slide, nothing moves and the first slide stays on
+display."
   (interactive)
-  (orgacle-goto-top-level)
-  (widen)
-  (org-content)
-  (if (< (or (ignore-errors (org-reduced-level (org-current-level))) 0)
-         orgacle-frame-level)
-      (outline-previous-heading)
-    (org-get-previous-sibling))
-  (when (> orgacle-page-number 1)
-    (cl-decf orgacle-page-number))
-  (orgacle-current-page t))
+  (orgacle--goto-slide (max 0 (1- orgacle--slide-index))))
 
 (defun orgacle-next-subheading ()
   "Advance to next subheading, unhiding it if hidden."

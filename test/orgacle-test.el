@@ -542,6 +542,48 @@ value."
                     orgacle-show-indicators-maybe orgacle-position-notes)
                  (default-value 'orgacle-page-hook))))
 
+;;; Navigation
+
+(ert-deftest orgacle-test-nav-starts-at-the-first-real-slide ()
+  "A leading title page is skipped without recursion."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (equal "First slide" (org-entry-get nil "ITEM")))
+    (should (= 1 orgacle-page-number))))
+
+(ert-deftest orgacle-test-nav-page-number-round-trips ()
+  "Forward then back returns both the slide and its number."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-next-page)
+    (orgacle-next-page)
+    (should (= 3 orgacle-page-number))
+    (orgacle-previous-page)
+    (should (= 2 orgacle-page-number))
+    (should (equal "Second slide" (org-entry-get nil "ITEM")))))
+
+(ert-deftest orgacle-test-nav-stops-at-the-ends ()
+  "Past the last slide and before the first, nothing moves and nothing signals."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-previous-page)
+    (should (= 1 orgacle-page-number))
+    (dotimes (_ 10) (orgacle-next-page))
+    (should (= 3 orgacle-page-number))))
+
+(ert-deftest orgacle-test-jump-is-direct ()
+  "Jumping does not visit the slides in between."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (let ((visited 0))
+      (let ((orgacle-page-hook (list (lambda () (setq visited (1+ visited))))))
+        (orgacle-jump-to-page 3))
+      (should (= 1 visited))
+      (should (equal "Third slide" (org-entry-get nil "ITEM"))))))
+
 ;;; Session state
 
 (ert-deftest orgacle-test-user-state-round-trips ()

@@ -282,7 +282,19 @@ when no presentation is running."
 (defvar orgacle-overlays nil)
 (defvar orgacle-fringe-overlays nil)
 (defvar orgacle-aux-fringe-overlay nil)
-(defvar orgacle-page-number 0)
+(defvar orgacle-page-number 0
+  "Number of the slide currently on display, counting from 1.
+Always kept equal to `orgacle--slide-index' plus one; the mode line
+reads this variable, and a user may too, which is why it stays a
+variable of its own instead of being computed on every read.
+`orgacle--goto-slide' is the only place that sets it.")
+(defvar orgacle--slides nil
+  "Vector of markers built by `orgacle--build-slides', one per slide.
+Set once per presentation by `orgacle--start-slides'; navigation is
+then index arithmetic over this vector.")
+(defvar orgacle--slide-index 0
+  "Index into `orgacle--slides' of the slide currently on display.
+Zero-based; `orgacle-page-number' is always this plus one.")
 (defvar orgacle-user-x-pointer-shape nil)
 (defvar orgacle-user-x-sensitive-text-pointer-shape nil)
 

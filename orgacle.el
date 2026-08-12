@@ -289,6 +289,8 @@ the display."
         (goto-char (point-min))
         (insert (format "#+Title: %s\n\n" title))))
     (setq orgacle-frame-level (orgacle-get-frame-level))
+    ;; build the slide vector navigation is index arithmetic over
+    (orgacle--start-slides)
     (orgacle--get-frame)
     (orgacle-mode)
     (set-buffer-modified-p nil)
