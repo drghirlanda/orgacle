@@ -380,6 +380,33 @@ from =epresent= to =orgacle=. Both are confirmed before P1 begins.
 
 *Exit:* no =epresent= string outside the Commentary's origin note; tests green.
 
+*Status: COMPLETE* (2026-08-12), with one gap noted below. =make clean && make
+all= exits 0 (38 tests, up from P0's 32), and CI is green on Emacs 29.4, 30.2
+and snapshot
+(https://github.com/drghirlanda/orgacle/actions/runs/31623164306).
+=orgacle-migrate-buffer= and =orgacle-migrate-file= ship with tests and
+=test/fixtures/legacy.org=; a manual round-trip against a copy of
+=sub-level.org= (real =ORGACLE_FRAME_LEVEL= property, reverted with =sed= and
+migrated back in batch) reproduced the committed file exactly.
+
+Two things differed from the plan:
+
+- =present.org= was not updated, contrary to this section's own second
+  paragraph and the file-structure table in the task plan. Its
+  =#+EPRESENT_FRAME_LEVEL= property was removed (not renamed) during the P0
+  baseline rewrite, so Task 2's property sweep found nothing there to convert;
+  its title (="Epresent: Presentations in Emacs"=) and the "Source code" demo
+  slide (=epresent-run=, =epresent-mode=, ="EPresent can only be used..."=)
+  still name the old package. =sub-level.org= was renamed correctly. Left for
+  the maintainer: decide whether the demo slide should show the new API or is
+  deliberately illustrating the old one.
+- The CI workflow's =push= trigger lists branches =[master, orgacle-rework]=,
+  a name left over from the P0 phase; it does not include =orgacle-rename=, so
+  pushing this branch did not auto-start a run. The green run cited above was
+  obtained with =gh workflow run ci.yml --ref orgacle-rename= (the workflow
+  already exposes =workflow_dispatch=). Worth adding the current branch name,
+  or just relying on the =pull_request= trigger once this merges to =master=.
+
 ** P2 — Modularization and modernization
 
 Split into the files of section 5.1. Introduce =orgacle-page-hook= and remove
