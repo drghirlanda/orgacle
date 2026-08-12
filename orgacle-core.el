@@ -387,6 +387,33 @@ text and keeps pointing at it."
           (end-of-line))))
     (vconcat (nreverse slides))))
 
+(defun orgacle--slide-index-at-point (&optional pos)
+  "Return the index into `orgacle--slides' of the slide at or before POS.
+POS defaults to point.  Used to re-derive `orgacle--slide-index' after
+an edit may have changed which headings are slides -- adding or
+removing a heading, or changing whether an existing one qualifies as
+`orgacle--slide-p' -- so that navigation reflects where point actually
+is rather than a position recorded before the edit.  Returns 0 when
+POS precedes every slide, or when `orgacle--slides' is empty (in the
+latter case the return value is meaningless; callers must check
+emptiness separately, the same way `orgacle--goto-slide' does)."
+  (let ((pos (or pos (point))) (index 0))
+    (dotimes (i (length orgacle--slides))
+      (when (<= (aref orgacle--slides i) pos)
+        (setq index i)))
+    index))
+
+(defun orgacle--sync-page-number ()
+  "Set `orgacle-page-number' from `orgacle--slide-index'.
+Zero when `orgacle--slides' is empty, since there is then no page to
+number; the index plus one otherwise.  This is the only place that
+computes `orgacle-page-number', so every caller that changes
+`orgacle--slide-index' -- or rebuilds `orgacle--slides' out from under
+it, as `orgacle-refresh' does -- gets a consistent page number without
+having to remember the empty-deck special case itself."
+  (setq orgacle-page-number
+        (if (> (length orgacle--slides) 0) (1+ orgacle--slide-index) 0)))
+
 (defun orgacle--get-frame ()
   "Create and set up the Orgacle frame."
   (unless (frame-live-p orgacle--frame)

@@ -584,6 +584,74 @@ value."
       (should (= 1 visited))
       (should (equal "Third slide" (org-entry-get nil "ITEM"))))))
 
+(ert-deftest orgacle-test-start-slides-resets-the-page-number ()
+  "A fresh `orgacle--start-slides' resets the page number along with
+the index, not just the index by itself -- otherwise a second
+presentation in the same session would open still showing the
+previous presentation's page number."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 3)
+    (should (= 3 orgacle-page-number))
+    (orgacle--start-slides)
+    (should (= 0 orgacle--slide-index))
+    (should (= 1 orgacle-page-number))))
+
+(ert-deftest orgacle-test-nav-empty-deck-does-not-signal ()
+  "A deck with no real slides -- here, only a title page -- does not
+signal when navigated, and the page number reflects there being no
+slide to show."
+  (with-temp-buffer
+    (let ((org-mode-hook nil)) (org-mode))
+    (insert "* Title page\nNothing to see.\n")
+    (orgacle--start-slides)
+    (should (= 0 (length orgacle--slides)))
+    (should (= 0 orgacle-page-number))
+    (should (progn (orgacle-top) t))
+    (should (progn (orgacle-next-page) t))
+    (should (progn (orgacle-previous-page) t))
+    (should (progn (orgacle-jump-to-page 5) t))
+    (should (= 0 orgacle-page-number))))
+
+(ert-deftest orgacle-test-refresh-rebuilds-the-slide-vector ()
+  "Editing the outline during a presentation and refreshing keeps
+navigation honest: no ORGACLE_HIDE heading is ever the current
+heading afterwards, and the slide count matches the edited outline,
+not a stale snapshot from before the edit."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-next-page)
+    (should (equal "Second slide" (org-entry-get nil "ITEM")))
+    ;; delete "First slide", including its subheading, entirely --
+    ;; simulates an edit made during the presentation.  `widen' first:
+    ;; `orgacle-next-page' narrowed to "Second slide", which is after
+    ;; "First slide" in the buffer, so it is outside the accessible
+    ;; region right now.
+    (widen)
+    (goto-char (point-min))
+    (re-search-forward "^\\* First slide")
+    (org-back-to-heading)
+    (let ((beg (point)))
+      (org-end-of-subtree t t)
+      (delete-region beg (point)))
+    ;; point is wherever the deletion left it; go back to the heading
+    ;; the presenter was actually looking at before refreshing
+    (goto-char (point-min))
+    (re-search-forward "^\\* Second slide")
+    (orgacle-refresh)
+    (should (= 2 (length orgacle--slides)))
+    (should (= 1 orgacle-page-number))
+    (should (equal "Second slide" (org-entry-get nil "ITEM")))
+    ;; walk the whole, refreshed deck: no ORGACLE_HIDE heading is ever
+    ;; the current heading
+    (orgacle-top)
+    (should (equal "Second slide" (org-entry-get nil "ITEM")))
+    (should-not (org-entry-get nil "ORGACLE_HIDE"))
+    (orgacle-next-page)
+    (should (equal "Third slide" (org-entry-get nil "ITEM")))
+    (should-not (org-entry-get nil "ORGACLE_HIDE"))))
+
 ;;; Session state
 
 (ert-deftest orgacle-test-user-state-round-trips ()

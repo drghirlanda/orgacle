@@ -175,8 +175,27 @@ zero, so no sequence of calls can produce a non-positive height, which
     (orgacle--link-preview-refresh)))
 
 (defun orgacle-refresh ()
-  "Delete the current slide's overlays and re-fontify it."
+  "Rebuild the slide vector, then delete overlays and re-fontify.
+Bound to r, g, and to the key that exits `orgacle-edit-text', and
+added to `org-babel-after-execute-hook' -- all points where the
+presenter may just have edited the outline, which can move, add,
+remove or hide a slide out from under `orgacle--slides' as it stood
+when the presentation started (or since the last refresh).  Without
+rebuilding here, a stale vector entry can go on pointing at a heading
+that no longer qualifies as a slide -- for example one just given an
+ORGACLE_HIDE property, or one whose marker collapsed onto a different
+heading because the slide it used to identify was deleted -- so later
+navigation would display it anyway, with no error to say so.
+Re-derives `orgacle--slide-index' from point via
+`orgacle--slide-index-at-point' rather than leaving it at its
+pre-refresh value, so the presenter stays on the slide they were
+actually looking at even when the edit changed how many slides come
+before it; `orgacle--sync-page-number' keeps `orgacle-page-number' in
+step with that, including the empty-deck case."
   (interactive)
+  (setq orgacle--slides (orgacle--build-slides))
+  (setq orgacle--slide-index (orgacle--slide-index-at-point))
+  (orgacle--sync-page-number)
   (orgacle-clean-overlays (point-min) (point-max))
   (orgacle-fontify))
 
