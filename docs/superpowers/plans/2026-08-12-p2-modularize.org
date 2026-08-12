@@ -67,7 +67,7 @@ rewrite, both P3; the =orgacle-migrate-*= minors, unscheduled.
 | File                 | Responsibility                                                                                                                        | Depends on |
 |----------------------+---------------------------------------------------------------------------------------------------------------------------------------+------------|
 | =orgacle-core.el=    | group, faces, defcustoms, session state, compat shims, declare-functions, overlay bookkeeping, frame and pointer, =orgacle-page-hook= | —          |
-| =orgacle-nav.el=     | frame level, mode line, page and subheading navigation                                                                                | core       |
+| =orgacle-nav.el=     | page and subheading navigation (the two =#+ORGACLE_*= keyword readers move to core in Task 5)                                         | core       |
 | =orgacle-fontify.el= | overlay fontification and hiding, font scaling, the slide-in effect                                                                   | core       |
 | =orgacle-src.el=     | source-block navigation, editing, execution flash, hide/show                                                                          | core       |
 | =orgacle-media.el=   | show-file and its auxiliary window, video, fringe indicators                                                                          | core       |
@@ -382,7 +382,25 @@ Run: =make test=
 Expected: FAIL — the first because nothing runs the hook, the second because
 the error propagates out of =orgacle-current-page=.
 
-- [ ] *Step 3: Run the hook, safely*
+- [ ] *Step 3: Move the two keyword readers into core*
+
+Added after Task 3, whose review found a cross-module reference no task owned.
+=orgacle-media.el= calls =orgacle-get-mode-line= to set the mode line of the
+auxiliary window, and that function lives in =orgacle-nav.el=. The rule is that
+no feature module may reach into a sibling, so media declares it — but nothing
+in the plan removed that declaration, which would have left the phase with a
+permanent seam of exactly the kind it exists to close.
+
+Both =orgacle-get-frame-level= and =orgacle-get-mode-line= read =#+ORGACLE_*=
+keywords out of the buffer and fall back to a defcustom. That is configuration
+reading, not navigation, and it belongs beside the defcustoms they fall back
+to. Move both from =orgacle-nav.el= to =orgacle-core.el=, verbatim, and delete
+the =orgacle-get-mode-line= declaration from =orgacle-media.el=.
+
+Afterwards no module should declare a function belonging to another Orgacle
+module except the four the page hook is about to retire.
+
+- [ ] *Step 4: Run the hook, safely*
 
 In =orgacle-core.el=, add the runner. Every member is insulated:
 
@@ -403,7 +421,7 @@ In =orgacle-nav.el=, replace the four hard-coded calls at the end of
 =orgacle-current-page= with =(orgacle--run-page-hook)=, and delete the
 temporary =declare-function= forms Tasks 2 and 3 left there.
 
-- [ ] *Step 4: Have each module join the hook at load time*
+- [ ] *Step 5: Have each module join the hook at load time*
 
 At the end of each module, after its definitions:
 
@@ -424,12 +442,12 @@ register in an order that reproduces today's sequence: file first, then
 slide-in, then indicators, then notes. Say in your report which you chose and
 why the resulting order matches the old behaviour.
 
-- [ ] *Step 5: Run the gates*
+- [ ] *Step 6: Run the gates*
 
 Expected: exit 0, 42 tests. Both new tests pass, and the forty existing ones
 still do — several of them display slides, so they exercise the new path.
 
-- [ ] *Step 6: Commit*
+- [ ] *Step 7: Commit*
 
 * Task 6: One place for session state
 
