@@ -68,6 +68,17 @@
 ;; This declaration only quiets the byte-compiler.
 (declare-function flyspell-mode-off "flyspell" ())
 
+;; `x-pointer-shape' and `x-sensitive-text-pointer-shape' exist only on
+;; X11 builds, where term/x-win.el defines them; see orgacle-core.el,
+;; which declares them for its own use.  A value-less `defvar' only
+;; informs the byte-compiler within the file it appears in -- it is not
+;; a real, session-wide declaration the way a `defvar' with a value is
+;; -- so `orgacle-quit', which sets both, needs its own copy here too.
+;; The `boundp' guard at the call site is what decides anything at
+;; runtime.
+(defvar x-pointer-shape)
+(defvar x-sensitive-text-pointer-shape)
+
 ;; functions
 
 (defun orgacle-quit ()

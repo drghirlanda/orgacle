@@ -38,9 +38,14 @@
       (symbol-value 'org-link-preview-overlays)
     (with-no-warnings org-inline-image-overlays)))
 
-;; These exist only on X11 builds, where term/x-win.el defines them.  The
-;; bare declarations keep the byte-compiler quiet on other builds; the
-;; `boundp' guards at each use site are what decide anything at runtime.
+;; These exist only on X11 builds, where term/x-win.el defines them.  A
+;; value-less `defvar' only quiets the byte-compiler within the file it
+;; appears in -- unlike a `defvar' with a value, it has no effect at
+;; load time and does not carry to a file that merely requires this
+;; one -- so any other file that sets one of these needs its own copy
+;; of the relevant line (see orgacle.el, which sets two of the four).
+;; The `boundp' guards at each use site are what decide anything at
+;; runtime.
 (defvar x-pointer-dot)
 (defvar x-pointer-shape)
 (defvar x-pointer-invisible)
