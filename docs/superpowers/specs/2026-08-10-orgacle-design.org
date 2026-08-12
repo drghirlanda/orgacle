@@ -380,32 +380,47 @@ from =epresent= to =orgacle=. Both are confirmed before P1 begins.
 
 *Exit:* no =epresent= string outside the Commentary's origin note; tests green.
 
-*Status: COMPLETE* (2026-08-12), with one gap noted below. =make clean && make
-all= exits 0 (38 tests, up from P0's 32), and CI is green on Emacs 29.4, 30.2
-and snapshot
+*Status: COMPLETE* (2026-08-12). =make clean && make all= exits 0, and CI has
+been green on Emacs 29.4, 30.2 and snapshot
 (https://github.com/drghirlanda/orgacle/actions/runs/31623164306).
 =orgacle-migrate-buffer= and =orgacle-migrate-file= ship with tests and
 =test/fixtures/legacy.org=; a manual round-trip against a copy of
 =sub-level.org= (real =ORGACLE_FRAME_LEVEL= property, reverted with =sed= and
 migrated back in batch) reproduced the committed file exactly.
 
-Two things differed from the plan:
+The two gaps originally recorded here are both closed:
 
-- =present.org= was not updated, contrary to this section's own second
-  paragraph and the file-structure table in the task plan. Its
-  =#+EPRESENT_FRAME_LEVEL= property was removed (not renamed) during the P0
-  baseline rewrite, so Task 2's property sweep found nothing there to convert;
-  its title (="Epresent: Presentations in Emacs"=) and the "Source code" demo
-  slide (=epresent-run=, =epresent-mode=, ="EPresent can only be used..."=)
-  still name the old package. =sub-level.org= was renamed correctly. Left for
-  the maintainer: decide whether the demo slide should show the new API or is
-  deliberately illustrating the old one.
-- The CI workflow's =push= trigger lists branches =[master, orgacle-rework]=,
-  a name left over from the P0 phase; it does not include =orgacle-rename=, so
-  pushing this branch did not auto-start a run. The green run cited above was
-  obtained with =gh workflow run ci.yml --ref orgacle-rename= (the workflow
-  already exposes =workflow_dispatch=). Worth adding the current branch name,
-  or just relying on the =pull_request= trigger once this merges to =master=.
+- =present.org= now names Orgacle throughout -- title, the "Source code" demo
+  slide (=orgacle-run=, =orgacle-mode=, ="Orgacle can only be used..."=) -- and
+  its example =#+RESULTS:= no longer hardcodes a path from a checkout that
+  does not exist.
+- The CI workflow's =push= trigger is filtered to =branches: [master]=;
+  =pull_request= covers feature branches (including same-repo ones, so the
+  three-Emacs matrix does not run twice per push), and =workflow_dispatch=
+  remains as a manual fallback for a branch with no open pull request.
+
+A final whole-branch review ahead of merge additionally found and fixed, all
+on this branch:
+
+- *Critical:* =orgacle-migrate-file= called =find-file-noselect=, which
+  returns an already-open buffer as-is, narrowing included. Migrating a file
+  open and narrowed in another buffer (e.g. via =org-narrow-to-subtree=, an
+  everyday Org action) converted only the accessible portion while reporting
+  the file fully migrated, silently leaving =EPRESENT_= properties on disk.
+  Fixed by widening inside =orgacle-migrate-file= before delegating to
+  =orgacle-migrate-buffer=, which correctly keeps respecting the caller's
+  restriction as a buffer command. Regression-tested.
+- =orgacle-migrate-buffer='s search ran under the buffer's default
+  case-insensitive =case-fold-search=, so prose mentioning lowercase
+  =epresent_...= was rewritten to uppercase =ORGACLE_...=. Fixed by binding
+  =case-fold-search= to nil around the search loop.
+- =orgacle-migrate-file= had no tests at all; two now cover it, including the
+  narrowing regression above.
+- The =Authors:= header was missing Phil Hagelberg and Puneeth Chaganti,
+  both credited in the Commentary's origin note; added.
+- The stale "works best in Emacs >= 24" sentence in the Commentary was
+  dropped (the floor is Emacs 29.1).
+- =README.org= now has a License section pointing at =COPYING=.
 
 ** P2 — Modularization and modernization
 
