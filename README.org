@@ -1,13 +1,25 @@
 #+TITLE: Orgacle
-#+AUTHOR: Eric Schulte, Stefano Ghirlanda
-
-[[https://melpa.org/#/orgacle][file:https://melpa.org/packages/orgacle-badge.svg]] (badge not currently up to date)
+#+AUTHOR: Stefano Ghirlanda
 
 /Presentation mode for Emacs Org-mode/
 
+Orgacle began as a fork of [[https://github.com/dakrone/epresent][epresent]], by Tom Tromey, Phil Hagelberg, Eric
+Schulte, Puneeth Chaganti and Lee Hinman, unmaintained since 2016.
+
 * Installation
 
-You can install =orgacle= from [[http://melpa.org][MELPA repository]].
+Orgacle is not on MELPA yet. Until it is, clone the repository and put it on
+your =load-path=:
+
+#+begin_src emacs-lisp
+  (add-to-list 'load-path "/path/to/orgacle")
+  (require 'orgacle)
+#+end_src
+
+It needs Emacs 29.1 or later and Org 9.6 or later, and nothing else. Two
+optional packages improve it if you already have them: =org-superstar=
+prettifies bullets, and =pdf-tools= lets a multi-page PDF be advanced beside a
+slide.
 
 ** Starting a presentation
 
@@ -52,19 +64,125 @@ so bind it yourself if you want it back:
 - Use =i= to split the window and load a file in the new window (see
   below).
 - Use =I= to show a video fullscreen (see below).
+- Use =N= and =P= to reveal subheadings one at a time (see [[The basics]])
 - Press =E= to edit the slide text in place, =C-c C-c= to stop editing
 - Press =+= and =-= to grow and shrink the font
+- Press =m= to hide the mouse pointer
+- Press =r= or =g= to re-render the slide, =R= to force a full redisplay
 - Quit with =q=
 
 * Manual
 
+Everything below is optional. A plain Org file with a few headings presents
+correctly with no properties, no keywords and no configuration; the features
+here are for when you want more than that.
+
 ** The basics
+
+Orgacle presents the buffer you are already in. Nothing is exported or
+converted: =M-x orgacle-run= takes the current Org buffer, opens a
+full-screen frame, and shows it a slide at a time.
+
+*** What becomes a slide
+
+By default every top-level heading is one slide. Change that per file with a
+keyword at the top of the buffer:
+
+#+begin_src org :eval no
+  ,#+ORGACLE_FRAME_LEVEL: 2
+#+end_src
+
+With that, each second-level heading is a slide and first-level headings group
+them. Text before the first heading is shown as a table of contents.
+
+Three kinds of subtree are treated specially:
+
+- A heading named =Title page= is skipped when navigating. Use it for notes
+  you want to read before you start.
+- A heading named =Speaker notes= is hidden from the slide and collected into
+  the notes buffer instead. See [[Speaker notes]].
+- Any heading with an =ORGACLE_HIDE= property is hidden from the slide.
+
+*** Navigating
+
+Once presenting, =n=, =f=, =SPC=, =→= and =PageDown= go forward; =p=, =b=,
+=←=, =PageUp= and =Backspace= go back. =t= or =1= returns to the first slide,
+and =v= asks for a slide number. =j= and =k= scroll within a slide that is
+taller than the screen. =q= ends the presentation and restores the Org buffer
+as it was.
+
+The mode line shows the slide number. Set =orgacle-mode-line= to nil to hide
+it, or to any mode-line construct to show something else; a single file can
+override it with =#+ORGACLE_MODE_LINE:=.
+
+*** Revealing a slide piece by piece
+
+Give a slide an =ORGACLE_STEPWISE= property and its subheadings stay folded;
+=N= reveals them one at a time and =P= steps back.
+
+#+begin_src org :eval no
+  ,* Three things
+    :PROPERTIES:
+    :ORGACLE_STEPWISE: t
+    :END:
+
+  ,** First
+  ,** Second
+  ,** Third
+#+end_src
+
+*** Size and appearance
+
+=orgacle-text-scale= (default 400) sets the base font height, and =+= and =-=
+adjust it during a presentation. TODO keywords, tags and property drawers are
+hidden by default — see =orgacle-hide-todos=, =orgacle-hide-tags= and
+=orgacle-hide-properties=. Bullets are prettified with =org-superstar= when
+that package is installed; set =orgacle-use-org-superstar= to nil if you would
+rather they were not. Orgacle works without =org-superstar= installed.
+
+*** Editing during a presentation
+
+=E= makes the slide editable in place, with the cursor visible; =C-c C-c=
+stops editing and refreshes. =r= or =g= re-renders the current slide, which is
+useful after changing something outside the presentation. =R= forces a full
+redisplay if the screen is left dirty by an external program.
 
 ** Inline images
 
+Images linked from the buffer are displayed inline, and are regenerated when a
+slide is shown, so an image produced by a code block appears as soon as the
+block runs.
+
+#+begin_src org :eval no
+  [[file:diagram.png]]
+#+end_src
+
+Use =#+attr_org: :width ...= to control the displayed size; Orgacle keeps
+=attr_org= lines out of the slide while honouring them.
+
+LaTeX fragments are rendered as images too, at a scale set by
+=orgacle-format-latex-scale= (default 4, chosen so formulas match the enlarged
+presentation font rather than the size they would be in an ordinary buffer).
+
 ** Code blocks
- 
-** Showing another file 
+
+Source blocks are shown with syntax highlighting and can be run in front of an
+audience.
+
+- =c= and =C= move between blocks on the slide, flashing the cursor so the
+  audience can see which one has focus.
+- =x= runs the block under point. Results appear on the slide, and the slide
+  re-renders automatically, so a block producing an image shows the image.
+- =e= opens the block in an ordinary Org source-editing buffer, with a normal
+  cursor. =C-c '= returns.
+- =s= hides or shows every block on the slide; =S= does the same for the block
+  under point. This is useful for showing a result first and the code that
+  produced it second.
+
+Set =orgacle-src-blocks-visible= to nil to have blocks start hidden on each
+slide, so =s= reveals them.
+
+** Showing another file
 
 It is sometimes useful to show an additional file. This could be done
 with the usual Emacs commands, but sometimes a more "polished" look is
@@ -79,7 +197,7 @@ non-nil value.
 
 Here is an example:
 
-#+begin_src org :eval none
+#+begin_src org :eval no
     * My slide
       :PROPERTIES:
       :ORGACLE_SHOW_FILE: myfigure.pdf
@@ -92,13 +210,117 @@ example, a PDF with multiple pages can be used to show more than one
 figure in a sequence.
 
 
+*** Videos
+
+=I= plays a video full screen, leaving the presentation frame and returning to
+it when the player exits. The filename comes from an =ORGACLE_SHOW_VIDEO=
+property, and an =ORGACLE_MUTE= property plays it silently:
+
+#+begin_src org :eval no
+  ,* A demonstration
+    :PROPERTIES:
+    :ORGACLE_SHOW_VIDEO: demo.mp4
+    :ORGACLE_MUTE: t
+    :END:
+#+end_src
+
+=orgacle-video-player= selects the player: =mplayer= (the default) or =vlc=.
+The player must be installed and on your =PATH=.
+
+*** Sizing and automatic display
+
+=ORGACLE_SHOW_SIZE= sets the size of the auxiliary window, in lines when the
+file is shown below and columns when it is shown beside. Without it the window
+is split evenly.
+
+=ORGACLE_SHOW_AUTO= shows the file as soon as the slide appears, rather than
+waiting for =i=.
+
+For PDFs and images the file is fitted to the window: to width when beside the
+slide, to height when below. With =pdf-tools= installed a multi-page PDF opens
+at page one and =i= advances it a page at a time without leaving the
+presentation, so a sequence of figures needs one property and one key.
+
 ** Indicators
+
+During a presentation the right fringe shows what the current slide can
+display, so you know what is available without remembering:
+
+- a *filled square* — the slide has an =ORGACLE_SHOW_FILE=, so =i= will show it
+- a *hollow square* — the slide has an =ORGACLE_SHOW_VIDEO=, so =I= will play it
+- a *right arrow* — the PDF beside the slide has more pages, so =i= advances it
+
+A slide whose file is shown automatically via =ORGACLE_SHOW_AUTO= gets no
+indicator, since there is nothing left to press. Set =orgacle-indicators= to
+nil to turn all of them off.
 
 ** Speaker notes
 
+Give any slide a subheading named exactly =Speaker notes= and its contents are
+kept off the slide and collected into a separate =*Orgacle Notes*= buffer,
+shown in its own frame when the presentation starts. Move that frame to a
+second screen and it follows along, showing the notes for the slide you are on.
+
+#+begin_src org :eval no
+  ,* What the data show
+    Sales rose in every region.
+
+  ,** Speaker notes
+     Do not read the numbers aloud; the audience can see them.
+     Mention the Chicago outlier only if someone asks.
+#+end_src
+
+Two details worth knowing:
+
+- The heading must be spelled =Speaker notes= for the notes to be *collected*.
+  Other capitalisations are still hidden from the slide, but their contents
+  will not reach the notes buffer.
+- Set =orgacle-speaker-notes= to nil to skip the notes frame entirely.
+
+=M-x orgacle-estimate-time= reports how long it would take to read all your
+speaker notes aloud, together with the word count, which is a reasonable proxy
+for how long the talk will run. It assumes 150 words per minute; change that
+with =orgacle-wpm=. It is not bound to a key, since you want it while writing
+rather than while presenting.
+
 ** Slide-in effect
 
+Slides can slide up into place instead of appearing at once. It is off by
+default:
+
+#+begin_src emacs-lisp :eval no
+  (setq orgacle-slide-in t)
+#+end_src
+
+Individual slides override the setting with an =ORGACLE_SLIDE_IN= property:
+=no=, =nil= or =off= turns the animation off for that slide, and any other
+value turns it on. So you can leave it off globally and animate one slide, or
+leave it on and exempt a slide that has to appear instantly.
+
+The heading stays where it is and the body rises into place beneath it. Three
+variables shape the movement: =orgacle-slide-in-lines= (how far the body
+travels, default 10), =orgacle-slide-in-duration= (how long the whole movement
+takes in seconds, default 0.25) and =orgacle-slide-in-pause= (a wait inserted
+just after it starts, default 1 second), which holds the heading alone on
+screen for a moment before the rest arrives.
+
 ** 'Laser pointer' effect
+
+During a presentation the mouse pointer becomes a dot, which reads as a laser
+pointer when you are pointing at something on a projector. Choose a different
+shape with =orgacle-x-pointer-shape=, which takes any of Emacs's =x-pointer-=
+constants.
+
+=m= hides the pointer when it is in the way. Note that in this version =m= only
+hides it — pressing =m= again does not bring it back, and moving the mouse
+does not either. Quitting the presentation restores your normal pointer.
+
+This is an X11 feature. On a Wayland, macOS or Windows build, and in a terminal,
+the pointer is left alone and =m= does nothing. Orgacle detects this and stays
+quiet rather than failing.
+
+Tooltips are suppressed during a presentation so a stray hover cannot pop
+something up on the projector; set =orgacle-tooltip-mode= to t if you want them.
 
 * Customization
 
