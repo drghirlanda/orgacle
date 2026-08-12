@@ -184,9 +184,36 @@ words of body."
       (should (epresent--slide-in-p)))))
 
 (ert-deftest epresent-test-font-commands-use-real-faces ()
-  "Growing and shrinking the font does not signal."
-  (should (progn (epresent-increase-font) t))
-  (should (progn (epresent-decrease-font) t)))
+  "Growing and shrinking the font changes every scalable face.
+Also, repeated presses of `epresent-decrease-font' -- which mixes
+absolute and relative face heights, see `epresent--scale-font' -- must
+never signal and must never drive a height to zero or below."
+  (let ((original (mapcar (lambda (face)
+                            (cons face (face-attribute face :height)))
+                          epresent-scalable-faces)))
+    (unwind-protect
+        (progn
+          ;; one press visibly changes every face
+          (epresent-increase-font)
+          (dolist (face epresent-scalable-faces)
+            (should-not (equal (face-attribute face :height)
+                               (cdr (assq face original)))))
+          (let ((after-grow (mapcar (lambda (face)
+                                     (cons face (face-attribute face :height)))
+                                   epresent-scalable-faces)))
+            ;; the opposite press visibly changes every face again
+            (epresent-decrease-font)
+            (dolist (face epresent-scalable-faces)
+              (should-not (equal (face-attribute face :height)
+                                 (cdr (assq face after-grow))))))
+          ;; repeated presses never signal and never reach zero or below
+          (dotimes (_ 10)
+            (should (progn (epresent-decrease-font) t)))
+          (dolist (face epresent-scalable-faces)
+            (should (> (face-attribute face :height) 0))))
+      ;; restore the faces so later tests see the defface heights
+      (dolist (pair original)
+        (set-face-attribute (car pair) nil :height (cdr pair))))))
 
 (ert-deftest epresent-test-export-includes-properties-by-default ()
   "The backend exports property drawers without being asked.
@@ -297,6 +324,19 @@ particular order."
   (let ((epresent-indicators nil))
     (should (equal '()
                    (epresent-test--indicators-on-slide "Slide with a file")))))
+
+;;; Fontification
+
+(ert-deftest epresent-test-fontify-creates-overlays ()
+  "`epresent-fontify' completes and overlays the buffer.
+This is a smoke test for the org-superstar gating and the inline-image
+substitutions in `epresent-fontify', not a characterization of every
+overlay it creates."
+  (epresent-test-with-fixture "plain.org"
+    (let ((epresent-overlays nil))
+      (epresent-fontify)
+      (should epresent-overlays)
+      (should (cl-some (lambda (ov) (overlay-get ov 'face)) epresent-overlays)))))
 
 (provide 'epresent-test)
 ;;; epresent-test.el ends here

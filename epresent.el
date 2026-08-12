@@ -85,8 +85,9 @@
     (with-no-warnings org-inline-image-overlays)))
 
 ;; `pdf-tools' and `image-mode' are optional; every call site below is
-;; already guarded by a `major-mode' check, so these declarations only
-;; quiet the byte-compiler.
+;; guarded by a `major-mode' check, except `flyspell-mode-off', which is
+;; guarded by `fboundp' instead.  These declarations only quiet the
+;; byte-compiler.
 (declare-function pdf-view-fit-height-to-window "pdf-view" ())
 (declare-function pdf-view-fit-width-to-window "pdf-view" ())
 (declare-function pdf-view-goto-page "pdf-view" (page &optional window))
@@ -168,9 +169,11 @@ show."
   :group 'epresent)
 
 (defcustom epresent-slide-in nil
-  "Whether to apply a slide-in effect when changing slides.
-If set globally, slide-in can be inhibited for a specific heading by
-setting the EPRESENT_SLIDE_IN property to \\='no\\='."
+  "Whether to apply a slide-in effect when changing slides, by default.
+A heading's EPRESENT_SLIDE_IN property overrides this default for that
+one slide: a value of \\='no\\=', \\='nil\\=' or \\='off\\=' turns the
+animation off, and any other value turns it on, regardless of this
+variable's setting.  See `epresent--slide-in-p'."
   :type 'boolean
   :group 'epresent)
 
@@ -282,7 +285,10 @@ Supported players are \"mplayer\" and \"vlc\"."
 
 (defvar epresent-mouse-visible t
   "Whether the mouse pointer is currently visible.
-Used by `epresent-toggle-mouse'.")
+`epresent-toggle-mouse' reads this, but nothing in this file ever sets
+it back to nil, so the toggle is currently one-way: it only ever hides
+the pointer.  P3 owns making this variable track the pointer's actual
+state.")
 
 (defvar epresent-frame-level 1)
 
@@ -582,9 +588,11 @@ than deleted.  With START and END both nil, every overlay in
   (when (string= "EPresent" (frame-parameter nil 'title))
     (delete-frame (selected-frame)))
   (when epresent--org-file
-   (kill-buffer (get-file-buffer epresent--org-file))
-      (when (file-exists-p epresent--org-file)
-        (delete-file epresent--org-file)))
+    (let ((buf (get-file-buffer epresent--org-file)))
+      (when buf (kill-buffer buf)))
+    (when (file-exists-p epresent--org-file)
+      (delete-file epresent--org-file))
+    (setq epresent--org-file nil))
   (when epresent--org-buffer
     (set-buffer epresent--org-buffer))
   (org-mode)
@@ -612,21 +620,46 @@ than deleted.  With START and END both nil, every overlay in
     epresent-author-face epresent-bullet-face)
   "Faces whose height `epresent-increase-font' and its opposite change.")
 
-(defun epresent--scale-font (delta)
-  "Add DELTA to the height of every face in `epresent-scalable-faces'."
+(defconst epresent-font-step 10
+  "Amount `epresent--scale-font' adds to or subtracts from an absolute height.
+Applies to a face in `epresent-scalable-faces' whose current :height is
+an integer, i.e. an absolute size in 1/10 pt, such as
+`epresent-title-face'.")
+
+(defconst epresent-font-factor 1.1
+  "Factor `epresent--scale-font' multiplies or divides a relative height by.
+Applies to a face in `epresent-scalable-faces' whose current :height is
+a float, i.e. a multiplier of the frame's default height, such as
+`epresent-author-face'.")
+
+(defun epresent--scale-font (grow)
+  "Scale the height of every face in `epresent-scalable-faces'.
+With GROW non-nil the faces get larger, otherwise smaller.
+
+`epresent-scalable-faces' mixes faces whose :height is an absolute
+integer with faces whose :height is a relative float multiplier.  An
+absolute height is stepped by `epresent-font-step'; a relative height
+is scaled by `epresent-font-factor'.  Either kind is clamped above
+zero, so no sequence of calls can produce a non-positive height, which
+`set-face-attribute' rejects."
   (dolist (face epresent-scalable-faces)
-    (set-face-attribute face nil
-                        :height (+ delta (face-attribute face :height)))))
+    (let ((height (face-attribute face :height)))
+      (set-face-attribute
+       face nil :height
+       (if (integerp height)
+           (max 1 (+ height (if grow epresent-font-step (- epresent-font-step))))
+         (max 0.1 (if grow (* height epresent-font-factor)
+                    (/ height epresent-font-factor))))))))
 
 (defun epresent-increase-font ()
   "Make the presentation font one step larger."
   (interactive)
-  (epresent--scale-font 1))
+  (epresent--scale-font t))
 
 (defun epresent-decrease-font ()
   "Make the presentation font one step smaller."
   (interactive)
-  (epresent--scale-font -1))
+  (epresent--scale-font nil))
 
 (defun epresent-fontify ()
   "Overlay additional presentation faces to Org-mode."
@@ -823,10 +856,13 @@ After the file is displayed and fit, focus returns to the EPresent
 window, and changing slides deletes the auxiliary window showing the
 file.  The file's buffer is refreshed every time it is shown."
   (interactive)
+  ;; if FILENAME is not set, look at the property; do this, and error
+  ;; out if neither is set, before touching the window layout
+  (unless filename
+    (setq filename (org-entry-get nil "EPRESENT_SHOW_FILE")))
+  (unless filename
+    (user-error "No file to show: set the EPRESENT_SHOW_FILE property"))
   (delete-other-windows)
-  ;; if any of the arguments is not set, look at properties:
-  (if (not filename)
-      (setq filename (org-entry-get nil "EPRESENT_SHOW_FILE")))
   ;; remove [[ ]] in case they are there
   (setq filename (replace-regexp-in-string "^\\[\\[" "" filename))
   (setq filename (replace-regexp-in-string "\\]\\]$" "" filename))
@@ -916,16 +952,20 @@ player is chosen with `epresent-video-player'."
   (interactive)
   (unless filename
     (setq filename (org-entry-get nil "EPRESENT_SHOW_VIDEO")))
-  (unless (and filename (file-exists-p filename))
+  (unless filename
+    (user-error "No video to show: set the EPRESENT_SHOW_VIDEO property"))
+  (unless (file-exists-p filename)
     (user-error "Cannot open %s" filename))
   (unless mute
     (setq mute (org-entry-get nil "EPRESENT_MUTE")))
   (let ((command
          (cond
           ((string= epresent-video-player "vlc")
-           (concat "cvlc -f --no-osd " (if mute "--no-audio " "") filename))
+           (concat "cvlc -f --no-osd " (if mute "--no-audio " "")
+                   (shell-quote-argument filename)))
           ((string= epresent-video-player "mplayer")
-           (concat "mplayer -fs " (if mute "volume=-200dB " "") filename))
+           (concat "mplayer -fs " (if mute "volume=-200dB " "")
+                   (shell-quote-argument filename)))
           (t
            (user-error "Unsupported video player: %s"
                        epresent-video-player)))))
