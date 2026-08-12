@@ -435,6 +435,51 @@ The obsolete-API replacement, the =org-link-preview-*= shim and the
 
 *Exit:* each file byte-compiles standalone; tests green.
 
+*Status: COMPLETE* (2026-08-12). =make clean && make all= exits 0, and CI is
+green on Emacs 29.4, 30.2 and snapshot
+(https://github.com/drghirlanda/orgacle/actions/runs/31646009314). The
+1371-line =orgacle.el= of 2026-08-12 became eight files totalling 1686 lines:
+=orgacle-core.el= 434 (the leaf: customization surface, session state,
+compatibility shims), =orgacle-nav.el= 136, =orgacle-fontify.el= 192,
+=orgacle-src.el= 93, =orgacle-media.el= 248, =orgacle-notes.el= 108,
+=ox-orgacle.el= 118 (loads standalone, no =orgacle-core= dependency), and
+=orgacle.el= itself down to 357 (mode, keymaps, =orgacle-quit=, =orgacle-run=,
+migration commands). Every feature module requires only =orgacle-core=, never
+a sibling; =orgacle-page-hook= replaced the sideways calls
+=orgacle-current-page= used to make into every subsystem. The suite grew from
+40 tests (the P1 baseline) to 48.
+
+=orgacle--session= did not ship under that name: the equivalent is
+=orgacle-saved-variables=, a =defconst= list of the Org-mode variables the mode
+changes while presenting, read by =orgacle--save-user-state= and
+=orgacle--restore-user-state=. It closed a real bug found along the way --
+=orgacle-mode= set =org-fontify-quote-and-verse-blocks= and never restored it,
+so quitting a presentation left it permanently changed in the user's Emacs.
+=orgacle-quit= is now idempotent (calling it twice signals nothing), and
+=orgacle-mode= no longer crashes on a byte-compiled build whose
+=standard-display-table= has never been created -- both found and fixed
+during the phase, neither anticipated by the plan.
+
+=pdf-tools= and =image-mode= now degrade at runtime instead of assuming
+presence: a PDF opens unfitted with a one-time message when =pdf-tools= is
+absent, rather than however Emacs happens to display it. The video player is
+resolved with =executable-find= before the frame ever leaves full screen, so
+an unsupported player name or a missing binary is reported as a =user-error=
+instead of leaving the presentation stuck.
+
+This task's own verification found and fixed a defect the phase had carried
+since Task 1: =orgacle.el='s =orgacle-quit= sets two X11 pointer-shape
+variables that only =orgacle-core.el= declared (with a value-less =defvar=,
+which -- unlike one with a value -- only informs the byte-compiler within the
+file it appears in, not files that merely require it). Every local build
+throughout Tasks 1-7 ran on an X11-capable Emacs, where these variables are
+already special before any of this package's code runs, so the missing
+declaration was invisible locally; =orgacle-modules= had also never been
+pushed before this task, so CI -- a headless build, where nothing pre-declares
+them -- never ran against this branch until now and caught it on the first
+try. Fixed by redeclaring the two variables =orgacle.el= actually sets, the
+same pattern already used for =flyspell-mode-off=.
+
 ** P3 — Slide model and robustness
 
 Build the slide vector; rewrite navigation as index arithmetic; O(1) jump.
