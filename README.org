@@ -111,3 +111,7 @@ orgacle=.
 Here is a screenshot of Orgacle:
 
 [[http://i.imgur.com/y2nQIZV.png][file:http://i.imgur.com/y2nQIZV.png]]
+
+* License
+
+GPL-3-or-later. See [[file:COPYING][COPYING]].

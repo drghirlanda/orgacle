@@ -73,8 +73,8 @@ in-line image display
 3. When a code block is executed with =C-c C-c=, the page is refreshed
    to show the results.
    #+begin_src sh
-     echo "in $(pwd)"
+     echo "hello from a source block"
    #+end_src
 
 #+RESULTS:
-: in /home/stefano/Dropbox/Software/orgacle
+: hello from a source block
