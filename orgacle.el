@@ -1324,16 +1324,18 @@ the display."
 ;;;###autoload
 (defun orgacle-migrate-buffer (&optional beg end)
   "Convert EPRESENT_ names to ORGACLE_ between BEG and END.
-Without BEG and END, convert the whole buffer, or the region when one
-is active.  Return the number of substitutions, and report it in the
-echo area when called interactively.
+Without BEG and END, convert the accessible portion of the buffer, or
+the region when one is active -- so a narrowed buffer only has its
+visible part converted.  Return the number of substitutions, and
+report it in the echo area when called interactively.
 
 Presentations written before the ORGACLE_ rename use the older
 names; this brings them up to date."
   (interactive (if (use-region-p)
                    (list (region-beginning) (region-end))
                  (list nil nil)))
-  (let ((count 0))
+  (let ((count 0)
+        (case-fold-search nil))
     (save-excursion
       (save-restriction
         (when (and beg end) (narrow-to-region beg end))
@@ -1348,8 +1350,9 @@ names; this brings them up to date."
 ;;;###autoload
 (defun orgacle-migrate-file (file)
   "Convert EPRESENT_ names to ORGACLE_ in FILE, saving it.
-When FILE is already open with unsaved changes, ask first: saving it
-would write those changes too."
+The whole file is converted, regardless of any narrowing in an
+already-open buffer visiting it.  When FILE is already open with
+unsaved changes, ask first: saving it would write those changes too."
   (interactive "fMigrate file: ")
   (let ((visiting (find-buffer-visiting file)))
     (when (and visiting (buffer-modified-p visiting)
@@ -1358,7 +1361,7 @@ would write those changes too."
                              (file-name-nondirectory file)))))
       (user-error "Migration cancelled")))
   (with-current-buffer (find-file-noselect file)
-    (let ((count (orgacle-migrate-buffer)))
+    (let ((count (save-restriction (widen) (orgacle-migrate-buffer))))
       (save-buffer)
       (message "Converted %d name%s in %s"
                count (if (= count 1) "" "s") (file-name-nondirectory file))

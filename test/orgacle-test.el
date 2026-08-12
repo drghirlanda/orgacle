@@ -381,5 +381,58 @@ overlay it creates."
     (should (string-match-p "^:ORGACLE_SHOW_FILE:" (buffer-string)))
     (should (string-match-p "^#\\+EPRESENT_FRAME_LEVEL:" (buffer-string)))))
 
+(defun orgacle-test--migrate-file-fixture-copy ()
+  "Copy the legacy fixture into a fresh temp file and return its name.
+The caller is responsible for deleting the file and killing any buffer
+left visiting it."
+  (let ((temp (make-temp-file "orgacle-test-migrate" nil ".org")))
+    (copy-file (expand-file-name "legacy.org" orgacle-test-fixture-directory)
+               temp t)
+    temp))
+
+(defmacro orgacle-test-with-migrate-file-fixture (file-var &rest body)
+  "Bind FILE-VAR to a temp copy of legacy.org and evaluate BODY.
+Deletes the temp file and kills any buffer left visiting it
+afterwards, even if BODY signals."
+  (declare (indent 1) (debug (symbolp body)))
+  `(let ((,file-var (orgacle-test--migrate-file-fixture-copy)))
+     (unwind-protect
+         (progn ,@body)
+       (let ((buf (find-buffer-visiting ,file-var)))
+         (when buf (kill-buffer buf)))
+       (delete-file ,file-var))))
+
+(ert-deftest orgacle-test-migrate-file-converts-file-on-disk ()
+  "Migrating a file rewrites its contents on disk, not just in memory."
+  (orgacle-test-with-migrate-file-fixture file
+    (should (equal 4 (orgacle-migrate-file file)))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (should-not (string-match-p "EPRESENT_" (buffer-string)))
+      (should (string-match-p "^:ORGACLE_SHOW_FILE: figure\\.pdf$"
+                               (buffer-string))))))
+
+(ert-deftest orgacle-test-migrate-file-widens-a-narrowed-open-buffer ()
+  "Migrating a file converts the whole file, even when a buffer already
+visiting it is narrowed to less than the whole file.
+
+Regression test: `find-file-noselect' returns an already-open buffer
+as-is, narrowing and all.  Migrating through a narrowed buffer used to
+convert only the accessible portion while reporting the file fully
+migrated, leaving EPRESENT_ names on disk outside the narrowed region."
+  (orgacle-test-with-migrate-file-fixture file
+    (find-file file)
+    (goto-char (point-min))
+    (re-search-forward "^\\* Old slide")
+    (org-narrow-to-subtree)
+    (should (buffer-narrowed-p))
+    ;; the frame-level keyword sits before the narrowed subtree
+    (should-not (string-match-p "EPRESENT_FRAME_LEVEL"
+                                 (buffer-substring (point-min) (point-max))))
+    (orgacle-migrate-file file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (should-not (string-match-p "EPRESENT_" (buffer-string))))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
