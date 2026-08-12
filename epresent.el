@@ -1,15 +1,19 @@
-;;; epresent.el --- Simple presentation mode for Emacs Org-mode  -*- lexical-binding: t; -*-
+;;; epresent.el --- Present Org-mode files as slide shows  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2008 Tom Tromey <tromey@redhat.com>
 ;;               2010 Eric Schulte <schulte.eric@gmail.com>
 ;;               2020 Stefano Ghirlanda <drghirlanda@gmail.com>
 
-;; Authors: Tom Tromey <tromey@redhat.com>, Eric Schulte <schulte.eric@gmail.com>, Lee Hinman <lee@writequit.org>, Stefano Ghirlanda <drghirlanda@gmail.com>
-;; URL: https://github.com/dakrone/epresent
+;; Authors: Tom Tromey <tromey@redhat.com>
+;;          Eric Schulte <schulte.eric@gmail.com>
+;;          Lee Hinman <lee@writequit.org>
+;;          Stefano Ghirlanda <drghirlanda@gmail.com>
+;; Maintainer: Stefano Ghirlanda <drghirlanda@gmail.com>
+;; URL: https://github.com/drghirlanda/epresent
 ;; Created: 12 Jun 2008
 ;; Version: 1.5.0
-;; Keywords: gui
-;; Package-Requires: ((org "8") (cl-lib "0.5"))
+;; Keywords: outlines, hypermedia, multimedia
+;; Package-Requires: ((emacs "29.1") (org "9.6"))
 
 ;; This file is not (yet) part of GNU Emacs.
 ;; However, it is distributed under the same license.
@@ -307,8 +311,7 @@ players are mplayer and vlc."
 					(right-fringe . 40)
 					(right-divider-width . 0)
                                         (cursor-type . nil)
-					(internal-border-width . 75)
-                                        ))))
+					(internal-border-width . 75)))))
   (raise-frame epresent--frame)
   (select-frame-set-input-focus epresent--frame)
   ;; set fringe background to same as frame background 
@@ -391,8 +394,7 @@ players are mplayer and vlc."
 	(epresent-show-file-auto)
 	(epresent-slide-in-effect)
 	(epresent-show-indicators-maybe)
-	(epresent-position-notes)
-	)
+	(epresent-position-notes))
     ;; before first headline -- fold up subtrees as TOC
     (org-cycle '(4)))
   ; this is sometimes useful:
@@ -569,8 +571,7 @@ SKIP has the same meaning as in `epresent-next-page'."
   (when epresent--org-file
    (kill-buffer (get-file-buffer epresent--org-file))
       (when (file-exists-p epresent--org-file)
-        (delete-file epresent--org-file))
-    )
+        (delete-file epresent--org-file)))
   (when epresent--org-buffer
     (set-buffer epresent--org-buffer))
   (org-mode)
@@ -705,8 +706,7 @@ SKIP has the same meaning as in `epresent-next-page'."
 (defun epresent-refresh ()
   (interactive)
   (epresent-clean-overlays (point-min) (point-max))
-  (epresent-fontify)
-  )
+  (epresent-fontify))
 
 (defun epresent-setup-src-edit ()
   (setq cursor-type 'box))
@@ -1002,16 +1002,16 @@ EPRESENT_SHOW_PAGES."
   '((:with-properties nil "prop" t))
   :menu-entry
   '(?E "EPresent to LaTeX"
-       ((?L "As LaTeX buffer" org-epresent-export-as-latex)
-	(?l "As LaTeX file" org-epresent-export-to-latex)
-	(?p "As PDF file" org-epresent-export-to-pdf)
+       ((?L "As LaTeX buffer" epresent-export-as-latex)
+	(?l "As LaTeX file" epresent-export-to-latex)
+	(?p "As PDF file" epresent-export-to-pdf)
 	(?o "As PDF file and open"
 	    (lambda (a s v b)
-	      (if a (org-epresent-export-to-pdf t s v b)
-		(org-open-file (org-epresent-export-to-pdf nil s v b))))))))
+	      (if a (epresent-export-to-pdf t s v b)
+		(org-open-file (epresent-export-to-pdf nil s v b))))))))
 
 ;;;###autoload
-(defun org-epresent-export-as-latex
+(defun epresent-export-as-latex
   (&optional async subtreep visible-only body-only ext-plist)
   "Export current EPresent buffer ro a latex buffer."
   (interactive)
@@ -1019,7 +1019,7 @@ EPRESENT_SHOW_PAGES."
     async subtreep visible-only body-only ext-plist (lambda () (LaTeX-mode))))
 
 ;;;###autoload
-(defun org-epresent-export-to-latex
+(defun epresent-export-to-latex
   (&optional async subtreep visible-only body-only ext-plist)
   "Export current buffer to a LaTeX file."
   (interactive)
@@ -1028,7 +1028,7 @@ EPRESENT_SHOW_PAGES."
       async subtreep visible-only body-only ext-plist)))
 
 ;;;###autoload
-(defun org-epresent-export-to-pdf
+(defun epresent-export-to-pdf
   (&optional async subtreep visible-only body-only ext-plist)
   "Export current EPresent buffer to LaTeX then process through
 to PDF."
@@ -1167,8 +1167,7 @@ Does nothing on a build without X11 pointer support."
 		     (when (or
 			    (org-entry-get nil "EPRESENT_HIDE")
 			    (string= (downcase (org-entry-get nil "ITEM")) "speaker notes")
-			    (string= (downcase (org-entry-get nil "ITEM")) "title page")
-			    )
+			    (string= (downcase (org-entry-get nil "ITEM")) "title page"))
 		       (org-mark-subtree)
 		       ;; we make things insvisile only until mark-1
 		       ;; to leave a newline visible, as a separator
