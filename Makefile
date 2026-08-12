@@ -1,6 +1,6 @@
 EMACS ?= emacs
 BATCH  = $(EMACS) -Q --batch -l test/init.el
-EL     = epresent.el
+EL     = orgacle.el
 
 .PHONY: all deps compile checkdoc lint test clean
 
@@ -22,7 +22,7 @@ lint:
 	         -f package-lint-batch-and-exit $(EL)
 
 test:
-	$(BATCH) -l test/epresent-test.el -f ert-run-tests-batch-and-exit
+	$(BATCH) -l test/orgacle-test.el -f ert-run-tests-batch-and-exit
 
 clean:
 	rm -f *.elc
