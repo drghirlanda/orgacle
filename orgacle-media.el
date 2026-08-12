@@ -15,13 +15,6 @@
 (require 'org)
 (require 'orgacle-core)
 
-;; `orgacle-show-file' calls `orgacle-get-mode-line', which lives in
-;; orgacle-nav.el.  This file deliberately does not require
-;; orgacle-nav, to avoid a sibling-module dependency (see P2's
-;; modularization plan); the declaration below only quiets the
-;; byte-compiler.
-(declare-function orgacle-get-mode-line "orgacle-nav" ())
-
 ;; `pdf-tools' and `image-mode' are optional; every call site below is
 ;; guarded by a `major-mode' check.  These declarations only quiet the
 ;; byte-compiler.
@@ -214,6 +207,20 @@ player is chosen with `orgacle-video-player'."
     (delete-other-windows)
     (set-frame-parameter nil 'fullscreen 'fullboth)
     (redraw-display)))
+
+;; Join `orgacle-page-hook' at load time, reproducing the order
+;; `orgacle-current-page' used to call these functions in: file, then
+;; slide-in (added by orgacle-fontify.el, required before this file),
+;; then indicators, then notes (added by orgacle-notes.el, required
+;; after this file).  `add-hook' prepends by default, so a plain call
+;; here jumps `orgacle-show-file-auto' ahead of the already-registered
+;; `orgacle-slide-in-effect'; APPEND is then passed non-nil so
+;; `orgacle-show-indicators-maybe' joins after it instead of also
+;; jumping to the front.  Getting file-before-indicators right matters:
+;; `orgacle-show-file' calls `orgacle-clean-fringe-overlays', so
+;; running the indicators first would have them erased.
+(add-hook 'orgacle-page-hook #'orgacle-show-file-auto)
+(add-hook 'orgacle-page-hook #'orgacle-show-indicators-maybe t)
 
 (provide 'orgacle-media)
 ;;; orgacle-media.el ends here

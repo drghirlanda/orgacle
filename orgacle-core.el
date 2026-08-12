@@ -270,6 +270,30 @@ See `orgacle-show-file'.")
 
 (defvar orgacle-show-buffer nil)
 
+(defun orgacle-get-frame-level ()
+  "Get the heading level to show as different frames."
+  (interactive)
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (if (re-search-forward
+           "^#\\+ORGACLE_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+          (string-to-number (match-string 1))
+        orgacle-frame-level))))
+
+(defun orgacle-get-mode-line ()
+  "Get the presentation-specific mode-line."
+  (interactive)
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (if (re-search-forward
+           "^#\\+ORGACLE_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+          (car (read-from-string (match-string 1)))
+        orgacle-mode-line))))
+
 (defun orgacle--get-frame ()
   "Create and set up the Orgacle frame."
   (unless (frame-live-p orgacle--frame)
@@ -340,6 +364,17 @@ Each feature module adds its own function here, so that displaying a
 slide does not have to know which subsystems exist.  Members run inside
 a `condition-case': a failure is logged and the remaining members still
 run, because nothing should be able to end a presentation mid-talk.")
+
+(defun orgacle--run-page-hook ()
+  "Run `orgacle-page-hook', surviving a member that signals.
+A failing member is reported in the echo area and logged, and the
+remaining members still run: nothing a single subsystem does should be
+able to end a presentation."
+  (dolist (fn orgacle-page-hook)
+    (condition-case err
+        (funcall fn)
+      (error
+       (message "Orgacle: %s failed: %s" fn (error-message-string err))))))
 
 (provide 'orgacle-core)
 ;;; orgacle-core.el ends here

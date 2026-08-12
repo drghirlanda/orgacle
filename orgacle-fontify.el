@@ -180,5 +180,13 @@ zero, so no sequence of calls can produce a non-positive height, which
   (orgacle-clean-overlays (point-min) (point-max))
   (orgacle-fontify))
 
+;; Joins `orgacle-page-hook' at load time.  orgacle.el requires this
+;; file before orgacle-media.el, so `orgacle-show-file-auto' is not
+;; registered yet: this call has nothing to order itself against, and
+;; it does not matter whether it prepends or appends.  See
+;; orgacle-media.el for how the rest of the sequence is kept in the
+;; order `orgacle-current-page' used to call these functions in.
+(add-hook 'orgacle-page-hook #'orgacle-slide-in-effect)
+
 (provide 'orgacle-fontify)
 ;;; orgacle-fontify.el ends here

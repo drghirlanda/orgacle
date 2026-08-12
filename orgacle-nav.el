@@ -13,43 +13,15 @@
 (require 'org)
 (require 'orgacle-core)
 
-;; TEMPORARY: `orgacle-current-page' calls into subsystems that do not
-;; yet live in a module this file requires -- most of them (still in
-;; orgacle.el) belong to src-block, media and notes handling that
-;; Task 2 does not touch, and `orgacle-slide-in-effect' moves to
-;; orgacle-fontify.el in this same task, which this file deliberately
-;; does not require, to avoid a sibling-module dependency cycle.
-;; Task 5 removes these declarations when it replaces the direct
-;; calls with the shared `orgacle-page-hook'.
+;; `orgacle-current-page' toggles source-block visibility directly,
+;; via a function that lives in orgacle-src.el.  This file
+;; deliberately does not require orgacle-src, to avoid a
+;; sibling-module dependency; the declaration below only quiets the
+;; byte-compiler.  Unlike the four subsystem calls Task 5 replaced
+;; with `orgacle-page-hook', this one is not hook material: it has to
+;; run inside the `org-fold-show-subtree' branch, before the hook's
+;; members see the slide, not after.
 (declare-function orgacle-toggle-hide-src-blocks "orgacle-src" (&optional arg))
-(declare-function orgacle-show-file-auto "orgacle-media" ())
-(declare-function orgacle-slide-in-effect "orgacle-fontify" ())
-(declare-function orgacle-show-indicators-maybe "orgacle-media" ())
-(declare-function orgacle-position-notes "orgacle-notes" ())
-
-(defun orgacle-get-frame-level ()
-  "Get the heading level to show as different frames."
-  (interactive)
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (if (re-search-forward
-           "^#\\+ORGACLE_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
-          (string-to-number (match-string 1))
-        orgacle-frame-level))))
-
-(defun orgacle-get-mode-line ()
-  "Get the presentation-specific mode-line."
-  (interactive)
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (if (re-search-forward
-           "^#\\+ORGACLE_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
-          (car (read-from-string (match-string 1)))
-        orgacle-mode-line))))
 
 (defun orgacle-goto-top-level ()
   "Go to the current top level heading containing point."
@@ -92,10 +64,7 @@ that skipping moves in the direction the user is already navigating."
 	  (let ((orgacle-src-block-toggle-state
 		 (if orgacle-src-blocks-visible :show :hide)))
 	    (orgacle-toggle-hide-src-blocks)))
-	(orgacle-show-file-auto)
-	(orgacle-slide-in-effect)
-	(orgacle-show-indicators-maybe)
-	(orgacle-position-notes))
+	(orgacle--run-page-hook))
     ;; before first headline -- fold up subtrees as TOC
     (org-cycle '(4)))
   ; this is sometimes useful:

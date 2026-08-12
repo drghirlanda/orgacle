@@ -435,5 +435,33 @@ migrated, leaving EPRESENT_ names on disk outside the narrowed region."
       (insert-file-contents file)
       (should-not (string-match-p "EPRESENT_" (buffer-string))))))
 
+;;; Page hook
+
+(ert-deftest orgacle-test-page-hook-runs-on-display ()
+  "Displaying a slide runs `orgacle-page-hook'."
+  (orgacle-test-with-fixture "plain.org"
+    (let* ((ran 0)
+           (orgacle-page-hook (list (lambda () (setq ran (1+ ran))))))
+      ;; `point-min' sits on the #+TITLE line, before the first
+      ;; headline, where `orgacle-current-page' only folds a TOC and
+      ;; never runs the hook; go to the first slide so this exercises
+      ;; the branch that actually displays one.
+      (goto-char (point-min))
+      (re-search-forward "^\\* First slide")
+      (orgacle-current-page)
+      (should (= ran 1)))))
+
+(ert-deftest orgacle-test-page-hook-survives-a-failing-member ()
+  "A member that signals does not stop the others or the presentation."
+  (orgacle-test-with-fixture "plain.org"
+    (let* ((ran nil)
+           (orgacle-page-hook
+            (list (lambda () (error "Deliberate failure"))
+                  (lambda () (setq ran t)))))
+      (goto-char (point-min))
+      (re-search-forward "^\\* First slide")
+      (should (progn (orgacle-current-page) t))
+      (should ran))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

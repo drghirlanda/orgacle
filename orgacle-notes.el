@@ -95,5 +95,14 @@ reading speed is `orgacle-wpm'."
     (message "Estimated speaking time in minutes: %s (%d words)"
              minutes words)))
 
+;; Joins `orgacle-page-hook' at load time, last, reproducing the order
+;; `orgacle-current-page' used to call these functions in.  This file
+;; is required last among the page-hook contributors, so APPEND is
+;; passed non-nil to append rather than prepend: prepending here would
+;; put the notes ahead of the file, slide-in and indicator handlers
+;; already registered, instead of after them.  See orgacle-media.el
+;; for the rest of the ordering.
+(add-hook 'orgacle-page-hook #'orgacle-position-notes t)
+
 (provide 'orgacle-notes)
 ;;; orgacle-notes.el ends here
