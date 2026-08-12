@@ -46,23 +46,6 @@
 (defvar x-pointer-invisible)
 (defvar x-sensitive-text-pointer-shape)
 
-;; `pdf-tools' and `image-mode' are optional; every call site below is
-;; guarded by a `major-mode' check, except `flyspell-mode-off', which is
-;; guarded by `fboundp' instead.  These declarations only quiet the
-;; byte-compiler.
-(declare-function pdf-view-fit-height-to-window "pdf-view" ())
-(declare-function pdf-view-fit-width-to-window "pdf-view" ())
-(declare-function pdf-view-goto-page "pdf-view" (page &optional window))
-(declare-function pdf-view-next-page "pdf-view" (&optional n))
-;; `pdf-view-current-page' is a macro, so it cannot be declared here and
-;; called from code compiled without pdf-tools loaded.  Its expansion is
-;; this built-in accessor, which is an ordinary function.
-(declare-function image-mode-window-get "image-mode" (prop &optional winprops))
-(declare-function pdf-cache-number-of-pages "pdf-cache" ())
-(declare-function image-transform-fit-to-height "image-mode" ())
-(declare-function image-transform-fit-to-width "image-mode" ())
-(declare-function flyspell-mode-off "flyspell" ())
-
 (defgroup orgacle nil
   "This is a presentation mode for Emacs."
   :group 'orgacle)
