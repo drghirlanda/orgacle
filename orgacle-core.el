@@ -361,20 +361,56 @@ than deleted.  With START and END both nil, every overlay in
 (defvar orgacle-page-hook nil
   "Hook run after a slide has been displayed and narrowed.
 Each feature module adds its own function here, so that displaying a
-slide does not have to know which subsystems exist.  Members run inside
-a `condition-case': a failure is logged and the remaining members still
-run, because nothing should be able to end a presentation mid-talk.")
+slide does not have to know which subsystems exist.  A member takes no
+arguments.  Order is significant: file-before-indicators is the
+invariant that matters, because `orgacle-show-file' clears the fringe
+overlays that `orgacle-show-indicators-maybe' draws, so running them
+the other way round loses the indicators; see the `add-hook' calls in
+orgacle-fontify.el, orgacle-media.el and orgacle-notes.el for how the
+full default order is kept.  Members run wrapped in
+`save-current-buffer', `save-selected-window' and a `condition-case':
+a member may freely change the current buffer or selected window (for
+example to visit a file in another window), but on both success and
+failure the next member sees the buffer and window this one started
+with; a failure is logged and does not stop the remaining members,
+because nothing should be able to end a presentation mid-talk.")
 
 (defun orgacle--run-page-hook ()
   "Run `orgacle-page-hook', surviving a member that signals.
-A failing member is reported in the echo area and logged, and the
-remaining members still run: nothing a single subsystem does should be
-able to end a presentation."
-  (dolist (fn orgacle-page-hook)
-    (condition-case err
-        (funcall fn)
-      (error
-       (message "Orgacle: %s failed: %s" fn (error-message-string err))))))
+Uses `run-hook-wrapped' rather than `dolist': a plain `dolist' over the
+hook variable mishandles the two other ways a hook value is normally
+allowed to look besides a flat list of global functions.  A
+buffer-local value added with the LOCAL argument of `add-hook' ends
+with a trailing sentinel meaning \"also run the global value\";
+`dolist' has no notion of that sentinel, so it tries to `funcall' it
+and the global members are never reached.  A hook whose
+value is a single function symbol, not a list, makes `dolist' signal
+`wrong-type-argument' while walking it, before the loop body's
+`condition-case' is even reached, so the error is not contained and
+escapes this function instead of being logged.  `run-hook-wrapped'
+is the standard primitive for exactly this shape of variable, and
+handles both cases correctly.
+
+Each member additionally runs inside `save-current-buffer' and
+`save-selected-window', so that a member which changes the buffer or
+selected window and then signals (for example `orgacle-show-file',
+which only re-selects the presentation window on its last line)
+cannot hand the wrong buffer or window to the members that run after
+it.  A failing member is reported in the echo area and logged; an
+anonymous function is named generically rather than `%s'-formatted,
+since that would print its whole byte-code object."
+  (run-hook-wrapped
+   'orgacle-page-hook
+   (lambda (fn)
+     (save-current-buffer
+       (save-selected-window
+         (condition-case err
+             (funcall fn)
+           (error
+            (message "Orgacle: %s failed: %s"
+                     (if (symbolp fn) fn "anonymous function")
+                     (error-message-string err))))))
+     nil)))
 
 (provide 'orgacle-core)
 ;;; orgacle-core.el ends here

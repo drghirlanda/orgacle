@@ -463,5 +463,19 @@ migrated, leaving EPRESENT_ names on disk outside the narrowed region."
       (should (progn (orgacle-current-page) t))
       (should ran))))
 
+(ert-deftest orgacle-test-page-hook-order-is-file-slide-in-indicators-notes ()
+  "The real, global `orgacle-page-hook' runs file, slide-in, indicators,
+then notes, in that order -- not merely some order the four `add-hook'
+calls happen to produce.  File-before-indicators is the part that is
+not cosmetic: `orgacle-show-file' calls `orgacle-clean-fringe-overlays',
+so if indicators ran first, `orgacle-show-file' would wipe the fringe
+overlays `orgacle-show-indicators-maybe' had just drawn.  The other new
+tests in this section let-bind `orgacle-page-hook' away to isolate the
+runner, so this is the only test that looks at the real, default
+value."
+  (should (equal '(orgacle-show-file-auto orgacle-slide-in-effect
+                    orgacle-show-indicators-maybe orgacle-position-notes)
+                 (default-value 'orgacle-page-hook))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
