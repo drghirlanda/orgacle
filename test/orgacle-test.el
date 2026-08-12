@@ -338,5 +338,46 @@ overlay it creates."
       (should orgacle-overlays)
       (should (cl-some (lambda (ov) (overlay-get ov 'face)) orgacle-overlays)))))
 
+;;; Migration
+
+(ert-deftest orgacle-test-migrate-renames-properties ()
+  "Drawer properties and buffer keywords are both converted."
+  (orgacle-test-with-fixture "legacy.org"
+    (orgacle-migrate-buffer)
+    (should (string-match-p "^:ORGACLE_SHOW_FILE: figure\\.pdf$" (buffer-string)))
+    (should (string-match-p "^#\\+ORGACLE_FRAME_LEVEL: 2$" (buffer-string)))))
+
+(ert-deftest orgacle-test-migrate-reports-a-count ()
+  "The number of substitutions is returned."
+  (orgacle-test-with-fixture "legacy.org"
+    ;; two drawer properties, one keyword, one prose mention
+    (should (equal 4 (orgacle-migrate-buffer)))))
+
+(ert-deftest orgacle-test-migrate-leaves-nothing-behind ()
+  "No EPRESENT_ name survives migration."
+  (orgacle-test-with-fixture "legacy.org"
+    (orgacle-migrate-buffer)
+    (should-not (string-match-p "EPRESENT_" (buffer-string)))))
+
+(ert-deftest orgacle-test-migrate-is-idempotent ()
+  "Running it twice changes nothing the second time."
+  (orgacle-test-with-fixture "legacy.org"
+    (orgacle-migrate-buffer)
+    (let ((once (buffer-string)))
+      (should (equal 0 (orgacle-migrate-buffer)))
+      (should (equal once (buffer-string))))))
+
+(ert-deftest orgacle-test-migrate-honours-a-region ()
+  "With a region active, only that region is converted."
+  (orgacle-test-with-fixture "legacy.org"
+    (goto-char (point-min))
+    (re-search-forward "^:PROPERTIES:$")
+    (let ((beg (match-beginning 0)))
+      (re-search-forward "^:END:$")
+      (orgacle-migrate-buffer beg (match-end 0)))
+    ;; the drawer converted, the keyword above it did not
+    (should (string-match-p "^:ORGACLE_SHOW_FILE:" (buffer-string)))
+    (should (string-match-p "^#\\+EPRESENT_FRAME_LEVEL:" (buffer-string)))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

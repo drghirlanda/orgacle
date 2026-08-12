@@ -1,23 +1,23 @@
-#+TITLE: Epresent
+#+TITLE: Orgacle
 #+AUTHOR: Eric Schulte, Stefano Ghirlanda
 
-[[https://melpa.org/#/epresent][file:https://melpa.org/packages/epresent-badge.svg]] (badge not currently up to date)
+[[https://melpa.org/#/orgacle][file:https://melpa.org/packages/orgacle-badge.svg]] (badge not currently up to date)
 
 /Presentation mode for Emacs Org-mode/
 
 * Installation
 
-You can install =epresent= from [[http://melpa.org][MELPA repository]].
+You can install =orgacle= from [[http://melpa.org][MELPA repository]].
 
 ** Starting a presentation
 
-Run =M-x epresent-run= in an Org buffer.  Earlier versions bound this to
+Run =M-x orgacle-run= in an Org buffer.  Earlier versions bound this to
 =F5= in every Org buffer; a package may not claim a user's function keys,
 so bind it yourself if you want it back:
 
 #+begin_src emacs-lisp
   (with-eval-after-load 'org
-    (define-key org-mode-map (kbd "<f5>") #'epresent-run))
+    (define-key org-mode-map (kbd "<f5>") #'orgacle-run))
 #+end_src
 
 * Breaking changes
@@ -25,13 +25,21 @@ so bind it yourself if you want it back:
 - =F5= no longer starts a presentation by itself. Bind it yourself if
   you want it back; see the snippet under "Starting a presentation"
   above.
-- =epresent-tooltip-mode= is now a boolean. Setting it to =0= used to
+- =orgacle-tooltip-mode= is now a boolean. Setting it to =0= used to
   disable tooltips; it now *enables* them, because =0= is non-nil in
   Emacs Lisp. Use =nil= to disable tooltips.
+- The package is now called =orgacle=. Every command, variable and face
+  is renamed from =epresent-...= to =orgacle-...=, and Org properties
+  from =EPRESENT_...= to =ORGACLE_...=.
+- Run =M-x orgacle-migrate-buffer= on an existing presentation to
+  convert its properties, or =M-x orgacle-migrate-file= on a file.
+- Settings in your init file need renaming by hand: =orgacle-migrate-buffer=
+  converts presentation documents, not Emacs configuration. A
+  =(setq epresent-slide-in t)= becomes =(setq orgacle-slide-in t)=.
 
 * Basic usage
 
-- Call =epresent-run= on an org-buffer.
+- Call =orgacle-run= on an org-buffer.
 - Press =t= or =1= to view the top level of the presentation
 - Navigate the presentation with =n/f=, =p/b=
 - Go to a specific page with =v <num> RET=
@@ -60,10 +68,10 @@ so bind it yourself if you want it back:
 
 It is sometimes useful to show an additional file. This could be done
 with the usual Emacs commands, but sometimes a more "polished" look is
-desirable in a presentation. Epresent supports splitting the window to
+desirable in a presentation. Orgacle supports splitting the window to
 show a file in a new buffer. This functionality is activated by the
 =i= key during the presentation, and it can be tested invoking =M-x
-epresent-show-file= outside of the presentation. The filename is set
+orgacle-show-file= outside of the presentation. The filename is set
 through the property =ORGACLE_SHOW_FILE= and the file is showed by default
 to the right of the presentation buffer. It can be shown under the
 presentation by setting the property =ORGACLE_SHOW_BELOW= to a
@@ -96,10 +104,10 @@ figure in a sequence.
 
 You can customize the variables described above and other affecting
 how the presentation looks using =M-x customize-group [enter]
-epresent=.
+orgacle=.
 
 * Screenshot
 
-Here is a screenshot of Epresent:
+Here is a screenshot of Orgacle:
 
 [[http://i.imgur.com/y2nQIZV.png][file:http://i.imgur.com/y2nQIZV.png]]

@@ -1,0 +1,10 @@
+#+TITLE: Legacy
+#+EPRESENT_FRAME_LEVEL: 2
+
+* Old slide
+:PROPERTIES:
+:EPRESENT_SHOW_FILE: figure.pdf
+:EPRESENT_SLIDE_IN: no
+:END:
+
+Body text mentioning EPRESENT_SHOW_FILE in prose.

@@ -11,7 +11,7 @@
 ;; Maintainer: Stefano Ghirlanda <drghirlanda@gmail.com>
 ;; URL: https://github.com/drghirlanda/orgacle
 ;; Created: 12 Jun 2008
-;; Version: 1.5.0
+;; Version: 2.0.0
 ;; Keywords: outlines, hypermedia, multimedia
 ;; Package-Requires: ((emacs "29.1") (org "9.6"))
 
@@ -45,6 +45,11 @@
 ;; presentation (configure `ORGACLE_FRAME_LEVEL' to change this
 ;; default).  Org-mode markup is used to nicely display the buffer's
 ;; contents.
+
+;; Orgacle began as a fork of epresent, by Tom Tromey, Phil Hagelberg,
+;; Eric Schulte, Puneeth Chaganti and Lee Hinman, which has been
+;; unmaintained since 2016.  Presentations written for the old package
+;; use EPRESENT_ property names; `orgacle-migrate-buffer' converts them.
 
 ;;; Code:
 (require 'org)
@@ -1312,6 +1317,43 @@ the display."
     ;; create speaker notes
     (when orgacle-speaker-notes (orgacle-make-notes-buffer))
     (run-hooks 'orgacle-start-presentation-hook)))
+
+;;; Migration
+
+;;;###autoload
+(defun orgacle-migrate-buffer (&optional beg end)
+  "Convert EPRESENT_ names to ORGACLE_ between BEG and END.
+Without BEG and END, convert the whole buffer, or the region when one
+is active.  Return the number of substitutions, and report it in the
+echo area when called interactively.
+
+Presentations written before the ORGACLE_ rename use the older
+names; this brings them up to date."
+  (interactive (if (use-region-p)
+                   (list (region-beginning) (region-end))
+                 (list nil nil)))
+  (let ((count 0))
+    (save-excursion
+      (save-restriction
+        (when (and beg end) (narrow-to-region beg end))
+        (goto-char (point-min))
+        (while (re-search-forward "EPRESENT_" nil t)
+          (replace-match "ORGACLE_" t t)
+          (setq count (1+ count)))))
+    (when (called-interactively-p 'interactive)
+      (message "Converted %d name%s" count (if (= count 1) "" "s")))
+    count))
+
+;;;###autoload
+(defun orgacle-migrate-file (file)
+  "Convert EPRESENT_ names to ORGACLE_ in FILE, saving it."
+  (interactive "fMigrate file: ")
+  (with-current-buffer (find-file-noselect file)
+    (let ((count (orgacle-migrate-buffer)))
+      (save-buffer)
+      (message "Converted %d name%s in %s"
+               count (if (= count 1) "" "s") (file-name-nondirectory file))
+      count)))
 
 (provide 'orgacle)
 ;;; orgacle.el ends here
