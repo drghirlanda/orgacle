@@ -1106,7 +1106,7 @@ Does nothing on a build without X11 pointer support."
     (define-key map "c" 'epresent-next-src-block)
     (define-key map "C" 'epresent-previous-src-block)
     (define-key map "e" 'org-edit-src-code)
-    (define-key map [f5] 'epresent-edit-text) ; Another [f5] exits edit mode.
+    (define-key map "E" 'epresent-edit-text)   ; C-c C-c exits edit mode
     (define-key map "x" 'org-babel-execute-src-block)
     (define-key map "r" 'epresent-refresh)
     (define-key map "R" 'redraw-display)
@@ -1182,19 +1182,20 @@ Does nothing on a build without X11 pointer support."
   (setq epresent-aux-window nil))
 
 (defvar epresent-edit-map (let ((map (copy-keymap org-mode-map)))
-                            (define-key map [f5] 'epresent-refresh)
+                            (define-key map (kbd "C-c C-c") 'epresent-refresh)
                             map)
-  "Local keymap for editing EPresent presentations.")
+  "Local keymap for editing an EPresent presentation.")
 
-(defun epresent-edit-text (&optional arg)
-  "Write in EPresent presentation."
-  (interactive "p")
+(defun epresent-edit-text ()
+  "Edit the presentation text in place.
+Press \\[epresent-refresh] to stop editing and refresh the display."
+  (interactive)
   (let ((prior-cursor-type (cdr (assoc 'cursor-type (frame-parameters)))))
     (set-frame-parameter nil 'cursor-type t)
     (use-local-map epresent-edit-map)
     (set-transient-map
      epresent-edit-map
-     (lambda () (not (equal [f5] (this-command-keys))))
+     (lambda () (not (equal (kbd "C-c C-c") (this-command-keys))))
      (lambda ()
        (use-local-map epresent-mode-map)
        (set-frame-parameter nil 'cursor-type prior-cursor-type)))))
@@ -1230,9 +1231,6 @@ Does nothing on a build without X11 pointer support."
     ;; create speaker notes
     (when epresent-speaker-notes (epresent-make-notes-buffer))
     (run-hooks 'epresent-start-presentation-hook)))
-
-(define-key org-mode-map [f5]  'epresent-run)
-(define-key org-mode-map [f12] 'epresent-run)
 
 (provide 'epresent)
 ;;; epresent.el ends here
