@@ -233,14 +233,40 @@ Supported players are \"mplayer\" and \"vlc\"."
 (defvar orgacle--org-file nil
   "Temporary Org-mode file used when a narrowed region.")
 
+(defconst orgacle-saved-variables
+  '(org-src-fontify-natively
+    org-hide-emphasis-markers
+    org-pretty-entities
+    org-fontify-quote-and-verse-blocks)
+  "Variables Orgacle changes while presenting and restores on quit.
+Adding one here is enough; both directions are handled by
+`orgacle--save-user-state' and `orgacle--restore-user-state'.")
+
+(defvar orgacle--saved-state nil
+  "Alist of (SYMBOL . VALUE) captured by `orgacle--save-user-state'.")
+
+(defun orgacle--save-user-state ()
+  "Record the current value of every variable in `orgacle-saved-variables'."
+  (setq orgacle--saved-state
+        (mapcar (lambda (sym) (cons sym (symbol-value sym)))
+                orgacle-saved-variables)))
+
+(defun orgacle--restore-user-state ()
+  "Put every variable saved by `orgacle--save-user-state' back.
+Does nothing when nothing has been saved, so it is safe to call even
+when no presentation is running."
+  (dolist (entry orgacle--saved-state)
+    (set (car entry) (cdr entry)))
+  (setq orgacle--saved-state nil))
+
 (defvar orgacle-overlays nil)
 (defvar orgacle-fringe-overlays nil)
 (defvar orgacle-aux-fringe-overlay nil)
-(defvar orgacle-inline-image-overlays nil)
-(defvar orgacle-src-fontify-natively nil)
-(defvar orgacle-hide-emphasis-markers nil)
-(defvar orgacle-outline-ellipsis nil)
-(defvar orgacle-pretty-entities nil)
+(defvar orgacle-outline-ellipsis nil
+  "The `selective-display' display-table slot, saved while presenting.
+This holds a display-table value, not an ordinary variable, so it is
+restored directly with `set-display-table-slot' rather than through
+`orgacle-saved-variables'.")
 (defvar orgacle-page-number 0)
 (defvar orgacle-user-x-pointer-shape nil)
 (defvar orgacle-user-x-sensitive-text-pointer-shape nil)

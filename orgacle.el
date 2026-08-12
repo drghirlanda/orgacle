@@ -84,50 +84,64 @@
 ;; functions
 
 (defun orgacle-quit ()
-  "Quit the current presentation."
+  "Quit the current presentation.
+Safe to call when no presentation is running, and safe to call twice:
+every step is guarded on the thing it acts on actually existing, and
+the user's Org-mode variables and display-table slot are restored in
+an `unwind-protect' cleanup so a failure earlier in this function
+still restores them."
   (interactive)
-  (run-hooks 'orgacle-stop-presentation-hook)
-  (org-clear-latex-preview)
-  ;; restore the user's Org-mode variables
-  (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
-  ;; The saved preview overlays are not restored: Org 9.8 replaced the
-  ;; variable that held them, and P3 rewrites this function around an
-  ;; explicit session struct.  Previews regenerate on the next refresh.
-  (setq org-src-fontify-natively orgacle-src-fontify-natively)
-  (setq org-hide-emphasis-markers orgacle-hide-emphasis-markers)
-  (set-display-table-slot standard-display-table
-                          'selective-display orgacle-outline-ellipsis)
-  (setq org-pretty-entities orgacle-pretty-entities)
-  (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh)
-  (when (string= "Orgacle" (frame-parameter nil 'title))
-    (delete-frame (selected-frame)))
-  (when orgacle--org-file
-    (let ((buf (get-file-buffer orgacle--org-file)))
-      (when buf (kill-buffer buf)))
-    (when (file-exists-p orgacle--org-file)
-      (delete-file orgacle--org-file))
-    (setq orgacle--org-file nil))
-  (when orgacle--org-buffer
-    (set-buffer orgacle--org-buffer))
-  (org-mode)
-  (if orgacle--org-restriction
-      (apply #'narrow-to-region orgacle--org-restriction)
-    (widen))
-  (hack-local-variables)
-  ;; delete all orgacle overlays
-  (orgacle-clean-overlays)
-  (orgacle-clean-fringe-overlays)
-  ;; reset mouse pointer shape and colour
-  (when (boundp 'x-pointer-shape)
-    (setq x-pointer-shape orgacle-user-x-pointer-shape)
-    (setq x-sensitive-text-pointer-shape
-          orgacle-user-x-sensitive-text-pointer-shape)
-    (setq void-text-area-pointer 'arrow)
-    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
-  ;; kill notes buffer and associated frame, if present
-  (when (bufferp orgacle-notes-buffer)
-    (delete-frame (window-frame (get-buffer-window orgacle-notes-buffer)))
-    (kill-buffer orgacle-notes-buffer)))
+  (unwind-protect
+      (progn
+        (run-hooks 'orgacle-stop-presentation-hook)
+        (org-clear-latex-preview)
+        (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
+        (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh)
+        (when (string= "Orgacle" (frame-parameter nil 'title))
+          (delete-frame (selected-frame)))
+        (when orgacle--org-file
+          (let ((buf (get-file-buffer orgacle--org-file)))
+            (when buf (kill-buffer buf)))
+          (when (file-exists-p orgacle--org-file)
+            (delete-file orgacle--org-file))
+          (setq orgacle--org-file nil))
+        (when orgacle--org-buffer
+          (set-buffer orgacle--org-buffer)
+          (org-mode)
+          (if orgacle--org-restriction
+              (apply #'narrow-to-region orgacle--org-restriction)
+            (widen))
+          (hack-local-variables)
+          (setq orgacle--org-buffer nil
+                orgacle--org-restriction nil))
+        ;; delete all orgacle overlays
+        (orgacle-clean-overlays)
+        (orgacle-clean-fringe-overlays)
+        ;; reset mouse pointer shape and colour
+        (when (boundp 'x-pointer-shape)
+          (setq x-pointer-shape orgacle-user-x-pointer-shape)
+          (setq x-sensitive-text-pointer-shape
+                orgacle-user-x-sensitive-text-pointer-shape)
+          (setq void-text-area-pointer 'arrow)
+          (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
+        ;; kill notes buffer and associated frame, if present
+        (when (bufferp orgacle-notes-buffer)
+          (let ((win (get-buffer-window orgacle-notes-buffer)))
+            (when win (delete-frame (window-frame win))))
+          (kill-buffer orgacle-notes-buffer)
+          (setq orgacle-notes-buffer nil)))
+    ;; restore the user's Org-mode variables, even if something above failed
+    (orgacle--restore-user-state)
+    ;; `standard-display-table' only exists once something has created
+    ;; it -- `orgacle-mode' does, when a presentation actually starts.
+    ;; Guard on that instead of unconditionally calling
+    ;; `set-display-table-slot': under byte-compilation, its first-ever
+    ;; call in a process evaluates a nil DISPLAY-TABLE argument before
+    ;; the autoloaded `disp-table.el' has a chance to auto-vivify the
+    ;; table, and signals `wrong-type-argument' instead.
+    (when (char-table-p standard-display-table)
+      (set-display-table-slot standard-display-table
+                              'selective-display orgacle-outline-ellipsis))))
 
 (defvar orgacle-mode-map
   (let ((map (make-keymap)))
@@ -187,16 +201,13 @@ Each frame-level heading becomes a slide.  Navigate with
 \\{orgacle-mode-map}"
   ;; make Org-mode be as pretty as possible
   (add-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
-  (setq orgacle-inline-image-overlays (orgacle--link-preview-overlays))
-  (setq orgacle-src-fontify-natively org-src-fontify-natively)
+  (orgacle--save-user-state)
   (setq org-src-fontify-natively t)
   (setq org-fontify-quote-and-verse-blocks t)
-  (setq orgacle-hide-emphasis-markers org-hide-emphasis-markers)
   (setq org-hide-emphasis-markers t)
   (setq orgacle-outline-ellipsis
         (display-table-slot standard-display-table 'selective-display))
   (set-display-table-slot standard-display-table 'selective-display [32])
-  (setq orgacle-pretty-entities org-pretty-entities)
   (setq org-pretty-entities t)
   (setq mode-line-format (orgacle-get-mode-line))
   (add-hook 'org-babel-after-execute-hook 'orgacle-refresh)

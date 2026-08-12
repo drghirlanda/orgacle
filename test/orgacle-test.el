@@ -477,5 +477,26 @@ value."
                     orgacle-show-indicators-maybe orgacle-position-notes)
                  (default-value 'orgacle-page-hook))))
 
+;;; Session state
+
+(ert-deftest orgacle-test-user-state-round-trips ()
+  "Saving then restoring leaves the user's Org settings as they were."
+  (let ((org-src-fontify-natively 'sentinel)
+        (org-hide-emphasis-markers 'sentinel)
+        (org-pretty-entities 'sentinel))
+    (orgacle--save-user-state)
+    (setq org-src-fontify-natively t
+          org-hide-emphasis-markers t
+          org-pretty-entities t)
+    (orgacle--restore-user-state)
+    (should (eq org-src-fontify-natively 'sentinel))
+    (should (eq org-hide-emphasis-markers 'sentinel))
+    (should (eq org-pretty-entities 'sentinel))))
+
+(ert-deftest orgacle-test-quit-is-idempotent ()
+  "Quitting when no presentation is running does nothing and does not signal."
+  (should (progn (orgacle-quit) t))
+  (should (progn (orgacle-quit) t)))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
