@@ -21,10 +21,10 @@
 ;; does not require, to avoid a sibling-module dependency cycle.
 ;; Task 5 removes these declarations when it replaces the direct
 ;; calls with the shared `orgacle-page-hook'.
-(declare-function orgacle-toggle-hide-src-blocks "orgacle" (&optional arg))
-(declare-function orgacle-show-file-auto "orgacle" ())
+(declare-function orgacle-toggle-hide-src-blocks "orgacle-src" (&optional arg))
+(declare-function orgacle-show-file-auto "orgacle-media" ())
 (declare-function orgacle-slide-in-effect "orgacle-fontify" ())
-(declare-function orgacle-show-indicators-maybe "orgacle" ())
+(declare-function orgacle-show-indicators-maybe "orgacle-media" ())
 (declare-function orgacle-position-notes "orgacle" ())
 
 (defun orgacle-get-frame-level ()
