@@ -329,9 +329,22 @@ particular order."
 ;;; Video
 
 (ert-deftest orgacle-test-video-player-is-detected ()
-  "A configured player that is not installed is reported, not run."
+  "An unrecognised `orgacle-video-player' name is reported, not run.
+This exercises the unsupported-name branch of `orgacle--video-command';
+see `orgacle-test-video-player-executable-not-found' for a recognised
+player whose executable is missing instead."
   (let ((orgacle-video-player "definitely-not-a-real-player"))
     (should-error (orgacle--video-command "film.mp4" nil) :type 'user-error)))
+
+(ert-deftest orgacle-test-video-player-executable-not-found ()
+  "A configured, recognised player that is not installed is reported,
+not run.
+`executable-find' is stubbed so this characterizes the missing-binary
+branch without depending on whether mplayer happens to be installed on
+the machine running the suite."
+  (let ((orgacle-video-player "mplayer"))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+      (should-error (orgacle--video-command "film.mp4" nil) :type 'user-error))))
 
 (ert-deftest orgacle-test-video-command-quotes-its-filename ()
   "A filename with a space survives as one argument.

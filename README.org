@@ -322,6 +322,29 @@ quiet rather than failing.
 Tooltips are suppressed during a presentation so a stray hover cannot pop
 something up on the projector; set =orgacle-tooltip-mode= to t if you want them.
 
+** Extending Orgacle: orgacle-page-hook
+
+Every time a slide is displayed and narrowed, Orgacle runs =orgacle-page-hook=.
+This is how the built-in features hook into slide display — showing an
+auto-display file, the slide-in effect, the fringe indicators and the speaker
+notes are each just a function on this hook — and it is also the supported way
+to add your own behaviour without editing Orgacle itself:
+
+#+begin_src emacs-lisp :eval no
+  (add-hook 'orgacle-page-hook #'my-function)
+#+end_src
+
+A few things to know before adding to it:
+
+- A member takes no arguments.
+- Order matters. The built-in order is file, slide-in, indicators, then notes;
+  the invariant that has to hold is file-before-indicators, because showing a
+  file clears the fringe overlays, so indicators drawn before it would be
+  wiped a moment later. Use the APPEND argument of =add-hook= to control where
+  your function lands relative to the built-ins.
+- A member that signals is logged and does not stop the rest of the hook, so a
+  bug in one extension cannot end a presentation mid-talk.
+
 * Customization
 
 You can customize the variables described above and other affecting

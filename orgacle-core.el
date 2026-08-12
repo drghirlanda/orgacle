@@ -32,12 +32,6 @@
       (org-link-preview-clear)
     (with-no-warnings (org-remove-inline-images))))
 
-(defun orgacle--link-preview-overlays ()
-  "Return the inline image preview overlays of the current buffer."
-  (if (boundp 'org-link-preview-overlays)
-      (symbol-value 'org-link-preview-overlays)
-    (with-no-warnings org-inline-image-overlays)))
-
 ;; These exist only on X11 builds, where term/x-win.el defines them.  A
 ;; value-less `defvar' only quiets the byte-compiler within the file it
 ;; appears in -- unlike a `defvar' with a value, it has no effect at
@@ -407,7 +401,8 @@ than deleted.  With START and END both nil, every overlay in
   "Remove file and video indicators from fringe."
   (interactive)
   (dolist (ov orgacle-fringe-overlays)
-    (delete-overlay ov)))
+    (delete-overlay ov))
+  (setq orgacle-fringe-overlays nil))
 
 (defvar orgacle-page-hook nil
   "Hook run after a slide has been displayed and narrowed.
