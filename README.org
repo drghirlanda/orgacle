@@ -20,13 +20,22 @@ so bind it yourself if you want it back:
     (define-key org-mode-map (kbd "<f5>") #'epresent-run))
 #+end_src
 
+* Breaking changes
+
+- =F5= no longer starts a presentation by itself. Bind it yourself if
+  you want it back; see the snippet under "Starting a presentation"
+  above.
+- =epresent-tooltip-mode= is now a boolean. Setting it to =0= used to
+  disable tooltips; it now *enables* them, because =0= is non-nil in
+  Emacs Lisp. Use =nil= to disable tooltips.
+
 * Basic usage
 
 - Call =epresent-run= on an org-buffer.
 - Press =t= or =1= to view the top level of the presentation
 - Navigate the presentation with =n/f=, =p/b=
 - Go to a specific page with =v <num> RET=
-- Scroll with =k= and =l=
+- Scroll with =j= and =k=
 - Working with code blocks:
   - =c= and =C= to navigate between code blocks
   - =e= to edit a code block
@@ -57,16 +66,16 @@ show a file in a new buffer. This functionality is activated by the
 epresent-show-file= outside of the presentation. The filename is set
 through the property =EPRESENT_SHOW_FILE= and the file is showed by default
 to the right of the presentation buffer. It can be shown under the
-presentation by setting the property =EPRESENT_BELOW= to a non-nil
-value.
+presentation by setting the property =EPRESENT_SHOW_BELOW= to a
+non-nil value.
 
 Here is an example:
 
 #+begin_src org :eval none
-    * My slide 
+    * My slide
       :PROPERTIES:
-      :EPRESENT_SHOW: myfigure.pdf
-      :EPRESENT_BELOW: t
+      :EPRESENT_SHOW_FILE: myfigure.pdf
+      :EPRESENT_SHOW_BELOW: t
       :END:
 #+end_src
 
