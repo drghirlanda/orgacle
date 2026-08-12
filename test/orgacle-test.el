@@ -362,19 +362,21 @@ overlay it creates."
 (ert-deftest orgacle-test-migrate-is-idempotent ()
   "Running it twice changes nothing the second time."
   (orgacle-test-with-fixture "legacy.org"
-    (orgacle-migrate-buffer)
+    (should (equal 4 (orgacle-migrate-buffer)))
     (let ((once (buffer-string)))
       (should (equal 0 (orgacle-migrate-buffer)))
       (should (equal once (buffer-string))))))
 
-(ert-deftest orgacle-test-migrate-honours-a-region ()
-  "With a region active, only that region is converted."
+(ert-deftest orgacle-test-migrate-honours-an-active-region ()
+  "Called interactively with a region active, only that region converts."
   (orgacle-test-with-fixture "legacy.org"
     (goto-char (point-min))
     (re-search-forward "^:PROPERTIES:$")
-    (let ((beg (match-beginning 0)))
+    (let ((transient-mark-mode t))
+      (push-mark (match-beginning 0) t t)
       (re-search-forward "^:END:$")
-      (orgacle-migrate-buffer beg (match-end 0)))
+      (goto-char (match-end 0))
+      (call-interactively #'orgacle-migrate-buffer))
     ;; the drawer converted, the keyword above it did not
     (should (string-match-p "^:ORGACLE_SHOW_FILE:" (buffer-string)))
     (should (string-match-p "^#\\+EPRESENT_FRAME_LEVEL:" (buffer-string)))))

@@ -1346,8 +1346,16 @@ names; this brings them up to date."
 
 ;;;###autoload
 (defun orgacle-migrate-file (file)
-  "Convert EPRESENT_ names to ORGACLE_ in FILE, saving it."
+  "Convert EPRESENT_ names to ORGACLE_ in FILE, saving it.
+When FILE is already open with unsaved changes, ask first: saving it
+would write those changes too."
   (interactive "fMigrate file: ")
+  (let ((visiting (find-buffer-visiting file)))
+    (when (and visiting (buffer-modified-p visiting)
+               (not (yes-or-no-p
+                     (format "%s has unsaved changes that would also be saved.  Continue? "
+                             (file-name-nondirectory file)))))
+      (user-error "Migration cancelled")))
   (with-current-buffer (find-file-noselect file)
     (let ((count (orgacle-migrate-buffer)))
       (save-buffer)
