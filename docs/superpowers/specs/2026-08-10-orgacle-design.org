@@ -352,6 +352,21 @@ because =org-export-with-properties= defaults to nil.
 *Exit:* byte-compile clean under =byte-compile-error-on-warn=; checkdoc clean;
 =package-lint= clean; tests green on all three Emacs versions.
 
+*Status: COMPLETE* (2026-08-11). All exit criteria met: =make clean && make all=
+exits 0, and CI is green on Emacs 29.4, 30.2 and snapshot. The suite is 32
+tests, up from none. Two tasks were inserted during the phase, both because CI
+found something the plan had not anticipated — 3a (the package could not load on
+any Emacs without X11) and 8a (a stale =.elc= could shadow freshly edited
+source, so a suite run after an edit tested the previous version of the code).
+
+Defects fixed in P0 beyond those section 7 anticipated: the =.org= include
+branch of the LaTeX backend (which additionally could destroy a user's unsaved
+buffer), =pdf-view-current-page= being called as a function when it is a macro,
+=epresent-slide-in= never being consulted, the speaking-time estimate
+truncating rather than rounding, the export backend never seeing its own
+property drawers, and =epresent-hidden-face= carrying a =:invisible= attribute
+that has never been a valid face attribute.
+
 ** P1 — Rename
 
 Mechanical rename of symbols, file, group, faces, properties and keywords.
