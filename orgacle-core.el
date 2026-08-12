@@ -231,13 +231,51 @@ Adding one here is enough; both directions are handled by
 `orgacle--save-user-state' and `orgacle--restore-user-state'.")
 
 (defvar orgacle--saved-state nil
-  "Alist of (SYMBOL . VALUE) captured by `orgacle--save-user-state'.")
+  "Alist of (SYMBOL . VALUE) captured by `orgacle--save-user-state'.
+Also doubles as the \"is a save already pending\" flag that function
+tests before it does anything, so its own value is what makes the
+guard live again once `orgacle--restore-user-state' clears it back to
+nil.")
+
+(defvar orgacle-outline-ellipsis nil
+  "The `selective-display' display-table slot, saved while presenting.
+This holds a display-table value, not an ordinary variable, so it is
+saved and restored directly with `display-table-slot' and
+`set-display-table-slot' rather than through `orgacle-saved-variables';
+see `orgacle--save-user-state', which guards it the same way.")
 
 (defun orgacle--save-user-state ()
-  "Record the current value of every variable in `orgacle-saved-variables'."
-  (setq orgacle--saved-state
-        (mapcar (lambda (sym) (cons sym (symbol-value sym)))
-                orgacle-saved-variables)))
+  "Record the user's state, once, until it is restored.
+Captures the current value of every variable in
+`orgacle-saved-variables', plus the outline-ellipsis display-table
+slot into `orgacle-outline-ellipsis' -- the latter cannot join that
+list because it is a display-table slot, not a variable, but it needs
+the same protection, so this function owns both.
+
+A no-op when a save is already pending: `orgacle-mode' calls this
+unconditionally on every entry, and entering it a second time with no
+intervening `orgacle-quit' -- for example because the presentation
+frame was killed with the window manager instead of `q', or because
+`orgacle-run' was invoked from a second Org buffer, which only checks
+the *current* buffer's major mode -- must not let the second entry's
+save overwrite the user's original values with the presentation's own.
+The first save wins; `orgacle--restore-user-state' is what clears
+`orgacle--saved-state' back to nil, making the guard live again for the
+next genuine entry.
+
+`standard-display-table' is nil until something creates it, which the
+autoloaded `disp-table.el' normally does as a side effect of its own
+loading; under byte-compiled evaluation that has not always happened
+yet, so this vivifies it directly first, using the same idiom
+`disp-table.el' itself uses."
+  (unless orgacle--saved-state
+    (setq orgacle--saved-state
+          (mapcar (lambda (sym) (cons sym (symbol-value sym)))
+                  orgacle-saved-variables))
+    (unless (char-table-p standard-display-table)
+      (setq standard-display-table (make-display-table)))
+    (setq orgacle-outline-ellipsis
+          (display-table-slot standard-display-table 'selective-display))))
 
 (defun orgacle--restore-user-state ()
   "Put every variable saved by `orgacle--save-user-state' back.
@@ -250,11 +288,6 @@ when no presentation is running."
 (defvar orgacle-overlays nil)
 (defvar orgacle-fringe-overlays nil)
 (defvar orgacle-aux-fringe-overlay nil)
-(defvar orgacle-outline-ellipsis nil
-  "The `selective-display' display-table slot, saved while presenting.
-This holds a display-table value, not an ordinary variable, so it is
-restored directly with `set-display-table-slot' rather than through
-`orgacle-saved-variables'.")
 (defvar orgacle-page-number 0)
 (defvar orgacle-user-x-pointer-shape nil)
 (defvar orgacle-user-x-sensitive-text-pointer-shape nil)

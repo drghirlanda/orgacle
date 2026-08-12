@@ -530,10 +530,62 @@ which let a byte-compile-only crash in its display-table handling
 reach users unnoticed.  Batch mode has no frame of its own, so
 `orgacle--frame' stays nil here; `set-face-attribute' with a nil frame
 argument means the selected frame, which exists even in batch, so the
-mode's frame-facing calls do not need a real one to complete."
+mode's frame-facing calls do not need a real one to complete.
+
+Quits at the end, in an `unwind-protect': other tests rely on
+`orgacle--save-user-state' having nothing already saved when they
+start, and since the re-entrancy fix that condition is sticky rather
+than clobbered on every call -- see the re-entrancy tests below."
   (orgacle-test-with-fixture "plain.org"
+    (unwind-protect
+        (progn
+          (orgacle-mode)
+          (should (eq major-mode 'orgacle-mode)))
+      (orgacle-quit))))
+
+;;; Re-entrant orgacle-mode
+
+(ert-deftest orgacle-test-second-entry-preserves-saved-variables ()
+  "Entering `orgacle-mode' twice without an intervening `orgacle-quit'
+must not let the second entry's `orgacle--save-user-state' overwrite the
+user's original values with the presentation's own -- the first save has
+to win, so that quitting still restores what the user actually had.
+
+This reproduces without needing two real frames: killing the
+presentation frame with the window manager instead of pressing q, or
+running `orgacle-run' a second time from a different Org buffer, both
+leave `orgacle-mode' entered a second time with no intervening
+`orgacle-quit' in between -- `orgacle-run' only inspects the *current*
+buffer's major mode, so neither path is exotic."
+  (orgacle-test-with-fixture "plain.org"
+    (let ((org-src-fontify-natively 'user)
+          (org-hide-emphasis-markers 'user)
+          (org-pretty-entities 'user)
+          (org-fontify-quote-and-verse-blocks 'user))
+      (orgacle-mode)
+      (orgacle-mode)
+      (orgacle-quit)
+      (should (eq org-src-fontify-natively 'user))
+      (should (eq org-hide-emphasis-markers 'user))
+      (should (eq org-pretty-entities 'user))
+      (should (eq org-fontify-quote-and-verse-blocks 'user)))))
+
+(ert-deftest orgacle-test-second-entry-preserves-outline-ellipsis ()
+  "The same re-entrancy protection covers the outline-ellipsis
+display-table slot, which has exactly the same shape as the tracked
+variables above but cannot join `orgacle-saved-variables' because it is
+not a variable.  Without the guard, the second entry captures the
+presentation's own `[32]' as though it were the user's ellipsis, and
+quitting leaves the invisible space in place instead of restoring it."
+  (orgacle-test-with-fixture "plain.org"
+    (unless (char-table-p standard-display-table)
+      (setq standard-display-table (make-display-table)))
+    (set-display-table-slot standard-display-table 'selective-display "user-ellipsis")
     (orgacle-mode)
-    (should (eq major-mode 'orgacle-mode))))
+    (orgacle-mode)
+    (orgacle-quit)
+    (should (equal (display-table-slot standard-display-table 'selective-display)
+                   "user-ellipsis"))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

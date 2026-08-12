@@ -199,24 +199,18 @@ Each frame-level heading becomes a slide.  Navigate with
 \\{orgacle-mode-map}"
   ;; make Org-mode be as pretty as possible
   (add-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
+  ;; `orgacle--save-user-state' captures both the tracked variables and
+  ;; the outline-ellipsis display-table slot, and is a no-op when a save
+  ;; is already pending -- see its docstring -- which is what makes
+  ;; re-entering this mode without an intervening `orgacle-quit' safe.
+  ;; It also vivifies `standard-display-table' when necessary, so by the
+  ;; time control reaches the `set-display-table-slot' call below, the
+  ;; table is guaranteed to be a real char-table; this mirrors the
+  ;; `char-table-p' guard `orgacle-quit' uses on the way back.
   (orgacle--save-user-state)
   (setq org-src-fontify-natively t)
   (setq org-fontify-quote-and-verse-blocks t)
   (setq org-hide-emphasis-markers t)
-  ;; `standard-display-table' is nil until something creates it, which
-  ;; the autoloaded `disp-table.el' normally does as a side effect of
-  ;; its own loading.  Under interpreted evaluation that happens early
-  ;; enough for the calls below to see a real table; byte-compiled, the
-  ;; argument referring to it is evaluated before the autoload has a
-  ;; chance to run, and `display-table-slot' signals
-  ;; `wrong-type-argument' on a nil table instead.  Vivify it directly
-  ;; first, using the same idiom `disp-table.el' itself uses; this
-  ;; mirrors the `char-table-p' guard `orgacle-quit' uses on the way
-  ;; back.
-  (unless (char-table-p standard-display-table)
-    (setq standard-display-table (make-display-table)))
-  (setq orgacle-outline-ellipsis
-        (display-table-slot standard-display-table 'selective-display))
   (set-display-table-slot standard-display-table 'selective-display [32])
   (setq org-pretty-entities t)
   (setq mode-line-format (orgacle-get-mode-line))
