@@ -326,6 +326,29 @@ particular order."
     (should (equal '()
                    (orgacle-test--indicators-on-slide "Slide with a file")))))
 
+;;; Video
+
+(ert-deftest orgacle-test-video-player-is-detected ()
+  "A configured player that is not installed is reported, not run."
+  (let ((orgacle-video-player "definitely-not-a-real-player"))
+    (should-error (orgacle--video-command "film.mp4" nil) :type 'user-error)))
+
+(ert-deftest orgacle-test-video-command-quotes-its-filename ()
+  "A filename with a space survives as one argument.
+
+`executable-find' is stubbed so this characterizes only the quoting,
+not whether mplayer happens to be installed on the machine running
+the suite.  `shell-quote-argument' backslash-escapes special
+characters rather than wrapping the whole argument in quotes on a
+POSIX shell -- so pinning its literal output, whatever that is on the
+running platform, is what actually characterizes \"the filename is
+quoted\" portably; a fixed quote-style regex would not match what it
+really produces."
+  (let ((orgacle-video-player "mplayer"))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/mplayer")))
+      (should (string-suffix-p (shell-quote-argument "my film.mp4")
+                               (orgacle--video-command "my film.mp4" nil))))))
+
 ;;; Fontification
 
 (ert-deftest orgacle-test-fontify-creates-overlays ()
@@ -497,6 +520,20 @@ value."
   "Quitting when no presentation is running does nothing and does not signal."
   (should (progn (orgacle-quit) t))
   (should (progn (orgacle-quit) t)))
+
+(ert-deftest orgacle-test-mode-enters ()
+  "Entering `orgacle-mode' on a plain buffer completes without signaling.
+
+A smoke test, not a characterization of everything the mode does: it
+exists because nothing in the suite called `orgacle-mode' at all,
+which let a byte-compile-only crash in its display-table handling
+reach users unnoticed.  Batch mode has no frame of its own, so
+`orgacle--frame' stays nil here; `set-face-attribute' with a nil frame
+argument means the selected frame, which exists even in batch, so the
+mode's frame-facing calls do not need a real one to complete."
+  (orgacle-test-with-fixture "plain.org"
+    (orgacle-mode)
+    (should (eq major-mode 'orgacle-mode))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

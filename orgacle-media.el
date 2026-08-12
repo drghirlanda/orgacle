@@ -118,12 +118,20 @@ file.  The file's buffer is refreshed every time it is shown."
   (setq mode-line-format (orgacle-get-mode-line))
   (revert-buffer t t t)
   ;; PDFs
-  (when (eq major-mode 'pdf-view-mode)
-    (if below
-	(pdf-view-fit-height-to-window)
-      (pdf-view-fit-width-to-window))
-    (pdf-view-goto-page 1)
-    (orgacle-update-aux-fringe-overlay))
+  (if (featurep 'pdf-tools)
+      (when (eq major-mode 'pdf-view-mode)
+	(if below
+	    (pdf-view-fit-height-to-window)
+	  (pdf-view-fit-width-to-window))
+	(pdf-view-goto-page 1)
+	(orgacle-update-aux-fringe-overlay))
+    ;; without pdf-tools a PDF still opens, just unfitted and on page
+    ;; one; say so once rather than leaving the presenter to wonder
+    (when (and (string-suffix-p ".pdf" filename t)
+               (not orgacle--pdf-tools-warned))
+      (setq orgacle--pdf-tools-warned t)
+      (message "Orgacle: pdf-tools is not installed, so %s will not be fit to the window"
+               filename)))
   ;; images
   (when (eq major-mode 'image-mode)
     (if below
@@ -173,6 +181,28 @@ ORGACLE_SHOW_AUTO property."
   (if (org-entry-get nil "ORGACLE_SHOW_AUTO")
       (orgacle-show-file)))
 
+(defun orgacle--video-command (filename mute)
+  "Return the shell command that plays FILENAME with `orgacle-video-player'.
+MUTE non-nil selects the muted invocation.
+
+Signal `user-error' when `orgacle-video-player' names a player this
+package does not know how to invoke, or when the executable that
+player needs is not found by `executable-find' -- better to say so
+now than to leave the frame full screen and hand the shell a command
+that can only fail."
+  (let ((binary (cond ((string= orgacle-video-player "vlc") "cvlc")
+                       ((string= orgacle-video-player "mplayer") "mplayer")
+                       (t (user-error "Unsupported video player: %s"
+                                      orgacle-video-player)))))
+    (unless (executable-find binary)
+      (user-error "Cannot find the %s executable for `orgacle-video-player'"
+                  binary))
+    (if (string= orgacle-video-player "vlc")
+        (concat "cvlc -f --no-osd " (if mute "--no-audio " "")
+                (shell-quote-argument filename))
+      (concat "mplayer -fs " (if mute "volume=-200dB " "")
+              (shell-quote-argument filename)))))
+
 (defun orgacle-show-video (&optional filename mute _paused)
   "Play a video full screen.
 
@@ -189,18 +219,10 @@ player is chosen with `orgacle-video-player'."
     (user-error "Cannot open %s" filename))
   (unless mute
     (setq mute (org-entry-get nil "ORGACLE_MUTE")))
-  (let ((command
-         (cond
-          ((string= orgacle-video-player "vlc")
-           (concat "cvlc -f --no-osd " (if mute "--no-audio " "")
-                   (shell-quote-argument filename)))
-          ((string= orgacle-video-player "mplayer")
-           (concat "mplayer -fs " (if mute "volume=-200dB " "")
-                   (shell-quote-argument filename)))
-          (t
-           (user-error "Unsupported video player: %s"
-                       orgacle-video-player)))))
-    ;; leave full screen so the player can take it
+  ;; build (and validate) the command before leaving full screen, so a
+  ;; missing or unsupported player is reported without ever disturbing
+  ;; the frame
+  (let ((command (orgacle--video-command filename mute)))
     (set-frame-parameter nil 'fullscreen nil)
     (message "Executing %s" command)
     (shell-command command)

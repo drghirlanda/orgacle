@@ -296,6 +296,10 @@ See `orgacle-show-file'.")
 
 (defvar orgacle-show-buffer nil)
 
+(defvar orgacle--pdf-tools-warned nil
+  "Non-nil once `orgacle-show-file' has warned that pdf-tools is absent.
+Keeps that warning to once per session instead of once per slide.")
+
 (defun orgacle-get-frame-level ()
   "Get the heading level to show as different frames."
   (interactive)

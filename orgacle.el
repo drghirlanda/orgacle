@@ -205,6 +205,18 @@ Each frame-level heading becomes a slide.  Navigate with
   (setq org-src-fontify-natively t)
   (setq org-fontify-quote-and-verse-blocks t)
   (setq org-hide-emphasis-markers t)
+  ;; `standard-display-table' is nil until something creates it, which
+  ;; the autoloaded `disp-table.el' normally does as a side effect of
+  ;; its own loading.  Under interpreted evaluation that happens early
+  ;; enough for the calls below to see a real table; byte-compiled, the
+  ;; argument referring to it is evaluated before the autoload has a
+  ;; chance to run, and `display-table-slot' signals
+  ;; `wrong-type-argument' on a nil table instead.  Vivify it directly
+  ;; first, using the same idiom `disp-table.el' itself uses; this
+  ;; mirrors the `char-table-p' guard `orgacle-quit' uses on the way
+  ;; back.
+  (unless (char-table-p standard-display-table)
+    (setq standard-display-table (make-display-table)))
   (setq orgacle-outline-ellipsis
         (display-table-slot standard-display-table 'selective-display))
   (set-display-table-slot standard-display-table 'selective-display [32])
