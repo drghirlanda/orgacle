@@ -135,7 +135,7 @@ change, which is out of scope here."
   :group 'orgacle)
 
 (defvar orgacle--frame nil
-  "Frame for EPresent.")
+  "Frame for Orgacle.")
 
 (defvar orgacle--org-buffer nil
   "Original Org-mode buffer.")
@@ -266,7 +266,7 @@ changing it has no effect."
   :group 'orgacle)
 
 (defcustom orgacle-speaker-notes t
-  "Whether to collect speaker notes into an *EPresent Notes* buffer.
+  "Whether to collect speaker notes into an *Orgacle Notes* buffer.
 The buffer is shown in its own frame, which can be moved to a second
 screen, and follows the slide being presented."
   :type 'boolean
@@ -304,15 +304,15 @@ See `orgacle-show-file'.")
   "Auxiliary window for showing files.  See `orgacle-show-file'.")
 
 (defvar orgacle-presentation-window nil
-  "The EPresent presentation window.")
+  "The Orgacle presentation window.")
 
 (defvar orgacle-show-buffer nil)
 
 (defun orgacle--get-frame ()
-  "Create and set up the EPresent frame."
+  "Create and set up the Orgacle frame."
   (unless (frame-live-p orgacle--frame)
     (setq orgacle--frame (make-frame '((minibuffer . nil)
-                                        (title . "EPresent")
+                                        (title . "Orgacle")
                                         (fullscreen . fullboth)
                                         (menu-bar-lines . 0)
                                         (tool-bar-lines . 0)
@@ -585,7 +585,7 @@ than deleted.  With START and END both nil, every overlay in
                           'selective-display orgacle-outline-ellipsis)
   (setq org-pretty-entities orgacle-pretty-entities)
   (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh)
-  (when (string= "EPresent" (frame-parameter nil 'title))
+  (when (string= "Orgacle" (frame-parameter nil 'title))
     (delete-frame (selected-frame)))
   (when orgacle--org-file
     (let ((buf (get-file-buffer orgacle--org-file)))
@@ -852,7 +852,7 @@ defaults to half the window.
 The displayed file is fit to width or height when it is a PDF or an
 image.
 
-After the file is displayed and fit, focus returns to the EPresent
+After the file is displayed and fit, focus returns to the Orgacle
 window, and changing slides deletes the auxiliary window showing the
 file.  The file's buffer is refreshed every time it is shown."
   (interactive)
@@ -1005,7 +1005,7 @@ the body of its \"Speaker notes\" subtree when it has one."
   (let ((notes (orgacle--collect-notes)))
     (if (bufferp orgacle-notes-buffer)
         (kill-buffer orgacle-notes-buffer))
-    (setq orgacle-notes-buffer (generate-new-buffer "*EPresent Notes*"))
+    (setq orgacle-notes-buffer (generate-new-buffer "*Orgacle Notes*"))
     (with-current-buffer orgacle-notes-buffer
       (erase-buffer)
       (org-mode)
@@ -1072,7 +1072,7 @@ ORGACLE_SHOW_PAGES."
   ;; disable the translator above.  Default it to t for this backend only.
   '((:with-properties nil "prop" t))
   :menu-entry
-  '(?E "EPresent to LaTeX"
+  '(?E "Orgacle to LaTeX"
        ((?L "As LaTeX buffer" orgacle-export-as-latex)
 	(?l "As LaTeX file" orgacle-export-to-latex)
 	(?p "As PDF file" orgacle-export-to-pdf)
@@ -1084,7 +1084,7 @@ ORGACLE_SHOW_PAGES."
 ;;;###autoload
 (defun orgacle-export-as-latex
   (&optional async subtreep visible-only body-only ext-plist)
-  "Export the current EPresent buffer to a LaTeX buffer.
+  "Export the current Orgacle buffer to a LaTeX buffer.
 ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
 `org-export-to-buffer'; see there for their meaning."
   (interactive)
@@ -1105,7 +1105,7 @@ ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
 ;;;###autoload
 (defun orgacle-export-to-pdf
   (&optional async subtreep visible-only body-only ext-plist)
-  "Export the current EPresent buffer to LaTeX, then process it to PDF.
+  "Export the current Orgacle buffer to LaTeX, then process it to PDF.
 ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
 `org-export-to-file'; see there for their meaning."
   (interactive)
@@ -1205,9 +1205,9 @@ Does nothing on a build without X11 pointer support."
     (define-key map "S" 'orgacle-toggle-hide-src-block)
     (define-key map "t" 'orgacle-top)
     map)
-  "Local keymap for EPresent display mode.")
+  "Local keymap for Orgacle display mode.")
 
-(define-derived-mode orgacle-mode org-mode "EPresent"
+(define-derived-mode orgacle-mode org-mode "Orgacle"
   "Major mode for presenting an Org-mode buffer as a slide show.
 
 Each frame-level heading becomes a slide.  Navigate with
@@ -1264,7 +1264,7 @@ Each frame-level heading becomes a slide.  Navigate with
 (defvar orgacle-edit-map (let ((map (copy-keymap org-mode-map)))
                             (define-key map (kbd "C-c C-c") 'orgacle-refresh)
                             map)
-  "Local keymap for editing an EPresent presentation.")
+  "Local keymap for editing an Orgacle presentation.")
 
 (defun orgacle-edit-text ()
   "Edit the presentation text in place.
@@ -1287,7 +1287,7 @@ the display."
   (interactive)
   (unless (eq major-mode 'orgacle-mode)
     (unless (eq major-mode 'org-mode)
-      (error "EPresent can only be used from Org Mode"))
+      (error "Orgacle can only be used from Org Mode"))
     (setq orgacle--org-buffer (current-buffer))
     ;; regenerate image previews
     (orgacle--link-preview-refresh)
