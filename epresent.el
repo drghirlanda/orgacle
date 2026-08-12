@@ -125,8 +125,12 @@
   "Face used for bullets during the presentation."
   :group 'epresent)
 (defface epresent-hidden-face
-  '((t :invisible t))
-  "Face used for hidden elements during the presentation."
+  '((t))
+  "Unused; hiding is done with the `invisible' text property instead.
+`:invisible' was never a real face attribute, and current Emacs
+rejects it at compile time.  This face is not applied anywhere in the
+file; it is kept only because removing it would be a public API
+change, which is out of scope here."
   :group 'epresent)
 
 (defvar epresent--frame nil
