@@ -1,0 +1,12 @@
+#+TITLE: Plain
+#+AUTHOR: Nobody
+
+* First slide
+
+Some text.
+
+* Second slide
+
+** A subheading
+
+More text.

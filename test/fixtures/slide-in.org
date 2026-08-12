@@ -1,0 +1,13 @@
+#+TITLE: Slide-in
+
+* Never
+:PROPERTIES:
+:EPRESENT_SLIDE_IN: no
+:END:
+
+* Always
+:PROPERTIES:
+:EPRESENT_SLIDE_IN: yes
+:END:
+
+* Unset

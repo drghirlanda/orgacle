@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master, orgacle-rework]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs_version: ['29.4', '30.2', 'snapshot']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs_version }}
+
+      - name: Show versions
+        run: |
+          emacs --version
+          make --version | head -1
+
+      - name: Provision dependencies
+        run: make deps
+
+      - name: Byte-compile
+        run: make compile
+
+      - name: Run tests
+        run: make test
+
+      - name: checkdoc
+        run: make checkdoc
+
+      - name: package-lint
+        run: make lint
