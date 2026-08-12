@@ -87,18 +87,19 @@ After the file is displayed and fit, focus returns to the Orgacle
 window, and changing slides deletes the auxiliary window showing the
 file.  The file's buffer is refreshed every time it is shown."
   (interactive)
-  ;; if FILENAME is not set, look at the property; do this, and error
-  ;; out if neither is set, before touching the window layout
+  ;; if FILENAME is not set, look at the property; do this, strip a
+  ;; possible Org-link wrapping, and error out if the file does not
+  ;; exist, before touching the window layout
   (unless filename
     (setq filename (org-entry-get nil "ORGACLE_SHOW_FILE")))
   (unless filename
     (user-error "No file to show: set the ORGACLE_SHOW_FILE property"))
-  (delete-other-windows)
   ;; remove [[ ]] in case they are there
   (setq filename (replace-regexp-in-string "^\\[\\[" "" filename))
   (setq filename (replace-regexp-in-string "\\]\\]$" "" filename))
-  (if (not (file-exists-p filename))
-      (user-error (concat filename " does not exist")))
+  (unless (file-exists-p filename)
+    (user-error (concat filename " does not exist")))
+  (delete-other-windows)
   (when (not size)
     (setq size (org-entry-get nil "ORGACLE_SHOW_SIZE"))
     ;; convert to number, as properties are strings:
