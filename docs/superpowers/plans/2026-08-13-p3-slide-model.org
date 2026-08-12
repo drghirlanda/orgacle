@@ -1,0 +1,356 @@
+#+TITLE: P3 — Slide model and robustness: implementation plan
+#+AUTHOR: Stefano Ghirlanda
+#+DATE: 2026-08-13
+#+OPTIONS: toc:2 num:nil
+
+#+begin_quote
+*For agentic workers:* REQUIRED SUB-SKILL: use =superpowers:subagent-driven-development= (recommended) or =superpowers:executing-plans= to implement this plan task-by-task. Steps use checkbox (=- [ ]=) syntax for tracking.
+#+end_quote
+
+*Goal:* Replace the ad-hoc navigation with an explicit slide model, put the session's lifetime state in one struct, make failures during a presentation survivable and visible, and finish the features that have shipped half-done since before the fork.
+
+*Architecture:* A presentation currently rediscovers its own structure on every keypress, by walking the outline with =org-get-next-sibling= and a recursive =skip= flag. This phase builds the structure once, at =orgacle-run=, as a vector of markers, and makes every navigation command index arithmetic over it. Everything that is hard today because the code does not know what the slides are — jumping without flicker, numbering pages correctly, finding the notes for slide /n/, skipping a title page in either direction — becomes trivial. The session's twenty-two loose globals become one =cl-defstruct=, so quitting can find its own frame instead of comparing a frame title to a string.
+
+*Tech stack:* Emacs Lisp, ERT, =checkdoc=, =package-lint=, GNU Make, GitHub Actions.
+
+* Global constraints
+
+- Package is =orgacle=, eight modules, symbol prefix =orgacle-=. The main file stays =orgacle.el=.
+- Version floor stays =((emacs "29.1") (org "9.6"))=. Nothing beyond Emacs and Org may become a hard requirement.
+- No feature module may require a sibling. Cross-module needs go through =orgacle-core.el= or the page hook.
+- All four gates stay green after every task: =make compile= (with =byte-compile-error-on-warn=), =make checkdoc=, =make lint=, =make test=. CI covers Emacs 29.4, 30.2 and snapshot.
+- The suite is 51 tests at the start and must never shrink.
+- =make clean= removes only =*.elc=; =make distclean= also removes =.deps=. Prefer plain =make all= while iterating.
+
+* What this phase inherits
+
+Carried from the P0, P1 and P2 ledgers, which live in a git-ignored workspace. Recording them here makes them survive.
+
+- =orgacle-toggle-mouse= is one-way. =orgacle-mouse-visible= is initialised to =t= and never assigned, so =m= hides the pointer and nothing brings it back until the presentation ends. The docstring says so honestly; Task 7 makes it true instead.
+- =orgacle-internal-border-width= is a =defcustom= nothing reads. Its docstring says =NOT WORKING=. The frame is created with a hardcoded value. Task 7 either wires it up or removes it, and the choice is evidence-based: commit =f9bc35e= in the pre-fork history removed the customization because it disturbed the fringe indicators, so this needs retesting rather than assuming.
+- =tooltip-mode= is toggled globally in =orgacle-run= and never restored, so one presentation permanently changes the setting for a user who had tooltips on. =(set-face-background 'fringe …)= is called with no FRAME argument, rewriting the =fringe= face for every frame. Neither is a plain variable, so neither fits =orgacle-saved-variables= as it stands. Task 5 handles both.
+- =orgacle--org-restriction= is set when presenting a narrowed region and never reset, so a later ordinary presentation can restore a stale restriction. Task 4 fixes it as part of the session struct.
+- =orgacle-nav.el= still declares =orgacle-toggle-hide-src-blocks= from =orgacle-src.el=, the one remaining named cross-module call. Task 2 removes it as part of the navigation rewrite.
+- Spec section 5.3 specifies an =*Orgacle Log*= buffer with the slide index and a backtrace; P2 narrowed this to =message= only. Task 6 delivers what the spec asked for.
+- =orgacle-clean-fringe-overlays= and the page hook's ordering are fine and need no work here.
+
+* The slide model
+
+The centre of the phase. Today =orgacle-current-page= is recursive with =orgacle-next-page= and =orgacle-previous-page= through a =skip= flag, so that a heading named =Title page= can be stepped over; =orgacle-jump-to-page= calls =orgacle-top= and then loops =orgacle-next-page=, re-rendering and re-animating every intervening slide; and =orgacle-position-notes= finds the notes for the current slide by regexp-searching the notes buffer for the heading's text, which breaks on two slides with the same title.
+
+Replace all of that with a vector built once:
+
+#+begin_src emacs-lisp :eval no
+  (orgacle--session-slides session)  ; vector of markers, one per slide
+  (orgacle--session-index  session)  ; position within it
+#+end_src
+
+A heading is a slide when it is at frame level and is none of: a =Title page=, a =Speaker notes= subtree, or a heading carrying =ORGACLE_HIDE=. Those are exactly the three exclusions the current code applies, scattered across three functions.
+
+What this eliminates, as a class rather than one at a time: the skip recursion; page-number drift when navigating backwards; the flicker and spurious slide-in animations of =jump-to-page=, which becomes an index assignment; notes lookup by heading text; and the question "how many slides are there", which the presenter view in P4 needs and which nothing can answer today.
+
+* Task 1: Build the slide vector
+
+Pure addition. Nothing uses it yet, so nothing can break.
+
+*Files:* Create nothing; modify =orgacle-core.el= (the builder and the predicate), =test/orgacle-test.el=, and add =test/fixtures/slides.org=.
+
+*Interfaces produced:*
+- =(orgacle--slide-p)= → boolean. Non-nil when point is on a heading that is a slide.
+- =(orgacle--build-slides)= → vector of markers, in buffer order.
+
+- [ ] *Step 1: Write the fixture*
+
+=test/fixtures/slides.org=, exercising every exclusion and a nested level:
+
+#+begin_src org :eval no
+  ,#+TITLE: Slides
+
+  ,* Title page
+  Notes to read before starting.
+
+  ,* First slide
+  Body.
+
+  ,** A subheading
+  Not a slide of its own.
+
+  ,* Hidden slide
+  :PROPERTIES:
+  :ORGACLE_HIDE: t
+  :END:
+
+  ,* Second slide
+
+  ,** Speaker notes
+  Not a slide either.
+
+  ,* Third slide
+#+end_src
+
+- [ ] *Step 2: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-build-slides-counts-real-slides ()
+    "Title page, hidden and speaker-notes headings are not slides."
+    (orgacle-test-with-fixture "slides.org"
+      (should (= 3 (length (orgacle--build-slides))))))
+
+  (ert-deftest orgacle-test-build-slides-are-in-order ()
+    "The vector is in buffer order and its markers point at headings."
+    (orgacle-test-with-fixture "slides.org"
+      (let ((slides (orgacle--build-slides)))
+        (should (equal '("First slide" "Second slide" "Third slide")
+                       (mapcar (lambda (m)
+                                 (save-excursion
+                                   (goto-char m)
+                                   (org-entry-get nil "ITEM")))
+                               (append slides nil)))))))
+
+  (ert-deftest orgacle-test-build-slides-respects-frame-level ()
+    "With a frame level of 2, the second-level headings are the slides."
+    (orgacle-test-with-fixture "slides.org"
+      (let ((orgacle-frame-level 2))
+        (should (= 2 (length (orgacle--build-slides)))))))
+
+  (ert-deftest orgacle-test-build-slides-on-a-plain-file ()
+    "A file with no exclusions yields one slide per top-level heading."
+    (orgacle-test-with-fixture "plain.org"
+      (should (= 2 (length (orgacle--build-slides))))))
+#+end_src
+
+Check the third test's expected value against the fixture before trusting it: with =orgacle-frame-level= 2 the slides are the second-level headings that are not excluded, and =Speaker notes= is one of the exclusions. Count them in the fixture and use the real number, saying in your report what it is.
+
+- [ ] *Step 3: Run them and watch them fail*
+
+Expected: four failures, =void-function orgacle--build-slides=.
+
+- [ ] *Step 4: Implement*
+
+In =orgacle-core.el=, beside the other buffer-reading helpers:
+
+#+begin_src emacs-lisp :eval no
+  (defun orgacle--slide-p ()
+    "Return non-nil when point is on a heading that is its own slide.
+A slide is a heading at `orgacle-frame-level' that is not a title
+page, not a speaker-notes subtree, and does not carry ORGACLE_HIDE."
+    (and (org-at-heading-p)
+         (= (org-reduced-level (org-current-level)) orgacle-frame-level)
+         (not (org-entry-get nil "ORGACLE_HIDE"))
+         (let ((title (downcase (or (org-entry-get nil "ITEM") ""))))
+           (not (member title '("title page" "speaker notes"))))))
+
+  (defun orgacle--build-slides ()
+    "Return a vector of markers, one per slide, in buffer order."
+    (let (slides)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (while (re-search-forward org-outline-regexp-bol nil t)
+            (beginning-of-line)
+            (when (orgacle--slide-p)
+              (push (point-marker) slides))
+            (end-of-line))))
+      (vconcat (nreverse slides))))
+#+end_src
+
+- [ ] *Step 5: Run the tests, then commit*
+
+Expected: 55 tests.
+
+* Task 2: Navigate by index
+
+The rewrite. Behaviour changes here, deliberately and for the better.
+
+*Files:* modify =orgacle-nav.el=, =orgacle-core.el=, =test/orgacle-test.el=.
+
+- [ ] *Step 1: Write the failing tests*
+
+Cover what the old code got wrong, not just what it got right:
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-nav-starts-at-the-first-real-slide ()
+    "A leading title page is skipped without recursion."
+    (orgacle-test-with-fixture "slides.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (should (equal "First slide" (org-entry-get nil "ITEM")))
+      (should (= 1 orgacle-page-number))))
+
+  (ert-deftest orgacle-test-nav-page-number-round-trips ()
+    "Forward then back returns both the slide and its number."
+    (orgacle-test-with-fixture "slides.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (orgacle-next-page)
+      (orgacle-next-page)
+      (should (= 3 orgacle-page-number))
+      (orgacle-previous-page)
+      (should (= 2 orgacle-page-number))
+      (should (equal "Second slide" (org-entry-get nil "ITEM")))))
+
+  (ert-deftest orgacle-test-nav-stops-at-the-ends ()
+    "Past the last slide and before the first, nothing moves and nothing signals."
+    (orgacle-test-with-fixture "slides.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (orgacle-previous-page)
+      (should (= 1 orgacle-page-number))
+      (dotimes (_ 10) (orgacle-next-page))
+      (should (= 3 orgacle-page-number))))
+
+  (ert-deftest orgacle-test-jump-is-direct ()
+    "Jumping does not visit the slides in between."
+    (orgacle-test-with-fixture "slides.org"
+      (orgacle--start-slides)
+      (let ((visited 0))
+        (let ((orgacle-page-hook (list (lambda () (setq visited (1+ visited))))))
+          (orgacle-jump-to-page 3))
+        (should (= 1 visited))
+        (should (equal "Third slide" (org-entry-get nil "ITEM"))))))
+#+end_src
+
+=orgacle--start-slides= is a helper you add for the tests and for =orgacle-run=: it builds the vector and sets the index to zero. Name it as you like, but say what you chose.
+
+- [ ] *Step 2: Run them and watch them fail*
+
+- [ ] *Step 3: Rewrite the navigation commands*
+
+=orgacle-top= sets the index to 0 and displays. =orgacle-next-page= and =orgacle-previous-page= increment and decrement, clamped to the ends, and display. =orgacle-jump-to-page= sets the index and displays, once. =orgacle-current-page= keeps its display work — narrowing, visibility, source blocks, the page hook — but loses the title-page skip and the recursion entirely, because the vector already excludes what should be skipped.
+
+=orgacle-page-number= becomes the index plus one, so it cannot drift. Keep the variable: the mode line reads it and a user may reference it.
+
+- [ ] *Step 4: Remove the last cross-module declaration*
+
+With the recursion gone, look again at =orgacle-current-page='s call to =orgacle-toggle-hide-src-blocks=, the one remaining =declare-function= in =orgacle-nav.el=. It runs during visibility setup, before the page hook, which is why P2 left it. Decide between: leaving it declared with a comment saying why; making source-block visibility a page-hook member that runs first; or moving the visibility setup into =orgacle-core.el= where both modules can reach it. Any is defensible — say which you chose and why, and if you leave it, say so explicitly rather than silently.
+
+- [ ] *Step 5: Run everything and commit*
+
+The old navigation tests must still pass unchanged. If one cannot, that is a behaviour change worth reporting rather than editing the test to match.
+
+* Task 3: Notes by index
+
+*Files:* modify =orgacle-notes.el=, =test/orgacle-test.el=.
+
+Today =orgacle-position-notes= regexp-searches the notes buffer for the current heading's text, so two slides with the same title send it to the wrong one, and a heading containing regexp syntax is only saved by =regexp-quote=. The notes buffer is built in slide order, so an index is all it needs.
+
+- [ ] *Step 1: Write a failing test with two identically-titled slides*
+
+A fixture with two slides both called =Results=, each with its own speaker notes, and an assertion that slide 2's notes are the second block, not the first.
+
+- [ ] *Step 2: Record a marker per slide when building the notes buffer*
+
+=orgacle--collect-notes= walks the slides in order; have it also return, or record, a marker per slide in the notes buffer. Then =orgacle-position-notes= is a vector index, matching the presentation's own index.
+
+- [ ] *Step 3: Fix the duplicated last heading while you are here*
+
+=orgacle--collect-notes= emits the final heading twice — the loop tests =(< (point) (point-max))= before advancing, so the body runs once more on the last heading. This was characterized deliberately in P0 with a test that pins the duplication, precisely so this phase could remove it. Fix the loop and update that test to assert the heading appears once, saying in your report that you changed a pinned characterization test and why that is correct here.
+
+* Task 4: The session struct
+
+*Files:* modify =orgacle-core.el=, =orgacle.el=, and every module that reads session state.
+
+Twenty-two loose =defvar= forms hold what one presentation knows about itself. Replace the session-lifetime ones with a struct so that the state has one shape, one place, and one lifetime.
+
+- [ ] *Step 1: Define it*
+
+#+begin_src emacs-lisp :eval no
+  (cl-defstruct (orgacle--session (:constructor orgacle--session-create))
+    frame org-buffer org-restriction org-file
+    slides index notes-buffer notes-markers
+    aux-window presentation-window)
+
+  (defvar orgacle--session nil
+    "The running presentation, or nil when none is running.")
+#+end_src
+
+- [ ] *Step 2: Migrate, one slot at a time, running the suite between each*
+
+Do not convert all twenty-two at once. Each slot is a rename with a mechanical call-site change, and the suite is what tells you a slot was missed.
+
+Migrate the session-lifetime state: frame, org-buffer, org-restriction, org-file, slides, index, notes-buffer, notes-markers, aux-window, presentation-window. **Leave alone**: =orgacle-page-number= (user-visible, read by the mode line), the overlay lists (module-local bookkeeping, not session identity), =orgacle--saved-state= and =orgacle-outline-ellipsis= (the save/restore mechanism works and has tests), and the =orgacle-user-x-pointer-*= pair, which Task 7 rewrites anyway.
+
+- [ ] *Step 3: Reset the restriction*
+
+=orgacle--org-restriction= is set when presenting a narrowed region and never cleared, so a later ordinary presentation can restore a restriction from a previous one. With the struct this fixes itself if quitting sets =orgacle--session= to nil — verify that it does, with a test that presents a narrowed region, quits, presents an ordinary buffer, quits, and asserts the buffer is not left narrowed.
+
+* Task 5: Quit, honestly
+
+*Files:* modify =orgacle.el=, =orgacle-core.el=, =test/orgacle-test.el=.
+
+- [ ] *Step 1: Find the frame from the session, not from a string*
+
+=orgacle-quit= decides whether to delete a frame with =(string= "Orgacle" (frame-parameter nil 'title))=. Any frame a user has titled =Orgacle= matches. The struct holds the real frame; use it, and check =frame-live-p=.
+
+- [ ] *Step 2: Restore what the mode changed and never put back*
+
+Two pieces of global state, neither a plain variable, so neither fits =orgacle-saved-variables=:
+
+- =tooltip-mode= is toggled in =orgacle-run= and never restored, so a user who had tooltips on loses them permanently after one presentation.
+- =(set-face-background 'fringe …)= is called with no FRAME argument, so it rewrites the =fringe= face for every frame, not just the presentation's.
+
+Fix the fringe one by passing the presentation frame. Fix the tooltip one by recording the prior state and restoring it. Write a test for each: they are exactly the kind of leak the P2 mechanism was built for and the kind that nobody notices until a week later.
+
+- [ ] *Step 3: Keep it idempotent*
+
+The idempotency tests from P2 must still pass. Quitting with no session, and quitting twice, stay harmless.
+
+* Task 6: Failures a presenter can survive and inspect
+
+*Files:* modify =orgacle-core.el=, =test/orgacle-test.el=.
+
+Spec section 5.3 asks for an =*Orgacle Log*= buffer carrying the slide index and a backtrace. P2 delivered =message= only, which is right for surviving a failure and useless for diagnosing one after the talk.
+
+- [ ] *Step 1: Write the failing test*
+
+A page-hook member that signals should leave a =*Orgacle Log*= buffer naming the function, the slide index, and the error.
+
+- [ ] *Step 2: Implement*
+
+Keep the echo-area message — the presenter needs to know something happened — and append the detail to the log buffer. Do not pop the buffer up during a presentation; it is for reading afterwards. Include the backtrace if you can get one cheaply from the handler; if not, say so in your report rather than faking it.
+
+* Task 7: Finish the half-finished
+
+*Files:* modify =orgacle-core.el=, =test/orgacle-test.el=.
+
+- [ ] *Step 1: Make the mouse toggle a toggle*
+
+=orgacle-mouse-visible= is initialised to =t= and never assigned, so =m= only ever hides. Assign it, and test both directions. The pointer variables are X11-only, so the test must work on a build without them — assert the variable's state rather than the pointer's if that is what is testable, and say which you did.
+
+- [ ] *Step 2: Decide =orgacle-internal-border-width= on evidence*
+
+The =defcustom= exists, its docstring says =NOT WORKING=, and nothing reads it; the frame is created with a hardcoded border. The pre-fork commit =f9bc35e= removed the customization because it disturbed the fringe indicators, which are now drawn by a page-hook member rather than the tangle that existed then.
+
+Retest it: wire the variable into =orgacle--get-frame=, present a slide with both a file and a video indicator, and see whether the indicators still land correctly at a few border widths. If they do, keep it wired and delete the =NOT WORKING= from the docstring. If they do not, remove the =defcustom= — a customization that has never worked is worse than none, because it invites a user to set it and wonder. Report what you saw at which widths; this step's value is the evidence, not the outcome.
+
+* Task 8: Verify and publish
+
+- [ ] *Step 1: Prove the model holds*
+
+No feature module requires a sibling. Every file compiles standalone with warnings as errors. =ox-orgacle.el= loads without the rest.
+
+- [ ] *Step 2: Prove the navigation is O(1)*
+
+=orgacle-jump-to-page= runs the page hook once, whatever the distance. The Task 2 test asserts this; confirm it still does.
+
+- [ ] *Step 3: Present something real*
+
+Run =present.org= end to end in a real frame if you can, or say plainly that you could not and what you did instead. Every phase so far has been verified in batch, and batch cannot see a frame.
+
+- [ ] *Step 4: Full gates, push, CI green on all three versions*
+
+- [ ] *Step 5: Record P3 complete in the design document*
+
+* Verification
+
+P3 is done when:
+
+- =make clean && make all= exits 0 and CI is green on 29.4, 30.2 and snapshot;
+- navigation is index arithmetic over a vector built once, and jumping runs the page hook exactly once;
+- the notes buffer is positioned by index, and two slides with the same title get their own notes;
+- the session's lifetime state is one struct, and =orgacle-quit= finds its frame from it;
+- =tooltip-mode= and the =fringe= face are restored;
+- a failing page-hook member leaves a readable =*Orgacle Log*= entry and the presentation continues;
+- =m= toggles both ways;
+- =orgacle-internal-border-width= either works or is gone, with evidence recorded either way.
