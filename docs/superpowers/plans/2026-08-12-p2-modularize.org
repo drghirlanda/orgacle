@@ -36,7 +36,7 @@ Actions.
   CI covers Emacs 29.4, 30.2 and snapshot.
 - The suite is 40 tests at the start of this phase and must never shrink.
 - **No behaviour changes except where a task says so.** This phase moves code
-  and changes how modules find each other. Tasks 8 and 9 change structure that
+  and changes how modules find each other. Tasks 5 and 6 change structure that
   is observable; everything before them must be a pure move.
 - Every new file needs its own header line, =;;; Commentary:=, =;;; Code:=,
   a =provide= and a closing =;;; name.el ends here=, or checkdoc and
@@ -48,14 +48,14 @@ Carried from the P0 and P1 ledgers, which live in a git-ignored workspace.
 Recording them here makes them survive.
 
 - =orgacle-inline-image-overlays= is write-only dead bookkeeping — set in
-  =orgacle-mode=, never read since the Org 9.8 shim landed. Task 9 removes it
+  =orgacle-mode=, never read since the Org 9.8 shim landed. Task 6 removes it
   with the rest of the ad-hoc state.
 - The comment above the =declare-function= block claims every call site below
   is guarded by a =major-mode= check; =flyspell-mode-off= is guarded by
   =fboundp= instead. Task 1 moves that block and corrects the comment.
 - =orgacle-latex-property-drawer= uses =let= where the =width= and =pages=
   initialisers each depend on match data the other destroys; it is correct only
-  because =let= evaluates left to right. Task 7 moves that function and makes
+  because =let= evaluates left to right. Task 4 moves that function and makes
   it =let*=.
 
 Explicitly *not* in this phase, and still open: the one-way =m= mouse toggle
@@ -93,7 +93,7 @@ extraction has somewhere to put its shared references.
   =orgacle--link-preview-overlays=; the =declare-function= block; the four bare
   X11 =defvar= declarations; =orgacle-clean-overlays=,
   =orgacle-clean-fringe-overlays=; =orgacle--get-frame=; =orgacle-toggle-mouse=;
-  and =orgacle-page-hook= (defined here, used from Task 8).
+  and =orgacle-page-hook= (defined here, used from Task 5).
 
 - [ ] *Step 1: Create the file with its header*
 
@@ -152,7 +152,7 @@ It claims every call site below is guarded by a =major-mode= check.
 
 - [ ] *Step 4: Add the page hook*
 
-Nothing uses it until Task 8; defining it here means the feature modules can
+Nothing uses it until Task 5; defining it here means the feature modules can
 join it as they are extracted.
 
 #+begin_src emacs-lisp :eval no
@@ -252,7 +252,7 @@ as they are.* They will not compile cleanly yet — see the next step.
 warn.
 
 Add =declare-function= forms for them at the top of =orgacle-nav.el=, with a
-comment saying they are temporary and Task 8 removes them by replacing the
+comment saying they are temporary and Task 5 removes them by replacing the
 calls with the page hook. This is the honest way to hold an intermediate state:
 the alternative is a dependency cycle.
 
@@ -289,7 +289,7 @@ Two of Task 2's temporary =declare-function= forms —
 =orgacle-show-file-auto= and =orgacle-show-indicators-maybe= — now have a real
 home. =orgacle-nav.el= must not require =orgacle-media.el=: that is the
 sideways dependency this phase exists to remove. Keep the declarations, and
-keep the comment explaining that Task 8 deletes them along with the calls.
+keep the comment explaining that Task 5 deletes them along with the calls.
 
 - [ ] *Step 3: Update requires and the Makefile, run the gates, commit*
 
