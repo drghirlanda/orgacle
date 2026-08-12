@@ -35,15 +35,15 @@
 
 ;;; Commentary:
 
-;; This is a presentation mode for Emacs. It works best in
+;; This is a presentation mode for Emacs.  It works best in
 ;; Emacs >= 24, which has a nice font rendering engine.
 
-;; To use, invoke `epresent-run' in an `org-mode' buffer. This will
+;; To use, invoke `epresent-run' in an `org-mode' buffer.  This will
 ;; make a full-screen frame special key bindings and features for
-;; presentation. Use n/p to navigate, or q to quit. Read below for
-;; more key bindings. Each top-level headline becomes a frame in the
+;; presentation.  Use n/p to navigate, or q to quit.  Read below for
+;; more key bindings.  Each top-level headline becomes a frame in the
 ;; presentation (configure `EPRESENT_FRAME_LEVEL' to change this
-;; default). Org-mode markup is used to nicely display the buffer's
+;; default).  Org-mode markup is used to nicely display the buffer's
 ;; contents.
 
 ;;; Code:
@@ -133,7 +133,7 @@
   "Frame for EPresent.")
 
 (defvar epresent--org-buffer nil
-  "Original Org-mode buffer")
+  "Original Org-mode buffer.")
 
 (defvar epresent--org-restriction nil
   "Original restriction in Org-mode buffer.")
@@ -154,24 +154,25 @@
 (defvar epresent-user-x-sensitive-text-pointer-shape nil)
 
 (defcustom epresent-indicators t
-  "If not nil, display a black square in right fringe if the
-current page has an EPRESENT_SHOW_FILE property, and display an
-empty square if it has an EPRESENT_SHOW_VIDEO property. When
-showing PDF files, an arrow in the right fringe indicates that
-there are more pages to show."
+  "Whether to display fringe indicators for extra content on a slide.
+When non-nil, a black square appears in the right fringe if the
+current page has an EPRESENT_SHOW_FILE property, and an empty square
+if it has an EPRESENT_SHOW_VIDEO property.  When showing PDF files,
+an arrow in the right fringe indicates that there are more pages to
+show."
   :type 'boolean
   :group 'epresent)
 
 (defcustom epresent-slide-in nil
-  "Apply slide-in effect when changing slides. If set globally,
-slide-in can be inhibited for a specific heading by setting the
-EPRESENT_SLIDE_IN property to 'no'."
+  "Whether to apply a slide-in effect when changing slides.
+If set globally, slide-in can be inhibited for a specific heading by
+setting the EPRESENT_SLIDE_IN property to \\='no\\='."
   :type 'boolean
   :group 'epresent)
 
 (defcustom epresent-slide-in-lines 10
-  "When slide in is used, how many lines from below the header
-are used for the slide-in animation."
+  "Number of lines below the header used for the slide-in animation.
+Only relevant when `epresent-slide-in' is enabled."
   :type 'number
   :group 'epresent)
 
@@ -251,9 +252,9 @@ builds, so this is nil elsewhere."
   :group 'epresent)
 
 (defcustom epresent-internal-border-width 50
-  "NOT WORKING Set this variable to increase or decrease the
-border between the presented material and the edge of the
-screen."
+  "Border width, in pixels, around the presented material.
+NOT WORKING: nothing in this file currently reads this variable, so
+changing it has no effect."
   :type 'integer
   :group 'epresent)
 
@@ -265,20 +266,19 @@ screen, and follows the slide being presented."
   :group 'epresent)
 
 (defcustom epresent-wpm 150
-  "Words-per-minute factor used to estimate a presentation' speaking
-time."
+  "Words-per-minute factor used to estimate a presentation's speaking time."
   :type 'integer
   :group 'epresent)
 
 (defcustom epresent-video-player "mplayer"
-  "Program to play videos, see epresent-show-video. Supported
-players are mplayer and vlc."
+  "Program used to play videos; see `epresent-show-video'.
+Supported players are \"mplayer\" and \"vlc\"."
   :type 'string
   :group 'epresent)
 
 (defvar epresent-mouse-visible t
-  "Whether the mouse is currentyl visible or not. Used by
-  epresent-toggle-mouse")
+  "Whether the mouse pointer is currently visible.
+Used by `epresent-toggle-mouse'.")
 
 (defvar epresent-frame-level 1)
 
@@ -287,11 +287,11 @@ players are mplayer and vlc."
 (defvar epresent-src-block-toggle-state nil)
 
 (defvar epresent-show-filename nil
-  "Filename shown in the auxiliary window. See
-  epresent-show-file.")
+  "Filename shown in the auxiliary window.
+See `epresent-show-file'.")
 
 (defvar epresent-aux-window nil
-  "Auxiliary window for showing files. See epresent-show-file.")
+  "Auxiliary window for showing files.  See `epresent-show-file'.")
 
 (defvar epresent-presentation-window nil
   "The EPresent presentation window.")
@@ -314,7 +314,7 @@ players are mplayer and vlc."
 					(internal-border-width . 75)))))
   (raise-frame epresent--frame)
   (select-frame-set-input-focus epresent--frame)
-  ;; set fringe background to same as frame background 
+  ;; set fringe background to same as frame background
   (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters))))
   ;; set mouse pointer shape, saving the user's setting first
   (when (boundp 'x-pointer-shape)
@@ -362,13 +362,16 @@ players are mplayer and vlc."
       (org-up-heading-all (- level epresent-frame-level)))))
 
 (defun epresent-jump-to-page (num)
-  "Jump directly to a particular page in the presentation."
+  "Jump directly to page NUM of the presentation."
   (interactive "npage number: ")
   (epresent-top)
   (dotimes (_ (1- num)) (epresent-next-page)))
 
 (defun epresent-current-page (&optional backward)
-  "Present the current outline heading."
+  "Present the current outline heading.
+BACKWARD, if non-nil, means a leading \"TITLE PAGE\" heading is
+skipped by moving to the previous page instead of the next one, so
+that skipping moves in the direction the user is already navigating."
   (interactive)
   (when epresent-aux-window
     (delete-window epresent-aux-window)
@@ -401,7 +404,7 @@ players are mplayer and vlc."
   (redraw-display))
 
 (defun epresent-show-indicators-maybe ()
-  "Draw the fringe indicators unless this slide shows its file by itself.
+  "Draw the fringe indicators unless this slide displays its file by itself.
 Nothing is drawn when `epresent-indicators' is nil or when the heading
 has an EPRESENT_SHOW_AUTO property."
   (let ((show-auto (org-entry-get nil "EPRESENT_SHOW_AUTO")))
@@ -488,9 +491,11 @@ which is how a TITLE PAGE heading is stepped over."
   (unless skip
     (epresent-current-page)))
 
-(defun epresent-previous-page (&optional skip)
+(defun epresent-previous-page (&optional _skip)
   "Present the previous outline heading.
-SKIP has the same meaning as in `epresent-next-page'."
+SKIP is accepted for the same calling convention as
+`epresent-next-page' but currently has no effect: this command
+always redisplays the destination page regardless of SKIP."
   (interactive)
   (epresent-goto-top-level)
   (widen)
@@ -535,6 +540,10 @@ SKIP has the same meaning as in `epresent-next-page'."
       (org-fold-show-subtree)))
 
 (defun epresent-clean-overlays (&optional start end)
+  "Delete the overlays in `epresent-overlays' contained in START..END.
+An overlay that starts before START or ends after END is kept rather
+than deleted.  With START and END both nil, every overlay in
+`epresent-overlays' is deleted."
   (interactive)
   (let (kept)
     (dolist (ov epresent-overlays)
@@ -593,7 +602,7 @@ SKIP has the same meaning as in `epresent-next-page'."
   (when (bufferp epresent-notes-buffer)
     (delete-frame (window-frame (get-buffer-window epresent-notes-buffer)))
     (kill-buffer epresent-notes-buffer)))
-  
+
 (defconst epresent-scalable-faces
   '(epresent-title-face epresent-heading-face epresent-subheading-face
     epresent-author-face epresent-bullet-face)
@@ -704,29 +713,40 @@ SKIP has the same meaning as in `epresent-next-page'."
     (epresent--link-preview-refresh)))
 
 (defun epresent-refresh ()
+  "Delete the current slide's overlays and re-fontify it."
   (interactive)
   (epresent-clean-overlays (point-min) (point-max))
   (epresent-fontify))
 
 (defun epresent-setup-src-edit ()
+  "Switch to a box cursor for editing a source block in place.
+Added to `org-src-mode-hook' by `epresent-mode'."
   (setq cursor-type 'box))
 
 (defun epresent-flash-cursor ()
+  "Briefly show a hollow cursor, then restore the default cursor."
   (setq cursor-type 'hollow)
   (sit-for 0.5)
   (setq cursor-type nil))
 
 (defun epresent-next-src-block (&optional arg)
+  "Move to the next source block and flash the cursor.
+ARG is passed to `org-babel-next-src-block'."
   (interactive "P")
   (org-babel-next-src-block arg)
   (epresent-flash-cursor))
 
 (defun epresent-previous-src-block (&optional arg)
+  "Move to the previous source block and flash the cursor.
+ARG is passed to `org-babel-previous-src-block'."
   (interactive "P")
   (org-babel-previous-src-block arg)
   (epresent-flash-cursor))
 
 (defun epresent-toggle-hide-src-blocks (&optional arg)
+  "Toggle the visibility of source block bodies.
+With ARG non-nil, toggle only the source block at point; otherwise
+toggle every source block in the buffer."
   (interactive "P")
   (cl-labels
       ((boundaries
@@ -737,7 +757,7 @@ SKIP has the same meaning as in `epresent-next-page'."
                 (goto-char head)
                 (looking-at org-babel-src-block-regexp)
                 (list (match-beginning 5) (match-end 5)))
-            (error "no source block to hide at %d" (point)))))
+            (error "No source block to hide at %d" (point)))))
        (toggle
         ()
         (cl-destructuring-bind (beg end) (boundaries)
@@ -767,34 +787,37 @@ SKIP has the same meaning as in `epresent-next-page'."
           (toggle))))
     (redraw-display)))
 
-(defun epresent-toggle-hide-src-block (&optional arg)
+(defun epresent-toggle-hide-src-block (&optional _arg)
+  "Toggle the visibility of the source block at point.
+ARG is accepted for the same calling convention as
+`epresent-toggle-hide-src-blocks' but is not otherwise used: this
+command always toggles the block at point regardless of ARG."
   (interactive "P")
   (epresent-toggle-hide-src-blocks t))
 
 (defun epresent-show-file (&optional filename size below)
-  "Show FILENAME file by splitting the buffer. If FILENAME is not
-  given, the value of the EPRESENT_SHOW_FILE property is used. In
-  either case, leading [[ and ]] are stripped, so that FILENAME
-  can be an org-mode link. This is convenient especially when
-  FILENAME is given as a property, because then it can be easily
-  inspected from org-mode.
+  "Show FILENAME by splitting the current window.
+If FILENAME is nil, the value of the EPRESENT_SHOW_FILE property is
+used instead.  In either case, leading \"[[\" and trailing \"]]\" are
+stripped, so that FILENAME can be an `org-mode' link; this is
+convenient when FILENAME comes from a property, because it can then
+be inspected easily from Org mode.
 
-  If BELOW is nil (default), the new buffer is to the right of
-  the current buffer, otherwise it is below. If not provided, the
-  EPRESENT_SHOW_BELOW property is looked up.
+If BELOW is nil (the default), the new window is to the right of the
+current one, otherwise it is below.  If BELOW is not given, the
+EPRESENT_SHOW_BELOW property is looked up instead.
 
-  SIZE is the size of the new buffer, in lines when it is below,
-  and in columns when it is to the right. If not provided, the
-  EPRESENT_SHOW_SIZE property is used. If nothing is found, SIZE
-  defaults to half the window.
+SIZE is the size of the new window, in lines when it is below and in
+columns when it is to the right.  If SIZE is not given, the
+EPRESENT_SHOW_SIZE property is used; if that is not set either, SIZE
+defaults to half the window.
 
-  The file is fit to width or height if it is a PDF or image.
+The displayed file is fit to width or height when it is a PDF or an
+image.
 
-  After the file is displayed and fit, focus is returned to the
-  EPresent window, and changing the frame will delete the
-  auxiliary window showing the file.)
-
-  The file buffer is refreshed anytime it is displayed."
+After the file is displayed and fit, focus returns to the EPresent
+window, and changing slides deletes the auxiliary window showing the
+file.  The file's buffer is refreshed every time it is shown."
   (interactive)
   (delete-other-windows)
   ;; if any of the arguments is not set, look at properties:
@@ -813,7 +836,7 @@ SKIP has the same meaning as in `epresent-next-page'."
   (if (not below)
       (setq below (org-entry-get nil "EPRESENT_SHOW_BELOW")))
   ;; negate size if not nil to conform to split-window-* conventions
-  (if size (setq size (- size))) 
+  (if size (setq size (- size)))
   ;; clean fringe, otherwise indicators show up mid-screen
   (epresent-clean-fringe-overlays)
   (if below
@@ -849,15 +872,18 @@ SKIP has the same meaning as in `epresent-next-page'."
     (select-window epresent-presentation-window)))
 
 (defun epresent-show-file-or-advance ()
-  "Show a file using epresent-show-file. If the file is already
-shown, advance within the file using epresent-advance-file."
+  "Show a file with `epresent-show-file', or advance within it.
+If a file is already shown, advance within it using
+`epresent-advance-file' instead of showing it again."
   (interactive)
   (if (windowp epresent-aux-window)
       (epresent-advance-file)
     (epresent-show-file)))
 
 (defun epresent-update-aux-fringe-overlay ()
-  ""
+  "Update the fringe indicator for more pages in the auxiliary PDF.
+Delete the existing indicator, then draw a new right-arrow indicator
+when the PDF shown in the auxiliary window has additional pages."
   (interactive)
   (if epresent-aux-fringe-overlay
       (delete-overlay epresent-aux-fringe-overlay))
@@ -868,10 +894,11 @@ shown, advance within the file using epresent-advance-file."
        epresent-aux-fringe-overlay
        'before-string
        (propertize " " 'display '(right-fringe right-arrow))))))
-  
+
 (defun epresent-show-file-auto ()
-  "Helper function to show an image automatically upon page
-display."
+  "Show the current slide's file automatically, if requested.
+This calls `epresent-show-file' when the current heading has an
+EPRESENT_SHOW_AUTO property."
   (if (org-entry-get nil "EPRESENT_SHOW_AUTO")
       (epresent-show-file)))
 
@@ -1013,7 +1040,9 @@ EPRESENT_SHOW_PAGES."
 ;;;###autoload
 (defun epresent-export-as-latex
   (&optional async subtreep visible-only body-only ext-plist)
-  "Export current EPresent buffer ro a latex buffer."
+  "Export the current EPresent buffer to a LaTeX buffer.
+ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
+`org-export-to-buffer'; see there for their meaning."
   (interactive)
   (org-export-to-buffer 'epresent "*Org LATEX Export*"
     async subtreep visible-only body-only ext-plist (lambda () (LaTeX-mode))))
@@ -1021,7 +1050,9 @@ EPRESENT_SHOW_PAGES."
 ;;;###autoload
 (defun epresent-export-to-latex
   (&optional async subtreep visible-only body-only ext-plist)
-  "Export current buffer to a LaTeX file."
+  "Export the current buffer to a LaTeX file.
+ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
+`org-export-to-file'; see there for their meaning."
   (interactive)
   (let ((outfile (org-export-output-file-name ".tex" subtreep)))
     (org-export-to-file 'epresent outfile
@@ -1030,8 +1061,9 @@ EPRESENT_SHOW_PAGES."
 ;;;###autoload
 (defun epresent-export-to-pdf
   (&optional async subtreep visible-only body-only ext-plist)
-  "Export current EPresent buffer to LaTeX then process through
-to PDF."
+  "Export the current EPresent buffer to LaTeX, then process it to PDF.
+ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
+`org-export-to-file'; see there for their meaning."
   (interactive)
   (let ((outfile (org-export-output-file-name ".tex" subtreep)))
     (org-export-to-file 'epresent outfile
@@ -1132,7 +1164,12 @@ Does nothing on a build without X11 pointer support."
   "Local keymap for EPresent display mode.")
 
 (define-derived-mode epresent-mode org-mode "EPresent"
-  "Lalala."
+  "Major mode for presenting an Org-mode buffer as a slide show.
+
+Each frame-level heading becomes a slide.  Navigate with
+\\<epresent-mode-map>\\[epresent-next-page] and \\[epresent-previous-page], and leave with \\[epresent-quit].
+
+\\{epresent-mode-map}"
   ;; make Org-mode be as pretty as possible
   (add-hook 'org-src-mode-hook 'epresent-setup-src-edit)
   (setq epresent-inline-image-overlays (epresent--link-preview-overlays))

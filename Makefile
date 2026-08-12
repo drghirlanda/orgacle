@@ -11,7 +11,8 @@ deps:
 
 compile:
 	@rm -f $(EL:.el=.elc)
-	$(BATCH) -f batch-byte-compile $(EL)
+	$(BATCH) --eval '(setq byte-compile-error-on-warn t)' \
+	         -f batch-byte-compile $(EL)
 
 checkdoc:
 	$(BATCH) -l test/checkdoc-batch.el $(EL)

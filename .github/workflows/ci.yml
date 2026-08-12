@@ -35,9 +35,7 @@ jobs:
         run: make test
 
       - name: checkdoc
-        continue-on-error: true
         run: make checkdoc
 
       - name: package-lint
-        continue-on-error: true
         run: make lint
