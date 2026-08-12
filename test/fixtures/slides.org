@@ -1,0 +1,22 @@
+#+TITLE: Slides
+
+* Title page
+Notes to read before starting.
+
+* First slide
+Body.
+
+** A subheading
+Not a slide of its own.
+
+* Hidden slide
+:PROPERTIES:
+:ORGACLE_HIDE: t
+:END:
+
+* Second slide
+
+** Speaker notes
+Not a slide either.
+
+* Third slide

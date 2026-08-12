@@ -99,6 +99,35 @@ version of the code."
   (orgacle-test-with-fixture "plain.org"
     (should (equal orgacle-mode-line (orgacle-get-mode-line)))))
 
+;;; Slide vector
+
+(ert-deftest orgacle-test-build-slides-counts-real-slides ()
+  "Title page, hidden and speaker-notes headings are not slides."
+  (orgacle-test-with-fixture "slides.org"
+    (should (= 3 (length (orgacle--build-slides))))))
+
+(ert-deftest orgacle-test-build-slides-are-in-order ()
+  "The vector is in buffer order and its markers point at headings."
+  (orgacle-test-with-fixture "slides.org"
+    (let ((slides (orgacle--build-slides)))
+      (should (equal '("First slide" "Second slide" "Third slide")
+                     (mapcar (lambda (m)
+                               (save-excursion
+                                 (goto-char m)
+                                 (org-entry-get nil "ITEM")))
+                             (append slides nil)))))))
+
+(ert-deftest orgacle-test-build-slides-respects-frame-level ()
+  "With a frame level of 2, the second-level headings are the slides."
+  (orgacle-test-with-fixture "slides.org"
+    (let ((orgacle-frame-level 2))
+      (should (= 1 (length (orgacle--build-slides)))))))
+
+(ert-deftest orgacle-test-build-slides-on-a-plain-file ()
+  "A file with no exclusions yields one slide per top-level heading."
+  (orgacle-test-with-fixture "plain.org"
+    (should (= 2 (length (orgacle--build-slides))))))
+
 ;;; Speaker notes
 
 (ert-deftest orgacle-test-collect-notes-keeps-slide-headings ()

@@ -339,6 +339,42 @@ Keeps that warning to once per session instead of once per slide.")
           (car (read-from-string (match-string 1)))
         orgacle-mode-line))))
 
+(defun orgacle--slide-p ()
+  "Return non-nil when point is on a heading that is its own slide.
+A slide is a heading at `orgacle-frame-level' that is not a title
+page, not a speaker-notes subtree, and does not carry ORGACLE_HIDE."
+  (and (org-at-heading-p)
+       (= (org-reduced-level (org-current-level)) orgacle-frame-level)
+       (not (org-entry-get nil "ORGACLE_HIDE"))
+       (let ((title (downcase (or (org-entry-get nil "ITEM") ""))))
+         (not (member title '("title page" "speaker notes"))))))
+
+(defun orgacle--build-slides ()
+  "Return a vector of markers, one per slide, in buffer order.
+Works on the whole buffer even when called with the buffer narrowed
+to a single slide, which is the state during a presentation.
+
+Each marker has insertion type t (advancing), the same choice
+`org-agenda-new-marker' makes for markers that identify a heading: a
+marker at a heading's bol is exactly the position where a new sibling
+heading gets inserted -- for example \\='M-RET\\=' at the start of a
+heading line, which prepends a new heading text ending in a newline
+right there.  A non-advancing marker (the default) would stay behind,
+now pointing at that newly-inserted heading instead of the one it was
+built for; an advancing marker moves forward with its own heading's
+text and keeps pointing at it."
+  (let (slides)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (while (re-search-forward org-outline-regexp-bol nil t)
+          (beginning-of-line)
+          (when (orgacle--slide-p)
+            (push (copy-marker (point) t) slides))
+          (end-of-line))))
+    (vconcat (nreverse slides))))
+
 (defun orgacle--get-frame ()
   "Create and set up the Orgacle frame."
   (unless (frame-live-p orgacle--frame)
