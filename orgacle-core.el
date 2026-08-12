@@ -1,0 +1,345 @@
+;;; orgacle-core.el --- Shared state and helpers for Orgacle  -*- lexical-binding: t; -*-
+
+;; This file is part of Orgacle.  See orgacle.el for the package header,
+;; copyright and licence.
+
+;;; Commentary:
+
+;; The leaf module: the customization surface, the state a running
+;; presentation keeps, the compatibility shims, and the helpers every other
+;; module needs.  It requires nothing from the rest of the package, so the
+;; feature modules can depend on it without a cycle.
+
+;;; Code:
+
+(require 'org)
+(require 'cl-lib)
+
+;;; Compatibility
+
+;; Org 9.8 renamed the inline-image API to org-link-preview-*.  The floor
+;; for this package is Org 9.6, so both spellings have to be reachable.
+
+(defun orgacle--link-preview-refresh ()
+  "Regenerate the inline image previews in the current buffer."
+  (if (fboundp 'org-link-preview-refresh)
+      (org-link-preview-refresh)
+    (with-no-warnings (org-redisplay-inline-images))))
+
+(defun orgacle--link-preview-clear ()
+  "Remove the inline image previews from the current buffer."
+  (if (fboundp 'org-link-preview-clear)
+      (org-link-preview-clear)
+    (with-no-warnings (org-remove-inline-images))))
+
+(defun orgacle--link-preview-overlays ()
+  "Return the inline image preview overlays of the current buffer."
+  (if (boundp 'org-link-preview-overlays)
+      (symbol-value 'org-link-preview-overlays)
+    (with-no-warnings org-inline-image-overlays)))
+
+;; These exist only on X11 builds, where term/x-win.el defines them.  The
+;; bare declarations keep the byte-compiler quiet on other builds; the
+;; `boundp' guards at each use site are what decide anything at runtime.
+(defvar x-pointer-dot)
+(defvar x-pointer-shape)
+(defvar x-pointer-invisible)
+(defvar x-sensitive-text-pointer-shape)
+
+;; `pdf-tools' and `image-mode' are optional; every call site below is
+;; guarded by a `major-mode' check, except `flyspell-mode-off', which is
+;; guarded by `fboundp' instead.  These declarations only quiet the
+;; byte-compiler.
+(declare-function pdf-view-fit-height-to-window "pdf-view" ())
+(declare-function pdf-view-fit-width-to-window "pdf-view" ())
+(declare-function pdf-view-goto-page "pdf-view" (page &optional window))
+(declare-function pdf-view-next-page "pdf-view" (&optional n))
+;; `pdf-view-current-page' is a macro, so it cannot be declared here and
+;; called from code compiled without pdf-tools loaded.  Its expansion is
+;; this built-in accessor, which is an ordinary function.
+(declare-function image-mode-window-get "image-mode" (prop &optional winprops))
+(declare-function pdf-cache-number-of-pages "pdf-cache" ())
+(declare-function image-transform-fit-to-height "image-mode" ())
+(declare-function image-transform-fit-to-width "image-mode" ())
+(declare-function flyspell-mode-off "flyspell" ())
+
+(defgroup orgacle nil
+  "This is a presentation mode for Emacs."
+  :group 'orgacle)
+
+(defface orgacle-title-face
+  '((t :weight bold :height 360 :underline t :inherit variable-pitch))
+  "Face used for the title of the document during the presentation."
+  :group 'orgacle)
+(defface orgacle-heading-face
+  '((t :weight bold :height 270 :underline t :inherit variable-pitch))
+  "Face used for the top-level headings in the outline during the presentation."
+  :group 'orgacle)
+(defface orgacle-subheading-face
+  '((t :weight bold :height 240 :inherit variable-pitch))
+  "Face used for any non-top-level headings in the outline during the presentation."
+  :group 'orgacle)
+(defface orgacle-author-face
+  '((t :height 1.6 :inherit variable-pitch))
+  "Face used for the author of the document during the presentation."
+  :group 'orgacle)
+(defface orgacle-bullet-face
+  '((t :weight bold :height 1.4 :underline nil :inherit variable-pitch))
+  "Face used for bullets during the presentation."
+  :group 'orgacle)
+(defface orgacle-hidden-face
+  '((t))
+  "Unused; hiding is done with the `invisible' text property instead.
+`:invisible' was never a real face attribute, and current Emacs
+rejects it at compile time.  This face is not applied anywhere in the
+file; it is kept only because removing it would be a public API
+change, which is out of scope here."
+  :group 'orgacle)
+
+(defcustom orgacle-indicators t
+  "Whether to display fringe indicators for extra content on a slide.
+When non-nil, a black square appears in the right fringe if the
+current page has an ORGACLE_SHOW_FILE property, and an empty square
+if it has an ORGACLE_SHOW_VIDEO property.  When showing PDF files,
+an arrow in the right fringe indicates that there are more pages to
+show."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-slide-in nil
+  "Whether to apply a slide-in effect when changing slides, by default.
+A heading's ORGACLE_SLIDE_IN property overrides this default for that
+one slide: a value of \\='no\\=', \\='nil\\=' or \\='off\\=' turns the
+animation off, and any other value turns it on, regardless of this
+variable's setting.  See `orgacle--slide-in-p'."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-slide-in-lines 10
+  "Number of lines below the header used for the slide-in animation.
+Only relevant when `orgacle-slide-in' is enabled."
+  :type 'number
+  :group 'orgacle)
+
+(defcustom orgacle-slide-in-duration 0.250
+  "When slide-in is used, duration of the effect, in seconds."
+  :type 'number
+  :group 'orgacle)
+
+(defcustom orgacle-slide-in-pause 1
+  "Pause after changing slide, before the slide-in kicks in."
+  :type 'number
+  :group 'orgacle)
+
+(defcustom orgacle-text-scale 400
+  "Height for the text size when presenting."
+  :type 'number
+  :group 'orgacle)
+
+(defcustom orgacle-format-latex-scale 4
+  "A scaling factor for the size of the images generated from LaTeX."
+  :type 'number
+  :group 'orgacle)
+
+(defcustom orgacle-hide-todos t
+  "Whether or not to hide TODOs during the presentation."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-hide-tags t
+  "Whether or not to hide tags during the presentation."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-hide-properties t
+  "Whether or not to hide properties during the presentation."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-mode-line '(:eval (int-to-string orgacle-page-number))
+  "Mode-line construct to use during the presentation, or nil to hide it."
+  :type 'sexp
+  :group 'orgacle)
+
+(defcustom orgacle-src-blocks-visible t
+  "If non-nil source blocks are initially visible on slide change.
+If nil then source blocks are initially hidden on slide change."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-use-org-superstar t
+  "Whether to prettify bullets with `org-superstar-mode'.
+Has no effect when the `org-superstar' package is not installed."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-start-presentation-hook nil
+  "Hook run after starting a presentation."
+  :type 'hook
+  :group 'orgacle)
+
+(defcustom orgacle-stop-presentation-hook nil
+  "Hook run before stopping a presentation."
+  :type 'hook
+  :group 'orgacle)
+
+(defcustom orgacle-x-pointer-shape (and (boundp 'x-pointer-dot) x-pointer-dot)
+  "Shape of the mouse pointer during the presentation.
+The value is one of the `x-pointer-' constants, which are integers, or
+nil to leave the pointer unchanged.  Those constants exist only on X11
+builds, so this is nil elsewhere."
+  :type '(choice (const :tag "Leave unchanged" nil) integer)
+  :group 'orgacle)
+
+(defcustom orgacle-tooltip-mode nil
+  "Whether tooltips are shown during the presentation."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-internal-border-width 50
+  "Border width, in pixels, around the presented material.
+NOT WORKING: nothing in this file currently reads this variable, so
+changing it has no effect."
+  :type 'integer
+  :group 'orgacle)
+
+(defcustom orgacle-speaker-notes t
+  "Whether to collect speaker notes into an *Orgacle Notes* buffer.
+The buffer is shown in its own frame, which can be moved to a second
+screen, and follows the slide being presented."
+  :type 'boolean
+  :group 'orgacle)
+
+(defcustom orgacle-wpm 150
+  "Words-per-minute factor used to estimate a presentation's speaking time."
+  :type 'integer
+  :group 'orgacle)
+
+(defcustom orgacle-video-player "mplayer"
+  "Program used to play videos; see `orgacle-show-video'.
+Supported players are \"mplayer\" and \"vlc\"."
+  :type 'string
+  :group 'orgacle)
+
+(defvar orgacle--frame nil
+  "Frame for Orgacle.")
+
+(defvar orgacle--org-buffer nil
+  "Original Org-mode buffer.")
+
+(defvar orgacle--org-restriction nil
+  "Original restriction in Org-mode buffer.")
+
+(defvar orgacle--org-file nil
+  "Temporary Org-mode file used when a narrowed region.")
+
+(defvar orgacle-overlays nil)
+(defvar orgacle-fringe-overlays nil)
+(defvar orgacle-aux-fringe-overlay nil)
+(defvar orgacle-inline-image-overlays nil)
+(defvar orgacle-src-fontify-natively nil)
+(defvar orgacle-hide-emphasis-markers nil)
+(defvar orgacle-outline-ellipsis nil)
+(defvar orgacle-pretty-entities nil)
+(defvar orgacle-page-number 0)
+(defvar orgacle-user-x-pointer-shape nil)
+(defvar orgacle-user-x-sensitive-text-pointer-shape nil)
+
+(defvar orgacle-mouse-visible t
+  "Whether the mouse pointer is currently visible.
+`orgacle-toggle-mouse' reads this, but nothing in this file ever sets
+it back to nil, so the toggle is currently one-way: it only ever hides
+the pointer.  P3 owns making this variable track the pointer's actual
+state.")
+
+(defvar orgacle-frame-level 1)
+
+(defvar orgacle-notes-buffer nil)
+
+(defvar orgacle-src-block-toggle-state nil)
+
+(defvar orgacle-show-filename nil
+  "Filename shown in the auxiliary window.
+See `orgacle-show-file'.")
+
+(defvar orgacle-aux-window nil
+  "Auxiliary window for showing files.  See `orgacle-show-file'.")
+
+(defvar orgacle-presentation-window nil
+  "The Orgacle presentation window.")
+
+(defvar orgacle-show-buffer nil)
+
+(defun orgacle--get-frame ()
+  "Create and set up the Orgacle frame."
+  (unless (frame-live-p orgacle--frame)
+    (setq orgacle--frame (make-frame '((minibuffer . nil)
+                                        (title . "Orgacle")
+                                        (fullscreen . fullboth)
+                                        (menu-bar-lines . 0)
+                                        (tool-bar-lines . 0)
+                                        (vertical-scroll-bars . nil)
+                                        (left-fringe . 0)
+					(right-fringe . 40)
+					(right-divider-width . 0)
+                                        (cursor-type . nil)
+					(internal-border-width . 75)))))
+  (raise-frame orgacle--frame)
+  (select-frame-set-input-focus orgacle--frame)
+  ;; set fringe background to same as frame background
+  (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters))))
+  ;; set mouse pointer shape, saving the user's setting first
+  (when (boundp 'x-pointer-shape)
+    (setq orgacle-user-x-pointer-shape x-pointer-shape)
+    (setq orgacle-user-x-sensitive-text-pointer-shape
+          x-sensitive-text-pointer-shape)
+    (setq x-pointer-shape orgacle-x-pointer-shape)
+    (setq x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
+    (setq void-text-area-pointer 'text)
+    ;; setting the mouse colour to its current value applies the shapes
+    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
+  orgacle--frame)
+
+(defun orgacle-toggle-mouse ()
+  "Show or hide the mouse pointer.
+Does nothing on a build without X11 pointer support."
+  (interactive)
+  (when (boundp 'x-pointer-shape)
+    (if orgacle-mouse-visible
+        (setq x-pointer-shape x-pointer-invisible
+              x-sensitive-text-pointer-shape x-pointer-invisible)
+      (setq x-pointer-shape orgacle-x-pointer-shape
+            x-sensitive-text-pointer-shape orgacle-x-pointer-shape))
+    (setq void-text-area-pointer 'text)
+    ;; setting the mouse colour to its current value applies the shapes
+    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))))
+
+(defun orgacle-clean-overlays (&optional start end)
+  "Delete the overlays in `orgacle-overlays' contained in START..END.
+An overlay that starts before START or ends after END is kept rather
+than deleted.  With START and END both nil, every overlay in
+`orgacle-overlays' is deleted."
+  (interactive)
+  (let (kept)
+    (dolist (ov orgacle-overlays)
+      (if (or (and start (overlay-start ov) (<= (overlay-start ov) start))
+              (and end   (overlay-end   ov) (>= (overlay-end   ov) end)))
+          (push ov kept)
+        (delete-overlay ov)))
+    (setq orgacle-overlays kept)))
+
+(defun orgacle-clean-fringe-overlays ()
+  "Remove file and video indicators from fringe."
+  (interactive)
+  (dolist (ov orgacle-fringe-overlays)
+    (delete-overlay ov)))
+
+(defvar orgacle-page-hook nil
+  "Hook run after a slide has been displayed and narrowed.
+Each feature module adds its own function here, so that displaying a
+slide does not have to know which subsystems exist.  Members run inside
+a `condition-case': a failure is logged and the remaining members still
+run, because nothing should be able to end a presentation mid-talk.")
+
+(provide 'orgacle-core)
+;;; orgacle-core.el ends here

@@ -1,6 +1,6 @@
 EMACS ?= emacs
 BATCH  = $(EMACS) -Q --batch -l test/init.el
-EL     = orgacle.el
+EL     = orgacle-core.el orgacle.el
 
 .PHONY: all deps compile checkdoc lint test clean
 
@@ -19,6 +19,7 @@ checkdoc:
 
 lint:
 	$(BATCH) --eval '(require (quote package-lint))' \
+	         --eval '(setq package-lint-main-file "orgacle.el")' \
 	         -f package-lint-batch-and-exit $(EL)
 
 test:
