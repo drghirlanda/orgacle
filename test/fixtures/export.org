@@ -2,19 +2,19 @@
 
 * Slide with an image
 :PROPERTIES:
-:EPRESENT_SHOW_FILE: figure.pdf
-:EPRESENT_SHOW_WIDTH: 0.8
+:ORGACLE_SHOW_FILE: figure.pdf
+:ORGACLE_SHOW_WIDTH: 0.8
 :END:
 
 Body text.
 
 * Slide with several pages
 :PROPERTIES:
-:EPRESENT_SHOW_FILE: [[figure.pdf]]
-:EPRESENT_SHOW_PAGES: 1 3
+:ORGACLE_SHOW_FILE: [[figure.pdf]]
+:ORGACLE_SHOW_PAGES: 1 3
 :END:
 
 * Slide with a video
 :PROPERTIES:
-:EPRESENT_VIDEO_ALT: demo.mp4
+:ORGACLE_VIDEO_ALT: demo.mp4
 :END:

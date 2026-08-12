@@ -70,7 +70,7 @@ version of the code."
 ;;; Keyword parsing
 
 (ert-deftest orgacle-test-frame-level-from-keyword ()
-  "`orgacle-get-frame-level' reads #+EPRESENT_FRAME_LEVEL."
+  "`orgacle-get-frame-level' reads #+ORGACLE_FRAME_LEVEL."
   (orgacle-test-with-fixture "keywords.org"
     (should (equal 2 (orgacle-get-frame-level)))))
 
@@ -88,7 +88,7 @@ version of the code."
     (should (equal 2 (orgacle-get-frame-level)))))
 
 (ert-deftest orgacle-test-mode-line-from-keyword ()
-  "`orgacle-get-mode-line' reads and parses #+EPRESENT_MODE_LINE."
+  "`orgacle-get-mode-line' reads and parses #+ORGACLE_MODE_LINE."
   (orgacle-test-with-fixture "keywords.org"
     (should (equal '(:eval (format "slide %d" orgacle-page-number))
                    (orgacle-get-mode-line)))))
@@ -172,7 +172,7 @@ words of body."
       (should (orgacle--slide-in-p)))))
 
 (ert-deftest orgacle-test-slide-in-property-overrides ()
-  "EPRESENT_SLIDE_IN turns the animation on or off for one slide."
+  "ORGACLE_SLIDE_IN turns the animation on or off for one slide."
   (orgacle-test-with-fixture "slide-in.org"
     (goto-char (point-min))
     (re-search-forward "^\\* Never$")
@@ -238,7 +238,7 @@ way."
     (org-export-as 'orgacle nil nil t '(:with-properties t))))
 
 (ert-deftest orgacle-test-export-emits-includegraphics ()
-  "EPRESENT_SHOW_FILE becomes an \\includegraphics with the given width."
+  "ORGACLE_SHOW_FILE becomes an \\includegraphics with the given width."
   (let ((latex (orgacle-test--export-fixture "export.org")))
     (should (string-match-p
              "\\\\includegraphics\\[width=0\\.8\\\\textwidth,page=1\\]{figure\\.pdf}"
@@ -250,23 +250,23 @@ way."
     (should-not (string-match-p "{\\[\\[figure" latex))))
 
 (ert-deftest orgacle-test-export-honours-page-list ()
-  "EPRESENT_SHOW_PAGES emits one \\includegraphics per page."
+  "ORGACLE_SHOW_PAGES emits one \\includegraphics per page."
   (let ((latex (orgacle-test--export-fixture "export.org")))
     (should (string-match-p "page=1\\]{figure\\.pdf}" latex))
     (should (string-match-p "page=3\\]{figure\\.pdf}" latex))))
 
 (ert-deftest orgacle-test-export-names-videos ()
-  "EPRESENT_VIDEO_ALT becomes a bracketed note naming the file."
+  "ORGACLE_VIDEO_ALT becomes a bracketed note naming the file."
   (let ((latex (orgacle-test--export-fixture "export.org")))
     (should (string-match-p "\\[ Video: demo\\.mp4 \\]" latex))))
 
 (ert-deftest orgacle-test-export-defaults-width ()
-  "A drawer with no EPRESENT_SHOW_WIDTH uses half the text width."
+  "A drawer with no ORGACLE_SHOW_WIDTH uses half the text width."
   (let ((latex (orgacle-test--export-fixture "export.org")))
     (should (string-match-p "width=0\\.5\\\\textwidth" latex))))
 
 (ert-deftest orgacle-test-export-inlines-org-files ()
-  "An EPRESENT_SHOW_FILE naming an Org file is converted and inlined.
+  "An ORGACLE_SHOW_FILE naming an Org file is converted and inlined.
 
 This branch was uncovered when a lexical-binding conversion silently
 broke it, so it is pinned here."
@@ -293,12 +293,12 @@ particular order."
         (mapc #'delete-overlay orgacle-fringe-overlays)))))
 
 (ert-deftest orgacle-test-indicator-for-file ()
-  "EPRESENT_SHOW_FILE draws a filled square."
+  "ORGACLE_SHOW_FILE draws a filled square."
   (should (equal '(filled-square)
                  (orgacle-test--indicators-on-slide "Slide with a file"))))
 
 (ert-deftest orgacle-test-indicator-for-video ()
-  "EPRESENT_SHOW_VIDEO draws a hollow square."
+  "ORGACLE_SHOW_VIDEO draws a hollow square."
   (should (equal '(hollow-square)
                  (orgacle-test--indicators-on-slide "Slide with a video"))))
 
@@ -309,7 +309,7 @@ particular order."
                        #'string-lessp))))
 
 (ert-deftest orgacle-test-no-indicator-when-auto ()
-  "EPRESENT_SHOW_AUTO suppresses the indicators entirely."
+  "ORGACLE_SHOW_AUTO suppresses the indicators entirely."
   (should (equal '()
                  (orgacle-test--indicators-on-slide
                   "Slide that shows automatically"))))

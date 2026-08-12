@@ -42,7 +42,7 @@
 ;; make a full-screen frame special key bindings and features for
 ;; presentation.  Use n/p to navigate, or q to quit.  Read below for
 ;; more key bindings.  Each top-level headline becomes a frame in the
-;; presentation (configure `EPRESENT_FRAME_LEVEL' to change this
+;; presentation (configure `ORGACLE_FRAME_LEVEL' to change this
 ;; default).  Org-mode markup is used to nicely display the buffer's
 ;; contents.
 
@@ -161,8 +161,8 @@ change, which is out of scope here."
 (defcustom orgacle-indicators t
   "Whether to display fringe indicators for extra content on a slide.
 When non-nil, a black square appears in the right fringe if the
-current page has an EPRESENT_SHOW_FILE property, and an empty square
-if it has an EPRESENT_SHOW_VIDEO property.  When showing PDF files,
+current page has an ORGACLE_SHOW_FILE property, and an empty square
+if it has an ORGACLE_SHOW_VIDEO property.  When showing PDF files,
 an arrow in the right fringe indicates that there are more pages to
 show."
   :type 'boolean
@@ -170,7 +170,7 @@ show."
 
 (defcustom orgacle-slide-in nil
   "Whether to apply a slide-in effect when changing slides, by default.
-A heading's EPRESENT_SLIDE_IN property overrides this default for that
+A heading's ORGACLE_SLIDE_IN property overrides this default for that
 one slide: a value of \\='no\\=', \\='nil\\=' or \\='off\\=' turns the
 animation off, and any other value turns it on, regardless of this
 variable's setting.  See `orgacle--slide-in-p'."
@@ -347,7 +347,7 @@ See `orgacle-show-file'.")
       (widen)
       (goto-char (point-min))
       (if (re-search-forward
-           "^#\\+EPRESENT_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+           "^#\\+ORGACLE_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
           (string-to-number (match-string 1))
         orgacle-frame-level))))
 
@@ -359,7 +359,7 @@ See `orgacle-show-file'.")
       (widen)
       (goto-char (point-min))
       (if (re-search-forward
-           "^#\\+EPRESENT_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+           "^#\\+ORGACLE_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
           (car (read-from-string (match-string 1)))
         orgacle-mode-line))))
 
@@ -416,27 +416,27 @@ that skipping moves in the direction the user is already navigating."
 (defun orgacle-show-indicators-maybe ()
   "Draw the fringe indicators unless this slide displays its file by itself.
 Nothing is drawn when `orgacle-indicators' is nil or when the heading
-has an EPRESENT_SHOW_AUTO property."
-  (let ((show-auto (org-entry-get nil "EPRESENT_SHOW_AUTO")))
+has an ORGACLE_SHOW_AUTO property."
+  (let ((show-auto (org-entry-get nil "ORGACLE_SHOW_AUTO")))
     (when (and orgacle-indicators (not show-auto))
       (orgacle-show-indicators))))
 
 (defun orgacle-show-indicators ()
   "Draw a fringe indicator for each medium this slide can show.
-A filled square marks an EPRESENT_SHOW_FILE property and a hollow
-square an EPRESENT_SHOW_VIDEO property."
+A filled square marks an ORGACLE_SHOW_FILE property and a hollow
+square an ORGACLE_SHOW_VIDEO property."
   (interactive)
   (save-excursion
     (goto-char (point-min))
     (end-of-line)
     (let ((show-file nil))
-      (when (org-entry-get nil "EPRESENT_SHOW_FILE")
+      (when (org-entry-get nil "ORGACLE_SHOW_FILE")
         (setq show-file t)
         (add-to-list 'orgacle-fringe-overlays (make-overlay (point) (point)))
         (overlay-put (car orgacle-fringe-overlays)
                      'before-string
                      (propertize " " 'display '(right-fringe filled-square))))
-      (when (org-entry-get nil "EPRESENT_SHOW_VIDEO")
+      (when (org-entry-get nil "ORGACLE_SHOW_VIDEO")
         ;; advance past the drawer if a file indicator is already here
         (when show-file
           (re-search-forward "[ \t]*:END:")
@@ -448,10 +448,10 @@ square an EPRESENT_SHOW_VIDEO property."
 
 (defun orgacle--slide-in-p ()
   "Return non-nil when the current slide should slide in.
-`orgacle-slide-in' is the default; an EPRESENT_SLIDE_IN property of
+`orgacle-slide-in' is the default; an ORGACLE_SLIDE_IN property of
 \"no\", \"nil\" or \"off\" turns the animation off for one slide, and
 any other value turns it on."
-  (let ((property (org-entry-get nil "EPRESENT_SLIDE_IN")))
+  (let ((property (org-entry-get nil "ORGACLE_SLIDE_IN")))
     (cond ((null property) orgacle-slide-in)
           ((member (downcase property) '("no" "nil" "off")) nil)
           (t t))))
@@ -534,7 +534,7 @@ always redisplays the destination page regardless of SKIP."
 (defun orgacle-next-subheading ()
   "Advance to next subheading, unhiding it if hidden."
   (interactive)
-  (when (and (org-entry-get nil "EPRESENT_STEPWISE")
+  (when (and (org-entry-get nil "ORGACLE_STEPWISE")
 	   (> (org-current-level) 1))
       (outline-hide-subtree))
   (org-next-visible-heading 1)
@@ -834,7 +834,7 @@ command always toggles the block at point regardless of ARG."
 
 (defun orgacle-show-file (&optional filename size below)
   "Show FILENAME by splitting the current window.
-If FILENAME is nil, the value of the EPRESENT_SHOW_FILE property is
+If FILENAME is nil, the value of the ORGACLE_SHOW_FILE property is
 used instead.  In either case, leading \"[[\" and trailing \"]]\" are
 stripped, so that FILENAME can be an `org-mode' link; this is
 convenient when FILENAME comes from a property, because it can then
@@ -842,11 +842,11 @@ be inspected easily from Org mode.
 
 If BELOW is nil (the default), the new window is to the right of the
 current one, otherwise it is below.  If BELOW is not given, the
-EPRESENT_SHOW_BELOW property is looked up instead.
+ORGACLE_SHOW_BELOW property is looked up instead.
 
 SIZE is the size of the new window, in lines when it is below and in
 columns when it is to the right.  If SIZE is not given, the
-EPRESENT_SHOW_SIZE property is used; if that is not set either, SIZE
+ORGACLE_SHOW_SIZE property is used; if that is not set either, SIZE
 defaults to half the window.
 
 The displayed file is fit to width or height when it is a PDF or an
@@ -859,9 +859,9 @@ file.  The file's buffer is refreshed every time it is shown."
   ;; if FILENAME is not set, look at the property; do this, and error
   ;; out if neither is set, before touching the window layout
   (unless filename
-    (setq filename (org-entry-get nil "EPRESENT_SHOW_FILE")))
+    (setq filename (org-entry-get nil "ORGACLE_SHOW_FILE")))
   (unless filename
-    (user-error "No file to show: set the EPRESENT_SHOW_FILE property"))
+    (user-error "No file to show: set the ORGACLE_SHOW_FILE property"))
   (delete-other-windows)
   ;; remove [[ ]] in case they are there
   (setq filename (replace-regexp-in-string "^\\[\\[" "" filename))
@@ -869,12 +869,12 @@ file.  The file's buffer is refreshed every time it is shown."
   (if (not (file-exists-p filename))
       (user-error (concat filename " does not exist")))
   (when (not size)
-    (setq size (org-entry-get nil "EPRESENT_SHOW_SIZE"))
+    (setq size (org-entry-get nil "ORGACLE_SHOW_SIZE"))
     ;; convert to number, as properties are strings:
     (if (stringp size)
 	(setq size (string-to-number size))))
   (if (not below)
-      (setq below (org-entry-get nil "EPRESENT_SHOW_BELOW")))
+      (setq below (org-entry-get nil "ORGACLE_SHOW_BELOW")))
   ;; negate size if not nil to conform to split-window-* conventions
   (if size (setq size (- size)))
   ;; clean fringe, otherwise indicators show up mid-screen
@@ -938,26 +938,26 @@ when the PDF shown in the auxiliary window has additional pages."
 (defun orgacle-show-file-auto ()
   "Show the current slide's file automatically, if requested.
 This calls `orgacle-show-file' when the current heading has an
-EPRESENT_SHOW_AUTO property."
-  (if (org-entry-get nil "EPRESENT_SHOW_AUTO")
+ORGACLE_SHOW_AUTO property."
+  (if (org-entry-get nil "ORGACLE_SHOW_AUTO")
       (orgacle-show-file)))
 
 (defun orgacle-show-video (&optional filename mute _paused)
   "Play a video full screen.
 
-FILENAME is the video to play; without it the EPRESENT_SHOW_VIDEO
+FILENAME is the video to play; without it the ORGACLE_SHOW_VIDEO
 property of the current heading is used.  With MUTE non-nil the audio
-is silenced; without it the EPRESENT_MUTE property is used.  The
+is silenced; without it the ORGACLE_MUTE property is used.  The
 player is chosen with `orgacle-video-player'."
   (interactive)
   (unless filename
-    (setq filename (org-entry-get nil "EPRESENT_SHOW_VIDEO")))
+    (setq filename (org-entry-get nil "ORGACLE_SHOW_VIDEO")))
   (unless filename
-    (user-error "No video to show: set the EPRESENT_SHOW_VIDEO property"))
+    (user-error "No video to show: set the ORGACLE_SHOW_VIDEO property"))
   (unless (file-exists-p filename)
     (user-error "Cannot open %s" filename))
   (unless mute
-    (setq mute (org-entry-get nil "EPRESENT_MUTE")))
+    (setq mute (org-entry-get nil "ORGACLE_MUTE")))
   (let ((command
          (cond
           ((string= orgacle-video-player "vlc")
@@ -1024,16 +1024,16 @@ the body of its \"Speaker notes\" subtree when it has one."
 
 (defun orgacle-latex-property-drawer (blob contents _info)
   "Translate the property drawer BLOB with CONTENTS into LaTeX.
-EPRESENT_VIDEO_ALT becomes a bracketed note naming the file.
-EPRESENT_SHOW_FILE becomes an included Org file when it names one, and
-an \\includegraphics otherwise, honouring EPRESENT_SHOW_WIDTH and
-EPRESENT_SHOW_PAGES."
+ORGACLE_VIDEO_ALT becomes a bracketed note naming the file.
+ORGACLE_SHOW_FILE becomes an included Org file when it names one, and
+an \\includegraphics otherwise, honouring ORGACLE_SHOW_WIDTH and
+ORGACLE_SHOW_PAGES."
   (let ((input (org-export-expand blob contents t))
         (output nil))
     ;; videos are named, not embedded
-    (when (string-match "EPRESENT_VIDEO_ALT:\s+\\(.+\\)" input)
+    (when (string-match "ORGACLE_VIDEO_ALT:\s+\\(.+\\)" input)
       (setq output (concat output "\n[ Video: " (match-string 1 input) " ]\n\n")))
-    (when (string-match "EPRESENT_SHOW_FILE:\s+\\(.+\\)" input)
+    (when (string-match "ORGACLE_SHOW_FILE:\s+\\(.+\\)" input)
       (let* ((filename (replace-regexp-in-string
                         "\\]?\\]?$" ""
                         (replace-regexp-in-string
@@ -1050,10 +1050,10 @@ EPRESENT_SHOW_PAGES."
                             (insert-file-contents filename)
                             (org-export-string-as (buffer-string) 'latex t))))
           ;; everything else is treated as an image
-          (let ((width (if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" input)
+          (let ((width (if (string-match "ORGACLE_SHOW_WIDTH:\s+\\(.+\\)" input)
                            (match-string 1 input)
                          "0.5"))
-                (pages (if (string-match "EPRESENT_SHOW_PAGES:\s+\\(.+\\)" input)
+                (pages (if (string-match "ORGACLE_SHOW_PAGES:\s+\\(.+\\)" input)
                            (split-string (match-string 1 input))
                          '("1"))))
             (setq output (concat output "\n"))
@@ -1243,10 +1243,10 @@ Each frame-level heading becomes a slide.  Navigate with
   (when (fboundp 'flyspell-mode-off)
     (flyspell-mode-off))
   (orgacle-fontify)
-  ;; hide headings with EPRESENT_HIDE tag or marked as "speaker notes"
+  ;; hide headings with ORGACLE_HIDE tag or marked as "speaker notes"
   (org-map-entries (lambda ()
 		     (when (or
-			    (org-entry-get nil "EPRESENT_HIDE")
+			    (org-entry-get nil "ORGACLE_HIDE")
 			    (string= (downcase (org-entry-get nil "ITEM")) "speaker notes")
 			    (string= (downcase (org-entry-get nil "ITEM")) "title page"))
 		       (org-mark-subtree)

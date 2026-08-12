@@ -1,6 +1,6 @@
 #+TITLE: Keywords
-#+EPRESENT_FRAME_LEVEL: 2
-#+EPRESENT_MODE_LINE: (:eval (format "slide %d" orgacle-page-number))
+#+ORGACLE_FRAME_LEVEL: 2
+#+ORGACLE_MODE_LINE: (:eval (format "slide %d" orgacle-page-number))
 
 * Part one
 
