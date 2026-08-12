@@ -1188,7 +1188,8 @@ Does nothing on a build without X11 pointer support."
 
 (defun epresent-edit-text ()
   "Edit the presentation text in place.
-Press \\[epresent-refresh] to stop editing and refresh the display."
+Press \\<epresent-edit-map>\\[epresent-refresh] to stop editing and refresh
+the display."
   (interactive)
   (let ((prior-cursor-type (cdr (assoc 'cursor-type (frame-parameters)))))
     (set-frame-parameter nil 'cursor-type t)
