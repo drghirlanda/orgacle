@@ -11,6 +11,7 @@
 (require 'ert)
 (require 'org)
 (require 'orgacle)
+(require 'ox-orgacle)
 
 (defconst orgacle-test-fixture-directory
   (expand-file-name "fixtures"

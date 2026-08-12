@@ -54,8 +54,6 @@
 
 ;;; Code:
 (require 'org)
-(require 'ox)
-(require 'ox-latex)
 (require 'cl-lib)
 (require 'org-superstar nil t)
 (require 'orgacle-core)
@@ -63,6 +61,8 @@
 (require 'orgacle-fontify)
 (require 'orgacle-src)
 (require 'orgacle-media)
+(require 'orgacle-notes)
+(require 'ox-orgacle)
 
 ;; `pdf-tools' and `image-mode' are optional; every call site below is
 ;; guarded by a `major-mode' check, except `flyspell-mode-off', which is
@@ -82,19 +82,6 @@
 (declare-function flyspell-mode-off "flyspell" ())
 
 ;; functions
-
-(defun orgacle-position-notes ()
-  "Scroll the notes buffer to the notes for the current slide."
-  (interactive)
-  (when orgacle-notes-buffer
-    (let* ((current-heading (org-entry-get nil "ITEM"))
-           (find-me (concat "^\\*[ \t]+" (regexp-quote current-heading))))
-      (with-selected-window (get-buffer-window orgacle-notes-buffer t)
-        (widen)
-        (goto-char (point-min))
-        (re-search-forward find-me)
-        (org-narrow-to-subtree)
-        (recenter 0)))))
 
 (defun orgacle-quit ()
   "Quit the current presentation."
@@ -141,173 +128,6 @@
   (when (bufferp orgacle-notes-buffer)
     (delete-frame (window-frame (get-buffer-window orgacle-notes-buffer)))
     (kill-buffer orgacle-notes-buffer)))
-
-(defun orgacle--collect-notes ()
-  "Return this buffer's speaker notes as Org text.
-Each frame-level heading contributes a first-level heading, followed by
-the body of its \"Speaker notes\" subtree when it has one."
-  (let ((speaker-notes ""))
-    (save-excursion
-      (goto-char (point-min))
-      (while (< (point) (point-max))
-        (org-next-visible-heading 1)
-        (let ((current-heading (org-entry-get nil "ITEM")))
-          (when (= (org-current-level) 1)
-            (setq speaker-notes
-                  (concat speaker-notes "* " current-heading "\n")))
-          (when (string= current-heading "Speaker notes")
-            (org-mark-subtree)
-            (setq speaker-notes
-                  (concat speaker-notes
-                          (buffer-substring (point) (mark))
-                          "\n"))))))
-    (deactivate-mark)
-    speaker-notes))
-
-(defun orgacle-make-notes-buffer ()
-  "Collect speaker notes into a buffer and show it in a new frame."
-  (interactive)
-  (let ((notes (orgacle--collect-notes)))
-    (if (bufferp orgacle-notes-buffer)
-        (kill-buffer orgacle-notes-buffer))
-    (setq orgacle-notes-buffer (generate-new-buffer "*Orgacle Notes*"))
-    (with-current-buffer orgacle-notes-buffer
-      (erase-buffer)
-      (org-mode)
-      (insert notes)
-      (goto-char (point-min))
-      (while (re-search-forward "\\*\\* ?.* Speaker [nN]otes[ \t]*\n" nil t)
-        (replace-match ""))
-      (goto-char (point-min))
-      (org-narrow-to-subtree))
-    (switch-to-buffer-other-frame orgacle-notes-buffer)))
-
-;;; export functions
-
-(require 'ox)
-(require 'ox-org)
-
-(defun orgacle-latex-property-drawer (blob contents _info)
-  "Translate the property drawer BLOB with CONTENTS into LaTeX.
-ORGACLE_VIDEO_ALT becomes a bracketed note naming the file.
-ORGACLE_SHOW_FILE becomes an included Org file when it names one, and
-an \\includegraphics otherwise, honouring ORGACLE_SHOW_WIDTH and
-ORGACLE_SHOW_PAGES."
-  (let ((input (org-export-expand blob contents t))
-        (output nil))
-    ;; videos are named, not embedded
-    (when (string-match "ORGACLE_VIDEO_ALT:\s+\\(.+\\)" input)
-      (setq output (concat output "\n[ Video: " (match-string 1 input) " ]\n\n")))
-    (when (string-match "ORGACLE_SHOW_FILE:\s+\\(.+\\)" input)
-      (let* ((filename (replace-regexp-in-string
-                        "\\]?\\]?$" ""
-                        (replace-regexp-in-string
-                         "^\\[?\\[?" "" (match-string 1 input))))
-             (extension (file-name-extension filename)))
-        (if (string= extension "org")
-            ;; Org files are converted to LaTeX and inlined.  Read the file
-            ;; into a temporary buffer rather than visiting it: visiting
-            ;; would hand us the user's own buffer if they have the file
-            ;; open, and the conversion replaces the buffer's contents.
-            (setq output
-                  (concat output
-                          (with-temp-buffer
-                            (insert-file-contents filename)
-                            (org-export-string-as (buffer-string) 'latex t))))
-          ;; everything else is treated as an image
-          (let ((width (if (string-match "ORGACLE_SHOW_WIDTH:\s+\\(.+\\)" input)
-                           (match-string 1 input)
-                         "0.5"))
-                (pages (if (string-match "ORGACLE_SHOW_PAGES:\s+\\(.+\\)" input)
-                           (split-string (match-string 1 input))
-                         '("1"))))
-            (setq output (concat output "\n"))
-            (dolist (page pages)
-              (setq output
-                    (concat output
-                            "\\includegraphics[width=" width
-                            "\\textwidth,page=" page "]{" filename "}\n")))))))
-    output))
-
-(org-export-define-derived-backend 'orgacle 'latex
-  :translate-alist
-  '((property-drawer . orgacle-latex-property-drawer))
-  :options-alist
-  ;; Org drops property drawers unless this is on, which would silently
-  ;; disable the translator above.  Default it to t for this backend only.
-  '((:with-properties nil "prop" t))
-  :menu-entry
-  '(?E "Orgacle to LaTeX"
-       ((?L "As LaTeX buffer" orgacle-export-as-latex)
-	(?l "As LaTeX file" orgacle-export-to-latex)
-	(?p "As PDF file" orgacle-export-to-pdf)
-	(?o "As PDF file and open"
-	    (lambda (a s v b)
-	      (if a (orgacle-export-to-pdf t s v b)
-		(org-open-file (orgacle-export-to-pdf nil s v b))))))))
-
-;;;###autoload
-(defun orgacle-export-as-latex
-  (&optional async subtreep visible-only body-only ext-plist)
-  "Export the current Orgacle buffer to a LaTeX buffer.
-ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
-`org-export-to-buffer'; see there for their meaning."
-  (interactive)
-  (org-export-to-buffer 'orgacle "*Org LATEX Export*"
-    async subtreep visible-only body-only ext-plist (lambda () (LaTeX-mode))))
-
-;;;###autoload
-(defun orgacle-export-to-latex
-  (&optional async subtreep visible-only body-only ext-plist)
-  "Export the current buffer to a LaTeX file.
-ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
-`org-export-to-file'; see there for their meaning."
-  (interactive)
-  (let ((outfile (org-export-output-file-name ".tex" subtreep)))
-    (org-export-to-file 'orgacle outfile
-      async subtreep visible-only body-only ext-plist)))
-
-;;;###autoload
-(defun orgacle-export-to-pdf
-  (&optional async subtreep visible-only body-only ext-plist)
-  "Export the current Orgacle buffer to LaTeX, then process it to PDF.
-ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
-`org-export-to-file'; see there for their meaning."
-  (interactive)
-  (let ((outfile (org-export-output-file-name ".tex" subtreep)))
-    (org-export-to-file 'orgacle outfile
-      async subtreep visible-only body-only ext-plist
-      (lambda (file) (org-latex-compile file)))))
-
-;;; end export functions
-
-(defun orgacle--speaker-word-count ()
-  "Return the number of words in this buffer's speaker-notes subtrees."
-  (let ((speaker-words 0))
-    (org-map-entries
-     (lambda ()
-       (when (string= (downcase (org-entry-get nil "ITEM")) "speaker notes")
-         (save-excursion
-           (org-mark-subtree)
-           (setq speaker-words (+ speaker-words (count-words (point) (mark))))
-           (deactivate-mark)))))
-    speaker-words))
-
-(defun orgacle--speaking-time (words)
-  "Return the estimated time in minutes to speak WORDS aloud.
-The result is rounded up to the next half minute.  The reading speed is
-`orgacle-wpm'."
-  (/ (ceiling (* (/ (float words) orgacle-wpm) 2)) 2.0))
-
-(defun orgacle-estimate-time ()
-  "Report how long it would take to read all speaker notes aloud.
-The estimate and the word count are shown in the echo area.  The
-reading speed is `orgacle-wpm'."
-  (interactive)
-  (let* ((words (orgacle--speaker-word-count))
-         (minutes (orgacle--speaking-time words)))
-    (message "Estimated speaking time in minutes: %s (%d words)"
-             minutes words)))
 
 (defvar orgacle-mode-map
   (let ((map (make-keymap)))

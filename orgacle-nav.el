@@ -25,7 +25,7 @@
 (declare-function orgacle-show-file-auto "orgacle-media" ())
 (declare-function orgacle-slide-in-effect "orgacle-fontify" ())
 (declare-function orgacle-show-indicators-maybe "orgacle-media" ())
-(declare-function orgacle-position-notes "orgacle" ())
+(declare-function orgacle-position-notes "orgacle-notes" ())
 
 (defun orgacle-get-frame-level ()
   "Get the heading level to show as different frames."
