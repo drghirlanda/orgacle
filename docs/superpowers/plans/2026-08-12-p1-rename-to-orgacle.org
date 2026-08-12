@@ -360,7 +360,7 @@ Create =test/fixtures/legacy.org=, a document in the old namespace:
         (should (equal 0 (orgacle-migrate-buffer)))
         (should (equal once (buffer-string))))))
 
-  (ert-deftest orgacle-test-migrate-honours-a-region ()
+  (ert-deftest orgacle-test-migrate-honours-an-active-region ()
     "With a region active, only that region is converted."
     (orgacle-test-with-fixture "legacy.org"
       (goto-char (point-min))

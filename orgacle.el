@@ -1,17 +1,19 @@
-;;; epresent.el --- Present Org-mode files as slide shows  -*- lexical-binding: t; -*-
+;;; orgacle.el --- Present Org-mode files as slide shows  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2008 Tom Tromey <tromey@redhat.com>
 ;;               2010 Eric Schulte <schulte.eric@gmail.com>
 ;;               2020 Stefano Ghirlanda <drghirlanda@gmail.com>
 
 ;; Authors: Tom Tromey <tromey@redhat.com>
+;;          Phil Hagelberg <technomancy@gmail.com>
 ;;          Eric Schulte <schulte.eric@gmail.com>
+;;          Puneeth Chaganti <punchagan@gmail.com>
 ;;          Lee Hinman <lee@writequit.org>
 ;;          Stefano Ghirlanda <drghirlanda@gmail.com>
 ;; Maintainer: Stefano Ghirlanda <drghirlanda@gmail.com>
-;; URL: https://github.com/drghirlanda/epresent
+;; URL: https://github.com/drghirlanda/orgacle
 ;; Created: 12 Jun 2008
-;; Version: 1.5.0
+;; Version: 2.0.0
 ;; Keywords: outlines, hypermedia, multimedia
 ;; Package-Requires: ((emacs "29.1") (org "9.6"))
 
@@ -35,16 +37,20 @@
 
 ;;; Commentary:
 
-;; This is a presentation mode for Emacs.  It works best in
-;; Emacs >= 24, which has a nice font rendering engine.
+;; This is a presentation mode for Emacs.
 
-;; To use, invoke `epresent-run' in an `org-mode' buffer.  This will
+;; To use, invoke `orgacle-run' in an `org-mode' buffer.  This will
 ;; make a full-screen frame special key bindings and features for
 ;; presentation.  Use n/p to navigate, or q to quit.  Read below for
 ;; more key bindings.  Each top-level headline becomes a frame in the
-;; presentation (configure `EPRESENT_FRAME_LEVEL' to change this
+;; presentation (configure `ORGACLE_FRAME_LEVEL' to change this
 ;; default).  Org-mode markup is used to nicely display the buffer's
 ;; contents.
+
+;; Orgacle began as a fork of epresent, by Tom Tromey, Phil Hagelberg,
+;; Eric Schulte, Puneeth Chaganti and Lee Hinman, which has been
+;; unmaintained since 2016.  Presentations written for the old package
+;; use EPRESENT_ property names; `orgacle-migrate-buffer' converts them.
 
 ;;; Code:
 (require 'org)
@@ -66,19 +72,19 @@
 ;; Org 9.8 renamed the inline-image API to org-link-preview-*.  The floor
 ;; for this package is Org 9.6, so both spellings have to be reachable.
 
-(defun epresent--link-preview-refresh ()
+(defun orgacle--link-preview-refresh ()
   "Regenerate the inline image previews in the current buffer."
   (if (fboundp 'org-link-preview-refresh)
       (org-link-preview-refresh)
     (with-no-warnings (org-redisplay-inline-images))))
 
-(defun epresent--link-preview-clear ()
+(defun orgacle--link-preview-clear ()
   "Remove the inline image previews from the current buffer."
   (if (fboundp 'org-link-preview-clear)
       (org-link-preview-clear)
     (with-no-warnings (org-remove-inline-images))))
 
-(defun epresent--link-preview-overlays ()
+(defun orgacle--link-preview-overlays ()
   "Return the inline image preview overlays of the current buffer."
   (if (boundp 'org-link-preview-overlays)
       (symbol-value 'org-link-preview-overlays)
@@ -101,218 +107,218 @@
 (declare-function image-transform-fit-to-width "image-mode" ())
 (declare-function flyspell-mode-off "flyspell" ())
 
-(defgroup epresent nil
+(defgroup orgacle nil
   "This is a presentation mode for Emacs."
-  :group 'epresent)
+  :group 'orgacle)
 
-(defface epresent-title-face
+(defface orgacle-title-face
   '((t :weight bold :height 360 :underline t :inherit variable-pitch))
   "Face used for the title of the document during the presentation."
-  :group 'epresent)
-(defface epresent-heading-face
+  :group 'orgacle)
+(defface orgacle-heading-face
   '((t :weight bold :height 270 :underline t :inherit variable-pitch))
   "Face used for the top-level headings in the outline during the presentation."
-  :group 'epresent)
-(defface epresent-subheading-face
+  :group 'orgacle)
+(defface orgacle-subheading-face
   '((t :weight bold :height 240 :inherit variable-pitch))
   "Face used for any non-top-level headings in the outline during the presentation."
-  :group 'epresent)
-(defface epresent-author-face
+  :group 'orgacle)
+(defface orgacle-author-face
   '((t :height 1.6 :inherit variable-pitch))
   "Face used for the author of the document during the presentation."
-  :group 'epresent)
-(defface epresent-bullet-face
+  :group 'orgacle)
+(defface orgacle-bullet-face
   '((t :weight bold :height 1.4 :underline nil :inherit variable-pitch))
   "Face used for bullets during the presentation."
-  :group 'epresent)
-(defface epresent-hidden-face
+  :group 'orgacle)
+(defface orgacle-hidden-face
   '((t))
   "Unused; hiding is done with the `invisible' text property instead.
 `:invisible' was never a real face attribute, and current Emacs
 rejects it at compile time.  This face is not applied anywhere in the
 file; it is kept only because removing it would be a public API
 change, which is out of scope here."
-  :group 'epresent)
+  :group 'orgacle)
 
-(defvar epresent--frame nil
-  "Frame for EPresent.")
+(defvar orgacle--frame nil
+  "Frame for Orgacle.")
 
-(defvar epresent--org-buffer nil
+(defvar orgacle--org-buffer nil
   "Original Org-mode buffer.")
 
-(defvar epresent--org-restriction nil
+(defvar orgacle--org-restriction nil
   "Original restriction in Org-mode buffer.")
 
-(defvar epresent--org-file nil
+(defvar orgacle--org-file nil
   "Temporary Org-mode file used when a narrowed region.")
 
-(defvar epresent-overlays nil)
-(defvar epresent-fringe-overlays nil)
-(defvar epresent-aux-fringe-overlay nil)
-(defvar epresent-inline-image-overlays nil)
-(defvar epresent-src-fontify-natively nil)
-(defvar epresent-hide-emphasis-markers nil)
-(defvar epresent-outline-ellipsis nil)
-(defvar epresent-pretty-entities nil)
-(defvar epresent-page-number 0)
-(defvar epresent-user-x-pointer-shape nil)
-(defvar epresent-user-x-sensitive-text-pointer-shape nil)
+(defvar orgacle-overlays nil)
+(defvar orgacle-fringe-overlays nil)
+(defvar orgacle-aux-fringe-overlay nil)
+(defvar orgacle-inline-image-overlays nil)
+(defvar orgacle-src-fontify-natively nil)
+(defvar orgacle-hide-emphasis-markers nil)
+(defvar orgacle-outline-ellipsis nil)
+(defvar orgacle-pretty-entities nil)
+(defvar orgacle-page-number 0)
+(defvar orgacle-user-x-pointer-shape nil)
+(defvar orgacle-user-x-sensitive-text-pointer-shape nil)
 
-(defcustom epresent-indicators t
+(defcustom orgacle-indicators t
   "Whether to display fringe indicators for extra content on a slide.
 When non-nil, a black square appears in the right fringe if the
-current page has an EPRESENT_SHOW_FILE property, and an empty square
-if it has an EPRESENT_SHOW_VIDEO property.  When showing PDF files,
+current page has an ORGACLE_SHOW_FILE property, and an empty square
+if it has an ORGACLE_SHOW_VIDEO property.  When showing PDF files,
 an arrow in the right fringe indicates that there are more pages to
 show."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-slide-in nil
+(defcustom orgacle-slide-in nil
   "Whether to apply a slide-in effect when changing slides, by default.
-A heading's EPRESENT_SLIDE_IN property overrides this default for that
+A heading's ORGACLE_SLIDE_IN property overrides this default for that
 one slide: a value of \\='no\\=', \\='nil\\=' or \\='off\\=' turns the
 animation off, and any other value turns it on, regardless of this
-variable's setting.  See `epresent--slide-in-p'."
+variable's setting.  See `orgacle--slide-in-p'."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-slide-in-lines 10
+(defcustom orgacle-slide-in-lines 10
   "Number of lines below the header used for the slide-in animation.
-Only relevant when `epresent-slide-in' is enabled."
+Only relevant when `orgacle-slide-in' is enabled."
   :type 'number
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-slide-in-duration 0.250
+(defcustom orgacle-slide-in-duration 0.250
   "When slide-in is used, duration of the effect, in seconds."
   :type 'number
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-slide-in-pause 1
+(defcustom orgacle-slide-in-pause 1
   "Pause after changing slide, before the slide-in kicks in."
   :type 'number
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-text-scale 400
+(defcustom orgacle-text-scale 400
   "Height for the text size when presenting."
   :type 'number
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-format-latex-scale 4
+(defcustom orgacle-format-latex-scale 4
   "A scaling factor for the size of the images generated from LaTeX."
   :type 'number
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-hide-todos t
+(defcustom orgacle-hide-todos t
   "Whether or not to hide TODOs during the presentation."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-hide-tags t
+(defcustom orgacle-hide-tags t
   "Whether or not to hide tags during the presentation."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-hide-properties t
+(defcustom orgacle-hide-properties t
   "Whether or not to hide properties during the presentation."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-mode-line '(:eval (int-to-string epresent-page-number))
+(defcustom orgacle-mode-line '(:eval (int-to-string orgacle-page-number))
   "Mode-line construct to use during the presentation, or nil to hide it."
   :type 'sexp
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-src-blocks-visible t
+(defcustom orgacle-src-blocks-visible t
   "If non-nil source blocks are initially visible on slide change.
 If nil then source blocks are initially hidden on slide change."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-use-org-superstar t
+(defcustom orgacle-use-org-superstar t
   "Whether to prettify bullets with `org-superstar-mode'.
 Has no effect when the `org-superstar' package is not installed."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-start-presentation-hook nil
+(defcustom orgacle-start-presentation-hook nil
   "Hook run after starting a presentation."
   :type 'hook
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-stop-presentation-hook nil
+(defcustom orgacle-stop-presentation-hook nil
   "Hook run before stopping a presentation."
   :type 'hook
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-x-pointer-shape (and (boundp 'x-pointer-dot) x-pointer-dot)
+(defcustom orgacle-x-pointer-shape (and (boundp 'x-pointer-dot) x-pointer-dot)
   "Shape of the mouse pointer during the presentation.
 The value is one of the `x-pointer-' constants, which are integers, or
 nil to leave the pointer unchanged.  Those constants exist only on X11
 builds, so this is nil elsewhere."
   :type '(choice (const :tag "Leave unchanged" nil) integer)
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-tooltip-mode nil
+(defcustom orgacle-tooltip-mode nil
   "Whether tooltips are shown during the presentation."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-internal-border-width 50
+(defcustom orgacle-internal-border-width 50
   "Border width, in pixels, around the presented material.
 NOT WORKING: nothing in this file currently reads this variable, so
 changing it has no effect."
   :type 'integer
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-speaker-notes t
-  "Whether to collect speaker notes into an *EPresent Notes* buffer.
+(defcustom orgacle-speaker-notes t
+  "Whether to collect speaker notes into an *Orgacle Notes* buffer.
 The buffer is shown in its own frame, which can be moved to a second
 screen, and follows the slide being presented."
   :type 'boolean
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-wpm 150
+(defcustom orgacle-wpm 150
   "Words-per-minute factor used to estimate a presentation's speaking time."
   :type 'integer
-  :group 'epresent)
+  :group 'orgacle)
 
-(defcustom epresent-video-player "mplayer"
-  "Program used to play videos; see `epresent-show-video'.
+(defcustom orgacle-video-player "mplayer"
+  "Program used to play videos; see `orgacle-show-video'.
 Supported players are \"mplayer\" and \"vlc\"."
   :type 'string
-  :group 'epresent)
+  :group 'orgacle)
 
-(defvar epresent-mouse-visible t
+(defvar orgacle-mouse-visible t
   "Whether the mouse pointer is currently visible.
-`epresent-toggle-mouse' reads this, but nothing in this file ever sets
+`orgacle-toggle-mouse' reads this, but nothing in this file ever sets
 it back to nil, so the toggle is currently one-way: it only ever hides
 the pointer.  P3 owns making this variable track the pointer's actual
 state.")
 
-(defvar epresent-frame-level 1)
+(defvar orgacle-frame-level 1)
 
-(defvar epresent-notes-buffer nil)
+(defvar orgacle-notes-buffer nil)
 
-(defvar epresent-src-block-toggle-state nil)
+(defvar orgacle-src-block-toggle-state nil)
 
-(defvar epresent-show-filename nil
+(defvar orgacle-show-filename nil
   "Filename shown in the auxiliary window.
-See `epresent-show-file'.")
+See `orgacle-show-file'.")
 
-(defvar epresent-aux-window nil
-  "Auxiliary window for showing files.  See `epresent-show-file'.")
+(defvar orgacle-aux-window nil
+  "Auxiliary window for showing files.  See `orgacle-show-file'.")
 
-(defvar epresent-presentation-window nil
-  "The EPresent presentation window.")
+(defvar orgacle-presentation-window nil
+  "The Orgacle presentation window.")
 
-(defvar epresent-show-buffer nil)
+(defvar orgacle-show-buffer nil)
 
-(defun epresent--get-frame ()
-  "Create and set up the EPresent frame."
-  (unless (frame-live-p epresent--frame)
-    (setq epresent--frame (make-frame '((minibuffer . nil)
-                                        (title . "EPresent")
+(defun orgacle--get-frame ()
+  "Create and set up the Orgacle frame."
+  (unless (frame-live-p orgacle--frame)
+    (setq orgacle--frame (make-frame '((minibuffer . nil)
+                                        (title . "Orgacle")
                                         (fullscreen . fullboth)
                                         (menu-bar-lines . 0)
                                         (tool-bar-lines . 0)
@@ -322,24 +328,24 @@ See `epresent-show-file'.")
 					(right-divider-width . 0)
                                         (cursor-type . nil)
 					(internal-border-width . 75)))))
-  (raise-frame epresent--frame)
-  (select-frame-set-input-focus epresent--frame)
+  (raise-frame orgacle--frame)
+  (select-frame-set-input-focus orgacle--frame)
   ;; set fringe background to same as frame background
   (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters))))
   ;; set mouse pointer shape, saving the user's setting first
   (when (boundp 'x-pointer-shape)
-    (setq epresent-user-x-pointer-shape x-pointer-shape)
-    (setq epresent-user-x-sensitive-text-pointer-shape
+    (setq orgacle-user-x-pointer-shape x-pointer-shape)
+    (setq orgacle-user-x-sensitive-text-pointer-shape
           x-sensitive-text-pointer-shape)
-    (setq x-pointer-shape epresent-x-pointer-shape)
-    (setq x-sensitive-text-pointer-shape epresent-x-pointer-shape)
+    (setq x-pointer-shape orgacle-x-pointer-shape)
+    (setq x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
     (setq void-text-area-pointer 'text)
     ;; setting the mouse colour to its current value applies the shapes
     (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
-  epresent--frame)
+  orgacle--frame)
 
 ;; functions
-(defun epresent-get-frame-level ()
+(defun orgacle-get-frame-level ()
   "Get the heading level to show as different frames."
   (interactive)
   (save-excursion
@@ -347,11 +353,11 @@ See `epresent-show-file'.")
       (widen)
       (goto-char (point-min))
       (if (re-search-forward
-           "^#\\+EPRESENT_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+           "^#\\+ORGACLE_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
           (string-to-number (match-string 1))
-        epresent-frame-level))))
+        orgacle-frame-level))))
 
-(defun epresent-get-mode-line ()
+(defun orgacle-get-mode-line ()
   "Get the presentation-specific mode-line."
   (interactive)
   (save-excursion
@@ -359,107 +365,107 @@ See `epresent-show-file'.")
       (widen)
       (goto-char (point-min))
       (if (re-search-forward
-           "^#\\+EPRESENT_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+           "^#\\+ORGACLE_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
           (car (read-from-string (match-string 1)))
-        epresent-mode-line))))
+        orgacle-mode-line))))
 
-(defun epresent-goto-top-level ()
+(defun orgacle-goto-top-level ()
   "Go to the current top level heading containing point."
   (interactive)
   (unless (org-at-heading-p) (outline-previous-heading))
   (let ((level (ignore-errors (org-reduced-level (org-current-level)))))
-    (when (and level (> level epresent-frame-level))
-      (org-up-heading-all (- level epresent-frame-level)))))
+    (when (and level (> level orgacle-frame-level))
+      (org-up-heading-all (- level orgacle-frame-level)))))
 
-(defun epresent-jump-to-page (num)
+(defun orgacle-jump-to-page (num)
   "Jump directly to page NUM of the presentation."
   (interactive "npage number: ")
-  (epresent-top)
-  (dotimes (_ (1- num)) (epresent-next-page)))
+  (orgacle-top)
+  (dotimes (_ (1- num)) (orgacle-next-page)))
 
-(defun epresent-current-page (&optional backward)
+(defun orgacle-current-page (&optional backward)
   "Present the current outline heading.
 BACKWARD, if non-nil, means a leading \"TITLE PAGE\" heading is
 skipped by moving to the previous page instead of the next one, so
 that skipping moves in the direction the user is already navigating."
   (interactive)
-  (when epresent-aux-window
-    (delete-window epresent-aux-window)
-    (setq epresent-aux-window nil))
+  (when orgacle-aux-window
+    (delete-window orgacle-aux-window)
+    (setq orgacle-aux-window nil))
   (if (org-current-level)
       (progn
-	(epresent-goto-top-level)
+	(orgacle-goto-top-level)
 	;; skipe a TITLE PAGE heading, used for introductory speaker notes
 	(if (string= (downcase (org-entry-get nil "ITEM")) "title page")
 	    (if backward
-		(epresent-previous-page t)
-	      (epresent-next-page t)))
+		(orgacle-previous-page t)
+	      (orgacle-next-page t)))
 	(org-narrow-to-subtree)
 	(outline-show-all)
 	(outline-hide-body)
 	(when (>= (org-reduced-level (org-current-level))
-		  epresent-frame-level)
+		  orgacle-frame-level)
 	  (org-fold-show-subtree)
 	  (org-cycle-set-visibility-according-to-property) ;; folds children
-	  (let ((epresent-src-block-toggle-state
-		 (if epresent-src-blocks-visible :show :hide)))
-	    (epresent-toggle-hide-src-blocks)))
-	(epresent-show-file-auto)
-	(epresent-slide-in-effect)
-	(epresent-show-indicators-maybe)
-	(epresent-position-notes))
+	  (let ((orgacle-src-block-toggle-state
+		 (if orgacle-src-blocks-visible :show :hide)))
+	    (orgacle-toggle-hide-src-blocks)))
+	(orgacle-show-file-auto)
+	(orgacle-slide-in-effect)
+	(orgacle-show-indicators-maybe)
+	(orgacle-position-notes))
     ;; before first headline -- fold up subtrees as TOC
     (org-cycle '(4)))
   ; this is sometimes useful:
   (redraw-display))
 
-(defun epresent-show-indicators-maybe ()
+(defun orgacle-show-indicators-maybe ()
   "Draw the fringe indicators unless this slide displays its file by itself.
-Nothing is drawn when `epresent-indicators' is nil or when the heading
-has an EPRESENT_SHOW_AUTO property."
-  (let ((show-auto (org-entry-get nil "EPRESENT_SHOW_AUTO")))
-    (when (and epresent-indicators (not show-auto))
-      (epresent-show-indicators))))
+Nothing is drawn when `orgacle-indicators' is nil or when the heading
+has an ORGACLE_SHOW_AUTO property."
+  (let ((show-auto (org-entry-get nil "ORGACLE_SHOW_AUTO")))
+    (when (and orgacle-indicators (not show-auto))
+      (orgacle-show-indicators))))
 
-(defun epresent-show-indicators ()
+(defun orgacle-show-indicators ()
   "Draw a fringe indicator for each medium this slide can show.
-A filled square marks an EPRESENT_SHOW_FILE property and a hollow
-square an EPRESENT_SHOW_VIDEO property."
+A filled square marks an ORGACLE_SHOW_FILE property and a hollow
+square an ORGACLE_SHOW_VIDEO property."
   (interactive)
   (save-excursion
     (goto-char (point-min))
     (end-of-line)
     (let ((show-file nil))
-      (when (org-entry-get nil "EPRESENT_SHOW_FILE")
+      (when (org-entry-get nil "ORGACLE_SHOW_FILE")
         (setq show-file t)
-        (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
-        (overlay-put (car epresent-fringe-overlays)
+        (add-to-list 'orgacle-fringe-overlays (make-overlay (point) (point)))
+        (overlay-put (car orgacle-fringe-overlays)
                      'before-string
                      (propertize " " 'display '(right-fringe filled-square))))
-      (when (org-entry-get nil "EPRESENT_SHOW_VIDEO")
+      (when (org-entry-get nil "ORGACLE_SHOW_VIDEO")
         ;; advance past the drawer if a file indicator is already here
         (when show-file
           (re-search-forward "[ \t]*:END:")
           (forward-line))
-        (add-to-list 'epresent-fringe-overlays (make-overlay (point) (point)))
-        (overlay-put (car epresent-fringe-overlays)
+        (add-to-list 'orgacle-fringe-overlays (make-overlay (point) (point)))
+        (overlay-put (car orgacle-fringe-overlays)
                      'before-string
                      (propertize " " 'display '(right-fringe hollow-square)))))))
 
-(defun epresent--slide-in-p ()
+(defun orgacle--slide-in-p ()
   "Return non-nil when the current slide should slide in.
-`epresent-slide-in' is the default; an EPRESENT_SLIDE_IN property of
+`orgacle-slide-in' is the default; an ORGACLE_SLIDE_IN property of
 \"no\", \"nil\" or \"off\" turns the animation off for one slide, and
 any other value turns it on."
-  (let ((property (org-entry-get nil "EPRESENT_SLIDE_IN")))
-    (cond ((null property) epresent-slide-in)
+  (let ((property (org-entry-get nil "ORGACLE_SLIDE_IN")))
+    (cond ((null property) orgacle-slide-in)
           ((member (downcase property) '("no" "nil" "off")) nil)
           (t t))))
 
-(defun epresent-slide-in-effect ()
+(defun orgacle-slide-in-effect ()
   "Animate the current slide sliding in from below."
   (interactive)
-  (when (epresent--slide-in-p)
+  (when (orgacle--slide-in-p)
     (save-excursion
       (goto-char (point-min))
       (forward-line)
@@ -467,80 +473,80 @@ any other value turns it on."
       (if (looking-at "[ \t]*:PROPERTIES:")
           (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
       (let ((ov (make-overlay (point) (point))))
-        (dotimes (i epresent-slide-in-lines)
-          (if (eq i 1) (sit-for epresent-slide-in-pause))
+        (dotimes (i orgacle-slide-in-lines)
+          (if (eq i 1) (sit-for orgacle-slide-in-pause))
           (overlay-put ov 'after-string
-                       (make-string (- epresent-slide-in-lines i) ?\n))
-          (sit-for (/ epresent-slide-in-duration epresent-slide-in-lines)))
+                       (make-string (- orgacle-slide-in-lines i) ?\n))
+          (sit-for (/ orgacle-slide-in-duration orgacle-slide-in-lines)))
         (delete-overlay ov)))))
 
-(defun epresent-top ()
+(defun orgacle-top ()
   "Present the first outline heading."
   (interactive)
   (widen)
   (goto-char (point-min))
-  (setq epresent-page-number 1)
+  (setq orgacle-page-number 1)
   ;; rewind notes buffer if present
-  (if epresent-notes-buffer
-      (with-current-buffer epresent-notes-buffer
+  (if orgacle-notes-buffer
+      (with-current-buffer orgacle-notes-buffer
 	(goto-char (point-min))))
-  (epresent-current-page))
+  (orgacle-current-page))
 
-(defun epresent-next-page (&optional skip)
+(defun orgacle-next-page (&optional skip)
   "Advance to the next outline heading and present it.
 With SKIP non-nil the page counter advances but nothing is displayed,
 which is how a TITLE PAGE heading is stepped over."
   (interactive)
-  (epresent-goto-top-level)
+  (orgacle-goto-top-level)
   (widen)
   (when (if (< (or (ignore-errors (org-reduced-level (org-current-level))) 0)
-               epresent-frame-level)
+               orgacle-frame-level)
             (outline-next-heading)
           (org-get-next-sibling))
-    (cl-incf epresent-page-number))
+    (cl-incf orgacle-page-number))
   (unless skip
-    (epresent-current-page)))
+    (orgacle-current-page)))
 
-(defun epresent-previous-page (&optional _skip)
+(defun orgacle-previous-page (&optional _skip)
   "Present the previous outline heading.
 SKIP is accepted for the same calling convention as
-`epresent-next-page' but currently has no effect: this command
+`orgacle-next-page' but currently has no effect: this command
 always redisplays the destination page regardless of SKIP."
   (interactive)
-  (epresent-goto-top-level)
+  (orgacle-goto-top-level)
   (widen)
   (org-content)
   (if (< (or (ignore-errors (org-reduced-level (org-current-level))) 0)
-         epresent-frame-level)
+         orgacle-frame-level)
       (outline-previous-heading)
     (org-get-previous-sibling))
-  (when (> epresent-page-number 1)
-    (cl-decf epresent-page-number))
-  (epresent-current-page t))
+  (when (> orgacle-page-number 1)
+    (cl-decf orgacle-page-number))
+  (orgacle-current-page t))
 
-(defun epresent-position-notes ()
+(defun orgacle-position-notes ()
   "Scroll the notes buffer to the notes for the current slide."
   (interactive)
-  (when epresent-notes-buffer
+  (when orgacle-notes-buffer
     (let* ((current-heading (org-entry-get nil "ITEM"))
            (find-me (concat "^\\*[ \t]+" (regexp-quote current-heading))))
-      (with-selected-window (get-buffer-window epresent-notes-buffer t)
+      (with-selected-window (get-buffer-window orgacle-notes-buffer t)
         (widen)
         (goto-char (point-min))
         (re-search-forward find-me)
         (org-narrow-to-subtree)
         (recenter 0)))))
 
-(defun epresent-next-subheading ()
+(defun orgacle-next-subheading ()
   "Advance to next subheading, unhiding it if hidden."
   (interactive)
-  (when (and (org-entry-get nil "EPRESENT_STEPWISE")
+  (when (and (org-entry-get nil "ORGACLE_STEPWISE")
 	   (> (org-current-level) 1))
       (outline-hide-subtree))
   (org-next-visible-heading 1)
   (org-fold-show-subtree))
 
-(defun epresent-previous-subheading ()
+(defun orgacle-previous-subheading ()
   "Go back to previous subheading, possibly hiding the current one."
   (interactive)
   (when (> (org-current-level) 1)
@@ -549,119 +555,119 @@ always redisplays the destination page regardless of SKIP."
   (if (> (org-current-level) 1) ; show if we found a subheading
       (org-fold-show-subtree)))
 
-(defun epresent-clean-overlays (&optional start end)
-  "Delete the overlays in `epresent-overlays' contained in START..END.
+(defun orgacle-clean-overlays (&optional start end)
+  "Delete the overlays in `orgacle-overlays' contained in START..END.
 An overlay that starts before START or ends after END is kept rather
 than deleted.  With START and END both nil, every overlay in
-`epresent-overlays' is deleted."
+`orgacle-overlays' is deleted."
   (interactive)
   (let (kept)
-    (dolist (ov epresent-overlays)
+    (dolist (ov orgacle-overlays)
       (if (or (and start (overlay-start ov) (<= (overlay-start ov) start))
               (and end   (overlay-end   ov) (>= (overlay-end   ov) end)))
           (push ov kept)
         (delete-overlay ov)))
-    (setq epresent-overlays kept)))
+    (setq orgacle-overlays kept)))
 
-(defun epresent-clean-fringe-overlays ()
+(defun orgacle-clean-fringe-overlays ()
   "Remove file and video indicators from fringe."
   (interactive)
-  (dolist (ov epresent-fringe-overlays)
+  (dolist (ov orgacle-fringe-overlays)
     (delete-overlay ov)))
 
-(defun epresent-quit ()
+(defun orgacle-quit ()
   "Quit the current presentation."
   (interactive)
-  (run-hooks 'epresent-stop-presentation-hook)
+  (run-hooks 'orgacle-stop-presentation-hook)
   (org-clear-latex-preview)
   ;; restore the user's Org-mode variables
-  (remove-hook 'org-src-mode-hook 'epresent-setup-src-edit)
+  (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
   ;; The saved preview overlays are not restored: Org 9.8 replaced the
   ;; variable that held them, and P3 rewrites this function around an
   ;; explicit session struct.  Previews regenerate on the next refresh.
-  (setq org-src-fontify-natively epresent-src-fontify-natively)
-  (setq org-hide-emphasis-markers epresent-hide-emphasis-markers)
+  (setq org-src-fontify-natively orgacle-src-fontify-natively)
+  (setq org-hide-emphasis-markers orgacle-hide-emphasis-markers)
   (set-display-table-slot standard-display-table
-                          'selective-display epresent-outline-ellipsis)
-  (setq org-pretty-entities epresent-pretty-entities)
-  (remove-hook 'org-babel-after-execute-hook 'epresent-refresh)
-  (when (string= "EPresent" (frame-parameter nil 'title))
+                          'selective-display orgacle-outline-ellipsis)
+  (setq org-pretty-entities orgacle-pretty-entities)
+  (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh)
+  (when (string= "Orgacle" (frame-parameter nil 'title))
     (delete-frame (selected-frame)))
-  (when epresent--org-file
-    (let ((buf (get-file-buffer epresent--org-file)))
+  (when orgacle--org-file
+    (let ((buf (get-file-buffer orgacle--org-file)))
       (when buf (kill-buffer buf)))
-    (when (file-exists-p epresent--org-file)
-      (delete-file epresent--org-file))
-    (setq epresent--org-file nil))
-  (when epresent--org-buffer
-    (set-buffer epresent--org-buffer))
+    (when (file-exists-p orgacle--org-file)
+      (delete-file orgacle--org-file))
+    (setq orgacle--org-file nil))
+  (when orgacle--org-buffer
+    (set-buffer orgacle--org-buffer))
   (org-mode)
-  (if epresent--org-restriction
-      (apply #'narrow-to-region epresent--org-restriction)
+  (if orgacle--org-restriction
+      (apply #'narrow-to-region orgacle--org-restriction)
     (widen))
   (hack-local-variables)
-  ;; delete all epresent overlays
-  (epresent-clean-overlays)
-  (epresent-clean-fringe-overlays)
+  ;; delete all orgacle overlays
+  (orgacle-clean-overlays)
+  (orgacle-clean-fringe-overlays)
   ;; reset mouse pointer shape and colour
   (when (boundp 'x-pointer-shape)
-    (setq x-pointer-shape epresent-user-x-pointer-shape)
+    (setq x-pointer-shape orgacle-user-x-pointer-shape)
     (setq x-sensitive-text-pointer-shape
-          epresent-user-x-sensitive-text-pointer-shape)
+          orgacle-user-x-sensitive-text-pointer-shape)
     (setq void-text-area-pointer 'arrow)
     (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
   ;; kill notes buffer and associated frame, if present
-  (when (bufferp epresent-notes-buffer)
-    (delete-frame (window-frame (get-buffer-window epresent-notes-buffer)))
-    (kill-buffer epresent-notes-buffer)))
+  (when (bufferp orgacle-notes-buffer)
+    (delete-frame (window-frame (get-buffer-window orgacle-notes-buffer)))
+    (kill-buffer orgacle-notes-buffer)))
 
-(defconst epresent-scalable-faces
-  '(epresent-title-face epresent-heading-face epresent-subheading-face
-    epresent-author-face epresent-bullet-face)
-  "Faces whose height `epresent-increase-font' and its opposite change.")
+(defconst orgacle-scalable-faces
+  '(orgacle-title-face orgacle-heading-face orgacle-subheading-face
+    orgacle-author-face orgacle-bullet-face)
+  "Faces whose height `orgacle-increase-font' and its opposite change.")
 
-(defconst epresent-font-step 10
-  "Amount `epresent--scale-font' adds to or subtracts from an absolute height.
-Applies to a face in `epresent-scalable-faces' whose current :height is
+(defconst orgacle-font-step 10
+  "Amount `orgacle--scale-font' adds to or subtracts from an absolute height.
+Applies to a face in `orgacle-scalable-faces' whose current :height is
 an integer, i.e. an absolute size in 1/10 pt, such as
-`epresent-title-face'.")
+`orgacle-title-face'.")
 
-(defconst epresent-font-factor 1.1
-  "Factor `epresent--scale-font' multiplies or divides a relative height by.
-Applies to a face in `epresent-scalable-faces' whose current :height is
+(defconst orgacle-font-factor 1.1
+  "Factor `orgacle--scale-font' multiplies or divides a relative height by.
+Applies to a face in `orgacle-scalable-faces' whose current :height is
 a float, i.e. a multiplier of the frame's default height, such as
-`epresent-author-face'.")
+`orgacle-author-face'.")
 
-(defun epresent--scale-font (grow)
-  "Scale the height of every face in `epresent-scalable-faces'.
+(defun orgacle--scale-font (grow)
+  "Scale the height of every face in `orgacle-scalable-faces'.
 With GROW non-nil the faces get larger, otherwise smaller.
 
-`epresent-scalable-faces' mixes faces whose :height is an absolute
+`orgacle-scalable-faces' mixes faces whose :height is an absolute
 integer with faces whose :height is a relative float multiplier.  An
-absolute height is stepped by `epresent-font-step'; a relative height
-is scaled by `epresent-font-factor'.  Either kind is clamped above
+absolute height is stepped by `orgacle-font-step'; a relative height
+is scaled by `orgacle-font-factor'.  Either kind is clamped above
 zero, so no sequence of calls can produce a non-positive height, which
 `set-face-attribute' rejects."
-  (dolist (face epresent-scalable-faces)
+  (dolist (face orgacle-scalable-faces)
     (let ((height (face-attribute face :height)))
       (set-face-attribute
        face nil :height
        (if (integerp height)
-           (max 1 (+ height (if grow epresent-font-step (- epresent-font-step))))
-         (max 0.1 (if grow (* height epresent-font-factor)
-                    (/ height epresent-font-factor))))))))
+           (max 1 (+ height (if grow orgacle-font-step (- orgacle-font-step))))
+         (max 0.1 (if grow (* height orgacle-font-factor)
+                    (/ height orgacle-font-factor))))))))
 
-(defun epresent-increase-font ()
+(defun orgacle-increase-font ()
   "Make the presentation font one step larger."
   (interactive)
-  (epresent--scale-font t))
+  (orgacle--scale-font t))
 
-(defun epresent-decrease-font ()
+(defun orgacle-decrease-font ()
   "Make the presentation font one step smaller."
   (interactive)
-  (epresent--scale-font nil))
+  (orgacle--scale-font nil))
 
-(defun epresent-fontify ()
+(defun orgacle-fontify ()
   "Overlay additional presentation faces to Org-mode."
   (save-excursion
     ;; hide all comments
@@ -684,103 +690,103 @@ zero, so no sequence of calls can produce a non-positive height, which
         ;; why this is required, or why images start on the preceding
         ;; newline, but not knowing why doesn't make it less true.
         (push (make-overlay (match-beginning 0) (- (match-end 0) 1))
-              epresent-overlays)
-        (overlay-put (car epresent-overlays) 'invisible 'epresent-hide))
+              orgacle-overlays)
+        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))
        ((save-match-data
 	  (string-match "^[ \t]*#\\+attr_org:.*?\n" (match-string 0)))
         (push (make-overlay (match-beginning 0) (- (match-end 0) 1))
-              epresent-overlays)
-        (overlay-put (car epresent-overlays) 'invisible 'epresent-hide))
+              orgacle-overlays)
+        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))
        ;; this hides all other comments
        (t (push (make-overlay (match-beginning 0) (match-end 0))
-                epresent-overlays)
-          (overlay-put (car epresent-overlays) 'invisible 'epresent-hide))))
+                orgacle-overlays)
+          (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))))
     ;; page title faces and heading/subheading faces
     (goto-char (point-min))
     (while (re-search-forward "^\\(*+\\)\\([ \t]+\\)\\(.*\\)$" nil t)
       ;; hide the first match, that is the stars
       (push (make-overlay (match-beginning 1) (or (match-end 2)
                                                  (match-end 1)))
-           epresent-overlays)
-      (overlay-put (car epresent-overlays) 'invisible 'epresent-hide)
+           orgacle-overlays)
+      (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide)
       ;; apply faces to heading and subheading
-      (push (make-overlay (match-beginning 3) (match-end 3)) epresent-overlays)
+      (push (make-overlay (match-beginning 3) (match-end 3)) orgacle-overlays)
       (if (> (length (match-string 1)) 1)
-          (overlay-put (car epresent-overlays) 'face 'epresent-subheading-face)
-	  (overlay-put (car epresent-overlays) 'face 'epresent-heading-face)))
+          (overlay-put (car orgacle-overlays) 'face 'orgacle-subheading-face)
+	  (overlay-put (car orgacle-overlays) 'face 'orgacle-heading-face)))
     ;; fancy bullet points, when the package is available
-    (when (and epresent-use-org-superstar (fboundp 'org-superstar-mode))
+    (when (and orgacle-use-org-superstar (fboundp 'org-superstar-mode))
       (org-superstar-mode 1))
     ;; hide todos
-    (when epresent-hide-todos
+    (when orgacle-hide-todos
       (goto-char (point-min))
       (while (re-search-forward org-todo-line-regexp nil t)
         (when (match-string 2)
           (push (make-overlay (match-beginning 2) (1+ (match-end 2)))
-                epresent-overlays)
-          (overlay-put (car epresent-overlays) 'invisible 'epresent-hide))))
+                orgacle-overlays)
+          (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))))
     ;; hide tags
-    (when epresent-hide-tags
+    (when orgacle-hide-tags
       (goto-char (point-min))
       (while (re-search-forward
               "^\\*+.*?\\([ \t]+:[[:alnum:]_@#%:]+:\\)[ \r\n]"
               nil t)
-        (push (make-overlay (match-beginning 1) (match-end 1)) epresent-overlays)
-        (overlay-put (car epresent-overlays) 'invisible 'epresent-hide)))
+        (push (make-overlay (match-beginning 1) (match-end 1)) orgacle-overlays)
+        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide)))
     ;; hide properties
-    (when epresent-hide-properties
+    (when orgacle-hide-properties
       (goto-char (point-min))
       (while (re-search-forward org-drawer-regexp nil t)
         (let ((beg (match-beginning 0))
               (end (re-search-forward
                     "^[ \t]*:END:[ \r\n]"
                     (save-excursion (outline-next-heading) (point)) t)))
-          (push (make-overlay beg end) epresent-overlays)
-          (overlay-put (car epresent-overlays) 'invisible 'epresent-hide))))
+          (push (make-overlay beg end) orgacle-overlays)
+          (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))))
     (dolist (el '("title" "author" "date"))
       (goto-char (point-min))
       (when (re-search-forward (format "^\\(#\\+%s:[ \t]*\\)[ \t]*\\(.*\\)$" el) nil t)
-        (push (make-overlay (match-beginning 1) (match-end 1)) epresent-overlays)
-        (overlay-put (car epresent-overlays) 'invisible 'epresent-hide)
-        (push (make-overlay (match-beginning 2) (match-end 2)) epresent-overlays)
+        (push (make-overlay (match-beginning 1) (match-end 1)) orgacle-overlays)
+        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide)
+        (push (make-overlay (match-beginning 2) (match-end 2)) orgacle-overlays)
         (overlay-put
-         (car epresent-overlays) 'face (intern (format "epresent-%s-face" el)))))
+         (car orgacle-overlays) 'face (intern (format "orgacle-%s-face" el)))))
     ;; inline images
-    (epresent--link-preview-clear)
-    (epresent--link-preview-refresh)))
+    (orgacle--link-preview-clear)
+    (orgacle--link-preview-refresh)))
 
-(defun epresent-refresh ()
+(defun orgacle-refresh ()
   "Delete the current slide's overlays and re-fontify it."
   (interactive)
-  (epresent-clean-overlays (point-min) (point-max))
-  (epresent-fontify))
+  (orgacle-clean-overlays (point-min) (point-max))
+  (orgacle-fontify))
 
-(defun epresent-setup-src-edit ()
+(defun orgacle-setup-src-edit ()
   "Switch to a box cursor for editing a source block in place.
-Added to `org-src-mode-hook' by `epresent-mode'."
+Added to `org-src-mode-hook' by `orgacle-mode'."
   (setq cursor-type 'box))
 
-(defun epresent-flash-cursor ()
+(defun orgacle-flash-cursor ()
   "Briefly show a hollow cursor, then restore the default cursor."
   (setq cursor-type 'hollow)
   (sit-for 0.5)
   (setq cursor-type nil))
 
-(defun epresent-next-src-block (&optional arg)
+(defun orgacle-next-src-block (&optional arg)
   "Move to the next source block and flash the cursor.
 ARG is passed to `org-babel-next-src-block'."
   (interactive "P")
   (org-babel-next-src-block arg)
-  (epresent-flash-cursor))
+  (orgacle-flash-cursor))
 
-(defun epresent-previous-src-block (&optional arg)
+(defun orgacle-previous-src-block (&optional arg)
   "Move to the previous source block and flash the cursor.
 ARG is passed to `org-babel-previous-src-block'."
   (interactive "P")
   (org-babel-previous-src-block arg)
-  (epresent-flash-cursor))
+  (orgacle-flash-cursor))
 
-(defun epresent-toggle-hide-src-blocks (&optional arg)
+(defun orgacle-toggle-hide-src-blocks (&optional arg)
   "Toggle the visibility of source block bodies.
 With ARG non-nil, toggle only the source block at point; otherwise
 toggle every source block in the buffer."
@@ -799,23 +805,23 @@ toggle every source block in the buffer."
         ()
         (cl-destructuring-bind (beg end) (boundaries)
           (let ((ovs (cl-remove-if-not
-                      (lambda (ov) (overlay-get ov 'epresent-hidden-src-block))
+                      (lambda (ov) (overlay-get ov 'orgacle-hidden-src-block))
                       (overlays-at beg))))
             (if ovs
-                (unless (and epresent-src-block-toggle-state
-                             (eq epresent-src-block-toggle-state :hide))
+                (unless (and orgacle-src-block-toggle-state
+                             (eq orgacle-src-block-toggle-state :hide))
                   (progn
                     (mapc #'delete-overlay ovs)
-                    (setq epresent-overlays
-                          (cl-set-difference epresent-overlays ovs))))
-              (unless (and epresent-src-block-toggle-state
-                           (eq epresent-src-block-toggle-state :show))
+                    (setq orgacle-overlays
+                          (cl-set-difference orgacle-overlays ovs))))
+              (unless (and orgacle-src-block-toggle-state
+                           (eq orgacle-src-block-toggle-state :show))
                 (progn
-                  (push (make-overlay beg end) epresent-overlays)
-                  (overlay-put (car epresent-overlays)
-                               'epresent-hidden-src-block t)
-                  (overlay-put (car epresent-overlays)
-                               'invisible 'epresent-hide))))))))
+                  (push (make-overlay beg end) orgacle-overlays)
+                  (overlay-put (car orgacle-overlays)
+                               'orgacle-hidden-src-block t)
+                  (overlay-put (car orgacle-overlays)
+                               'invisible 'orgacle-hide))))))))
     (if arg (toggle)               ; only toggle the current src block
       (save-excursion              ; toggle all source blocks
         (goto-char (point-min))
@@ -824,17 +830,17 @@ toggle every source block in the buffer."
           (toggle))))
     (redraw-display)))
 
-(defun epresent-toggle-hide-src-block (&optional _arg)
+(defun orgacle-toggle-hide-src-block (&optional _arg)
   "Toggle the visibility of the source block at point.
 ARG is accepted for the same calling convention as
-`epresent-toggle-hide-src-blocks' but is not otherwise used: this
+`orgacle-toggle-hide-src-blocks' but is not otherwise used: this
 command always toggles the block at point regardless of ARG."
   (interactive "P")
-  (epresent-toggle-hide-src-blocks t))
+  (orgacle-toggle-hide-src-blocks t))
 
-(defun epresent-show-file (&optional filename size below)
+(defun orgacle-show-file (&optional filename size below)
   "Show FILENAME by splitting the current window.
-If FILENAME is nil, the value of the EPRESENT_SHOW_FILE property is
+If FILENAME is nil, the value of the ORGACLE_SHOW_FILE property is
 used instead.  In either case, leading \"[[\" and trailing \"]]\" are
 stripped, so that FILENAME can be an `org-mode' link; this is
 convenient when FILENAME comes from a property, because it can then
@@ -842,26 +848,26 @@ be inspected easily from Org mode.
 
 If BELOW is nil (the default), the new window is to the right of the
 current one, otherwise it is below.  If BELOW is not given, the
-EPRESENT_SHOW_BELOW property is looked up instead.
+ORGACLE_SHOW_BELOW property is looked up instead.
 
 SIZE is the size of the new window, in lines when it is below and in
 columns when it is to the right.  If SIZE is not given, the
-EPRESENT_SHOW_SIZE property is used; if that is not set either, SIZE
+ORGACLE_SHOW_SIZE property is used; if that is not set either, SIZE
 defaults to half the window.
 
 The displayed file is fit to width or height when it is a PDF or an
 image.
 
-After the file is displayed and fit, focus returns to the EPresent
+After the file is displayed and fit, focus returns to the Orgacle
 window, and changing slides deletes the auxiliary window showing the
 file.  The file's buffer is refreshed every time it is shown."
   (interactive)
   ;; if FILENAME is not set, look at the property; do this, and error
   ;; out if neither is set, before touching the window layout
   (unless filename
-    (setq filename (org-entry-get nil "EPRESENT_SHOW_FILE")))
+    (setq filename (org-entry-get nil "ORGACLE_SHOW_FILE")))
   (unless filename
-    (user-error "No file to show: set the EPRESENT_SHOW_FILE property"))
+    (user-error "No file to show: set the ORGACLE_SHOW_FILE property"))
   (delete-other-windows)
   ;; remove [[ ]] in case they are there
   (setq filename (replace-regexp-in-string "^\\[\\[" "" filename))
@@ -869,22 +875,22 @@ file.  The file's buffer is refreshed every time it is shown."
   (if (not (file-exists-p filename))
       (user-error (concat filename " does not exist")))
   (when (not size)
-    (setq size (org-entry-get nil "EPRESENT_SHOW_SIZE"))
+    (setq size (org-entry-get nil "ORGACLE_SHOW_SIZE"))
     ;; convert to number, as properties are strings:
     (if (stringp size)
 	(setq size (string-to-number size))))
   (if (not below)
-      (setq below (org-entry-get nil "EPRESENT_SHOW_BELOW")))
+      (setq below (org-entry-get nil "ORGACLE_SHOW_BELOW")))
   ;; negate size if not nil to conform to split-window-* conventions
   (if size (setq size (- size)))
   ;; clean fringe, otherwise indicators show up mid-screen
-  (epresent-clean-fringe-overlays)
+  (orgacle-clean-fringe-overlays)
   (if below
-      (setq epresent-aux-window (split-window-below size))
-    (setq epresent-aux-window (split-window-right size)))
-  (select-window epresent-aux-window)
+      (setq orgacle-aux-window (split-window-below size))
+    (setq orgacle-aux-window (split-window-right size)))
+  (select-window orgacle-aux-window)
   (find-file filename)
-  (setq mode-line-format (epresent-get-mode-line))
+  (setq mode-line-format (orgacle-get-mode-line))
   (revert-buffer t t t)
   ;; PDFs
   (when (eq major-mode 'pdf-view-mode)
@@ -892,83 +898,83 @@ file.  The file's buffer is refreshed every time it is shown."
 	(pdf-view-fit-height-to-window)
       (pdf-view-fit-width-to-window))
     (pdf-view-goto-page 1)
-    (epresent-update-aux-fringe-overlay))
+    (orgacle-update-aux-fringe-overlay))
   ;; images
   (when (eq major-mode 'image-mode)
     (if below
 	(image-transform-fit-to-height)
       (image-transform-fit-to-width)))
   ;; go back to presentation window:
-  (select-window epresent-presentation-window))
+  (select-window orgacle-presentation-window))
 
-(defun epresent-advance-file ()
-  "Advance the file showed by epresent-show-file to the next page."
+(defun orgacle-advance-file ()
+  "Advance the file showed by orgacle-show-file to the next page."
   (interactive)
-  (when (windowp epresent-aux-window)
-    (select-window epresent-aux-window)
+  (when (windowp orgacle-aux-window)
+    (select-window orgacle-aux-window)
     (when (eq major-mode 'pdf-view-mode)
       (pdf-view-next-page)
-      (epresent-update-aux-fringe-overlay))
-    (select-window epresent-presentation-window)))
+      (orgacle-update-aux-fringe-overlay))
+    (select-window orgacle-presentation-window)))
 
-(defun epresent-show-file-or-advance ()
-  "Show a file with `epresent-show-file', or advance within it.
+(defun orgacle-show-file-or-advance ()
+  "Show a file with `orgacle-show-file', or advance within it.
 If a file is already shown, advance within it using
-`epresent-advance-file' instead of showing it again."
+`orgacle-advance-file' instead of showing it again."
   (interactive)
-  (if (windowp epresent-aux-window)
-      (epresent-advance-file)
-    (epresent-show-file)))
+  (if (windowp orgacle-aux-window)
+      (orgacle-advance-file)
+    (orgacle-show-file)))
 
-(defun epresent-update-aux-fringe-overlay ()
+(defun orgacle-update-aux-fringe-overlay ()
   "Update the fringe indicator for more pages in the auxiliary PDF.
 Delete the existing indicator, then draw a new right-arrow indicator
 when the PDF shown in the auxiliary window has additional pages."
   (interactive)
-  (if epresent-aux-fringe-overlay
-      (delete-overlay epresent-aux-fringe-overlay))
+  (if orgacle-aux-fringe-overlay
+      (delete-overlay orgacle-aux-fringe-overlay))
   (when (eq major-mode 'pdf-view-mode)
     (when (< (image-mode-window-get 'page) (pdf-cache-number-of-pages))
-      (setq epresent-aux-fringe-overlay (make-overlay (point) (point)))
+      (setq orgacle-aux-fringe-overlay (make-overlay (point) (point)))
       (overlay-put
-       epresent-aux-fringe-overlay
+       orgacle-aux-fringe-overlay
        'before-string
        (propertize " " 'display '(right-fringe right-arrow))))))
 
-(defun epresent-show-file-auto ()
+(defun orgacle-show-file-auto ()
   "Show the current slide's file automatically, if requested.
-This calls `epresent-show-file' when the current heading has an
-EPRESENT_SHOW_AUTO property."
-  (if (org-entry-get nil "EPRESENT_SHOW_AUTO")
-      (epresent-show-file)))
+This calls `orgacle-show-file' when the current heading has an
+ORGACLE_SHOW_AUTO property."
+  (if (org-entry-get nil "ORGACLE_SHOW_AUTO")
+      (orgacle-show-file)))
 
-(defun epresent-show-video (&optional filename mute _paused)
+(defun orgacle-show-video (&optional filename mute _paused)
   "Play a video full screen.
 
-FILENAME is the video to play; without it the EPRESENT_SHOW_VIDEO
+FILENAME is the video to play; without it the ORGACLE_SHOW_VIDEO
 property of the current heading is used.  With MUTE non-nil the audio
-is silenced; without it the EPRESENT_MUTE property is used.  The
-player is chosen with `epresent-video-player'."
+is silenced; without it the ORGACLE_MUTE property is used.  The
+player is chosen with `orgacle-video-player'."
   (interactive)
   (unless filename
-    (setq filename (org-entry-get nil "EPRESENT_SHOW_VIDEO")))
+    (setq filename (org-entry-get nil "ORGACLE_SHOW_VIDEO")))
   (unless filename
-    (user-error "No video to show: set the EPRESENT_SHOW_VIDEO property"))
+    (user-error "No video to show: set the ORGACLE_SHOW_VIDEO property"))
   (unless (file-exists-p filename)
     (user-error "Cannot open %s" filename))
   (unless mute
-    (setq mute (org-entry-get nil "EPRESENT_MUTE")))
+    (setq mute (org-entry-get nil "ORGACLE_MUTE")))
   (let ((command
          (cond
-          ((string= epresent-video-player "vlc")
+          ((string= orgacle-video-player "vlc")
            (concat "cvlc -f --no-osd " (if mute "--no-audio " "")
                    (shell-quote-argument filename)))
-          ((string= epresent-video-player "mplayer")
+          ((string= orgacle-video-player "mplayer")
            (concat "mplayer -fs " (if mute "volume=-200dB " "")
                    (shell-quote-argument filename)))
           (t
            (user-error "Unsupported video player: %s"
-                       epresent-video-player)))))
+                       orgacle-video-player)))))
     ;; leave full screen so the player can take it
     (set-frame-parameter nil 'fullscreen nil)
     (message "Executing %s" command)
@@ -977,7 +983,7 @@ player is chosen with `epresent-video-player'."
     (set-frame-parameter nil 'fullscreen 'fullboth)
     (redraw-display)))
 
-(defun epresent--collect-notes ()
+(defun orgacle--collect-notes ()
   "Return this buffer's speaker notes as Org text.
 Each frame-level heading contributes a first-level heading, followed by
 the body of its \"Speaker notes\" subtree when it has one."
@@ -999,14 +1005,14 @@ the body of its \"Speaker notes\" subtree when it has one."
     (deactivate-mark)
     speaker-notes))
 
-(defun epresent-make-notes-buffer ()
+(defun orgacle-make-notes-buffer ()
   "Collect speaker notes into a buffer and show it in a new frame."
   (interactive)
-  (let ((notes (epresent--collect-notes)))
-    (if (bufferp epresent-notes-buffer)
-        (kill-buffer epresent-notes-buffer))
-    (setq epresent-notes-buffer (generate-new-buffer "*EPresent Notes*"))
-    (with-current-buffer epresent-notes-buffer
+  (let ((notes (orgacle--collect-notes)))
+    (if (bufferp orgacle-notes-buffer)
+        (kill-buffer orgacle-notes-buffer))
+    (setq orgacle-notes-buffer (generate-new-buffer "*Orgacle Notes*"))
+    (with-current-buffer orgacle-notes-buffer
       (erase-buffer)
       (org-mode)
       (insert notes)
@@ -1015,25 +1021,25 @@ the body of its \"Speaker notes\" subtree when it has one."
         (replace-match ""))
       (goto-char (point-min))
       (org-narrow-to-subtree))
-    (switch-to-buffer-other-frame epresent-notes-buffer)))
+    (switch-to-buffer-other-frame orgacle-notes-buffer)))
 
 ;;; export functions
 
 (require 'ox)
 (require 'ox-org)
 
-(defun epresent-latex-property-drawer (blob contents _info)
+(defun orgacle-latex-property-drawer (blob contents _info)
   "Translate the property drawer BLOB with CONTENTS into LaTeX.
-EPRESENT_VIDEO_ALT becomes a bracketed note naming the file.
-EPRESENT_SHOW_FILE becomes an included Org file when it names one, and
-an \\includegraphics otherwise, honouring EPRESENT_SHOW_WIDTH and
-EPRESENT_SHOW_PAGES."
+ORGACLE_VIDEO_ALT becomes a bracketed note naming the file.
+ORGACLE_SHOW_FILE becomes an included Org file when it names one, and
+an \\includegraphics otherwise, honouring ORGACLE_SHOW_WIDTH and
+ORGACLE_SHOW_PAGES."
   (let ((input (org-export-expand blob contents t))
         (output nil))
     ;; videos are named, not embedded
-    (when (string-match "EPRESENT_VIDEO_ALT:\s+\\(.+\\)" input)
+    (when (string-match "ORGACLE_VIDEO_ALT:\s+\\(.+\\)" input)
       (setq output (concat output "\n[ Video: " (match-string 1 input) " ]\n\n")))
-    (when (string-match "EPRESENT_SHOW_FILE:\s+\\(.+\\)" input)
+    (when (string-match "ORGACLE_SHOW_FILE:\s+\\(.+\\)" input)
       (let* ((filename (replace-regexp-in-string
                         "\\]?\\]?$" ""
                         (replace-regexp-in-string
@@ -1050,10 +1056,10 @@ EPRESENT_SHOW_PAGES."
                             (insert-file-contents filename)
                             (org-export-string-as (buffer-string) 'latex t))))
           ;; everything else is treated as an image
-          (let ((width (if (string-match "EPRESENT_SHOW_WIDTH:\s+\\(.+\\)" input)
+          (let ((width (if (string-match "ORGACLE_SHOW_WIDTH:\s+\\(.+\\)" input)
                            (match-string 1 input)
                          "0.5"))
-                (pages (if (string-match "EPRESENT_SHOW_PAGES:\s+\\(.+\\)" input)
+                (pages (if (string-match "ORGACLE_SHOW_PAGES:\s+\\(.+\\)" input)
                            (split-string (match-string 1 input))
                          '("1"))))
             (setq output (concat output "\n"))
@@ -1064,59 +1070,59 @@ EPRESENT_SHOW_PAGES."
                             "\\textwidth,page=" page "]{" filename "}\n")))))))
     output))
 
-(org-export-define-derived-backend 'epresent 'latex
+(org-export-define-derived-backend 'orgacle 'latex
   :translate-alist
-  '((property-drawer . epresent-latex-property-drawer))
+  '((property-drawer . orgacle-latex-property-drawer))
   :options-alist
   ;; Org drops property drawers unless this is on, which would silently
   ;; disable the translator above.  Default it to t for this backend only.
   '((:with-properties nil "prop" t))
   :menu-entry
-  '(?E "EPresent to LaTeX"
-       ((?L "As LaTeX buffer" epresent-export-as-latex)
-	(?l "As LaTeX file" epresent-export-to-latex)
-	(?p "As PDF file" epresent-export-to-pdf)
+  '(?E "Orgacle to LaTeX"
+       ((?L "As LaTeX buffer" orgacle-export-as-latex)
+	(?l "As LaTeX file" orgacle-export-to-latex)
+	(?p "As PDF file" orgacle-export-to-pdf)
 	(?o "As PDF file and open"
 	    (lambda (a s v b)
-	      (if a (epresent-export-to-pdf t s v b)
-		(org-open-file (epresent-export-to-pdf nil s v b))))))))
+	      (if a (orgacle-export-to-pdf t s v b)
+		(org-open-file (orgacle-export-to-pdf nil s v b))))))))
 
 ;;;###autoload
-(defun epresent-export-as-latex
+(defun orgacle-export-as-latex
   (&optional async subtreep visible-only body-only ext-plist)
-  "Export the current EPresent buffer to a LaTeX buffer.
+  "Export the current Orgacle buffer to a LaTeX buffer.
 ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
 `org-export-to-buffer'; see there for their meaning."
   (interactive)
-  (org-export-to-buffer 'epresent "*Org LATEX Export*"
+  (org-export-to-buffer 'orgacle "*Org LATEX Export*"
     async subtreep visible-only body-only ext-plist (lambda () (LaTeX-mode))))
 
 ;;;###autoload
-(defun epresent-export-to-latex
+(defun orgacle-export-to-latex
   (&optional async subtreep visible-only body-only ext-plist)
   "Export the current buffer to a LaTeX file.
 ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
 `org-export-to-file'; see there for their meaning."
   (interactive)
   (let ((outfile (org-export-output-file-name ".tex" subtreep)))
-    (org-export-to-file 'epresent outfile
+    (org-export-to-file 'orgacle outfile
       async subtreep visible-only body-only ext-plist)))
 
 ;;;###autoload
-(defun epresent-export-to-pdf
+(defun orgacle-export-to-pdf
   (&optional async subtreep visible-only body-only ext-plist)
-  "Export the current EPresent buffer to LaTeX, then process it to PDF.
+  "Export the current Orgacle buffer to LaTeX, then process it to PDF.
 ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
 `org-export-to-file'; see there for their meaning."
   (interactive)
   (let ((outfile (org-export-output-file-name ".tex" subtreep)))
-    (org-export-to-file 'epresent outfile
+    (org-export-to-file 'orgacle outfile
       async subtreep visible-only body-only ext-plist
       (lambda (file) (org-latex-compile file)))))
 
 ;;; end export functions
 
-(defun epresent--speaker-word-count ()
+(defun orgacle--speaker-word-count ()
   "Return the number of words in this buffer's speaker-notes subtrees."
   (let ((speaker-words 0))
     (org-map-entries
@@ -1128,37 +1134,37 @@ ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
            (deactivate-mark)))))
     speaker-words))
 
-(defun epresent--speaking-time (words)
+(defun orgacle--speaking-time (words)
   "Return the estimated time in minutes to speak WORDS aloud.
 The result is rounded up to the next half minute.  The reading speed is
-`epresent-wpm'."
-  (/ (ceiling (* (/ (float words) epresent-wpm) 2)) 2.0))
+`orgacle-wpm'."
+  (/ (ceiling (* (/ (float words) orgacle-wpm) 2)) 2.0))
 
-(defun epresent-estimate-time ()
+(defun orgacle-estimate-time ()
   "Report how long it would take to read all speaker notes aloud.
 The estimate and the word count are shown in the echo area.  The
-reading speed is `epresent-wpm'."
+reading speed is `orgacle-wpm'."
   (interactive)
-  (let* ((words (epresent--speaker-word-count))
-         (minutes (epresent--speaking-time words)))
+  (let* ((words (orgacle--speaker-word-count))
+         (minutes (orgacle--speaking-time words)))
     (message "Estimated speaking time in minutes: %s (%d words)"
              minutes words)))
 
-(defun epresent-toggle-mouse ()
+(defun orgacle-toggle-mouse ()
   "Show or hide the mouse pointer.
 Does nothing on a build without X11 pointer support."
   (interactive)
   (when (boundp 'x-pointer-shape)
-    (if epresent-mouse-visible
+    (if orgacle-mouse-visible
         (setq x-pointer-shape x-pointer-invisible
               x-sensitive-text-pointer-shape x-pointer-invisible)
-      (setq x-pointer-shape epresent-x-pointer-shape
-            x-sensitive-text-pointer-shape epresent-x-pointer-shape))
+      (setq x-pointer-shape orgacle-x-pointer-shape
+            x-sensitive-text-pointer-shape orgacle-x-pointer-shape))
     (setq void-text-area-pointer 'text)
     ;; setting the mouse colour to its current value applies the shapes
     (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))))
 
-(defvar epresent-mode-map
+(defvar orgacle-mode-map
   (let ((map (make-keymap)))
     (suppress-keymap map)
     ;; line movement
@@ -1167,151 +1173,199 @@ Does nothing on a build without X11 pointer support."
     (define-key map "k" 'scroll-down)
     (define-key map [up] 'scroll-down)
     ;; page movement
-    (define-key map " " 'epresent-next-page)
-    (define-key map "n" 'epresent-next-page)
-    (define-key map "f" 'epresent-next-page)
-    (define-key map [right] 'epresent-next-page)
-    (define-key map [next] 'epresent-next-page)
-    (define-key map "p" 'epresent-previous-page)
-    (define-key map "b" 'epresent-previous-page)
-    (define-key map [left] 'epresent-previous-page)
-    (define-key map [prior] 'epresent-previous-page)
-    (define-key map [backspace] 'epresent-previous-page)
-    (define-key map "v" 'epresent-jump-to-page)
+    (define-key map " " 'orgacle-next-page)
+    (define-key map "n" 'orgacle-next-page)
+    (define-key map "f" 'orgacle-next-page)
+    (define-key map [right] 'orgacle-next-page)
+    (define-key map [next] 'orgacle-next-page)
+    (define-key map "p" 'orgacle-previous-page)
+    (define-key map "b" 'orgacle-previous-page)
+    (define-key map [left] 'orgacle-previous-page)
+    (define-key map [prior] 'orgacle-previous-page)
+    (define-key map [backspace] 'orgacle-previous-page)
+    (define-key map "v" 'orgacle-jump-to-page)
     ;; within page functions
-    (define-key map "c" 'epresent-next-src-block)
-    (define-key map "C" 'epresent-previous-src-block)
+    (define-key map "c" 'orgacle-next-src-block)
+    (define-key map "C" 'orgacle-previous-src-block)
     (define-key map "e" 'org-edit-src-code)
-    (define-key map "E" 'epresent-edit-text)   ; C-c C-c exits edit mode
+    (define-key map "E" 'orgacle-edit-text)   ; C-c C-c exits edit mode
     (define-key map "x" 'org-babel-execute-src-block)
-    (define-key map "r" 'epresent-refresh)
+    (define-key map "r" 'orgacle-refresh)
     (define-key map "R" 'redraw-display)
-    (define-key map "g" 'epresent-refresh)
+    (define-key map "g" 'orgacle-refresh)
     ;; navigate folded subheadings
-    (define-key map "N" 'epresent-next-subheading)
-    (define-key map "P" 'epresent-previous-subheading)
+    (define-key map "N" 'orgacle-next-subheading)
+    (define-key map "P" 'orgacle-previous-subheading)
     ;; show/hide images and videos
-    (define-key map "i" 'epresent-show-file-or-advance)
-    (define-key map "I" 'epresent-show-video)
+    (define-key map "i" 'orgacle-show-file-or-advance)
+    (define-key map "I" 'orgacle-show-video)
     ;; show/hide mouse pointer
-    (define-key map "m" 'epresent-toggle-mouse)
+    (define-key map "m" 'orgacle-toggle-mouse)
     ;; adjust font size
-    (define-key map "+" 'epresent-increase-font)
-    (define-key map "-" 'epresent-decrease-font)
+    (define-key map "+" 'orgacle-increase-font)
+    (define-key map "-" 'orgacle-decrease-font)
     ;; global controls
-    (define-key map "q" 'epresent-quit)
-    (define-key map "1" 'epresent-top)
-    (define-key map "s" 'epresent-toggle-hide-src-blocks)
-    (define-key map "S" 'epresent-toggle-hide-src-block)
-    (define-key map "t" 'epresent-top)
+    (define-key map "q" 'orgacle-quit)
+    (define-key map "1" 'orgacle-top)
+    (define-key map "s" 'orgacle-toggle-hide-src-blocks)
+    (define-key map "S" 'orgacle-toggle-hide-src-block)
+    (define-key map "t" 'orgacle-top)
     map)
-  "Local keymap for EPresent display mode.")
+  "Local keymap for Orgacle display mode.")
 
-(define-derived-mode epresent-mode org-mode "EPresent"
+(define-derived-mode orgacle-mode org-mode "Orgacle"
   "Major mode for presenting an Org-mode buffer as a slide show.
 
 Each frame-level heading becomes a slide.  Navigate with
-\\<epresent-mode-map>\\[epresent-next-page] and \\[epresent-previous-page], and leave with \\[epresent-quit].
+\\<orgacle-mode-map>\\[orgacle-next-page] and \\[orgacle-previous-page], and leave with \\[orgacle-quit].
 
-\\{epresent-mode-map}"
+\\{orgacle-mode-map}"
   ;; make Org-mode be as pretty as possible
-  (add-hook 'org-src-mode-hook 'epresent-setup-src-edit)
-  (setq epresent-inline-image-overlays (epresent--link-preview-overlays))
-  (setq epresent-src-fontify-natively org-src-fontify-natively)
+  (add-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
+  (setq orgacle-inline-image-overlays (orgacle--link-preview-overlays))
+  (setq orgacle-src-fontify-natively org-src-fontify-natively)
   (setq org-src-fontify-natively t)
   (setq org-fontify-quote-and-verse-blocks t)
-  (setq epresent-hide-emphasis-markers org-hide-emphasis-markers)
+  (setq orgacle-hide-emphasis-markers org-hide-emphasis-markers)
   (setq org-hide-emphasis-markers t)
-  (setq epresent-outline-ellipsis
+  (setq orgacle-outline-ellipsis
         (display-table-slot standard-display-table 'selective-display))
   (set-display-table-slot standard-display-table 'selective-display [32])
-  (setq epresent-pretty-entities org-pretty-entities)
+  (setq orgacle-pretty-entities org-pretty-entities)
   (setq org-pretty-entities t)
-  (setq mode-line-format (epresent-get-mode-line))
-  (add-hook 'org-babel-after-execute-hook 'epresent-refresh)
+  (setq mode-line-format (orgacle-get-mode-line))
+  (add-hook 'org-babel-after-execute-hook 'orgacle-refresh)
   (condition-case ex
       (let ((org-format-latex-options
              (plist-put (copy-tree org-format-latex-options)
-                        :scale epresent-format-latex-scale)))
+                        :scale orgacle-format-latex-scale)))
         (org-latex-preview '(16)))
     (error
      (message "Unable to imagify latex [%s]" (error-message-string ex))))
-  (set-face-attribute 'default epresent--frame :height epresent-text-scale)
+  (set-face-attribute 'default orgacle--frame :height orgacle-text-scale)
   ;; fontify the buffer
-  (add-to-invisibility-spec '(epresent-hide))
+  (add-to-invisibility-spec '(orgacle-hide))
   ;; remove flyspell overlays
   (when (fboundp 'flyspell-mode-off)
     (flyspell-mode-off))
-  (epresent-fontify)
-  ;; hide headings with EPRESENT_HIDE tag or marked as "speaker notes"
+  (orgacle-fontify)
+  ;; hide headings with ORGACLE_HIDE tag or marked as "speaker notes"
   (org-map-entries (lambda ()
 		     (when (or
-			    (org-entry-get nil "EPRESENT_HIDE")
+			    (org-entry-get nil "ORGACLE_HIDE")
 			    (string= (downcase (org-entry-get nil "ITEM")) "speaker notes")
 			    (string= (downcase (org-entry-get nil "ITEM")) "title page"))
 		       (org-mark-subtree)
 		       ;; we make things insvisile only until mark-1
 		       ;; to leave a newline visible, as a separator
 		       ;; betwen this heading and the next
-		       (push (make-overlay (point) (- (mark) 1)) epresent-overlays)
-		       (overlay-put (car epresent-overlays)
+		       (push (make-overlay (point) (- (mark) 1)) orgacle-overlays)
+		       (overlay-put (car orgacle-overlays)
 				    'invisible
-				    'epresent-hide)
+				    'orgacle-hide)
 		       (deactivate-mark))))
   ;; reset the auxiliary window object
-  (setq epresent-aux-window nil))
+  (setq orgacle-aux-window nil))
 
-(defvar epresent-edit-map (let ((map (copy-keymap org-mode-map)))
-                            (define-key map (kbd "C-c C-c") 'epresent-refresh)
+(defvar orgacle-edit-map (let ((map (copy-keymap org-mode-map)))
+                            (define-key map (kbd "C-c C-c") 'orgacle-refresh)
                             map)
-  "Local keymap for editing an EPresent presentation.")
+  "Local keymap for editing an Orgacle presentation.")
 
-(defun epresent-edit-text ()
+(defun orgacle-edit-text ()
   "Edit the presentation text in place.
-Press \\<epresent-edit-map>\\[epresent-refresh] to stop editing and refresh
+Press \\<orgacle-edit-map>\\[orgacle-refresh] to stop editing and refresh
 the display."
   (interactive)
   (let ((prior-cursor-type (cdr (assoc 'cursor-type (frame-parameters)))))
     (set-frame-parameter nil 'cursor-type t)
-    (use-local-map epresent-edit-map)
+    (use-local-map orgacle-edit-map)
     (set-transient-map
-     epresent-edit-map
+     orgacle-edit-map
      (lambda () (not (equal (kbd "C-c C-c") (this-command-keys))))
      (lambda ()
-       (use-local-map epresent-mode-map)
+       (use-local-map orgacle-mode-map)
        (set-frame-parameter nil 'cursor-type prior-cursor-type)))))
 
 ;;;###autoload
-(defun epresent-run ()
+(defun orgacle-run ()
   "Present an Org-mode buffer."
   (interactive)
-  (unless (eq major-mode 'epresent-mode)
+  (unless (eq major-mode 'orgacle-mode)
     (unless (eq major-mode 'org-mode)
-      (error "EPresent can only be used from Org Mode"))
-    (setq epresent--org-buffer (current-buffer))
+      (error "Orgacle can only be used from Org Mode"))
+    (setq orgacle--org-buffer (current-buffer))
     ;; regenerate image previews
-    (epresent--link-preview-refresh)
+    (orgacle--link-preview-refresh)
     ;; To present narrowed region use temporary buffer
     (when (and (or (> (point-min) (save-restriction (widen) (point-min)))
                    (< (point-max) (save-restriction (widen) (point-max))))
                (save-excursion (goto-char (point-min)) (org-at-heading-p)))
       (let ((title (nth 4 (org-heading-components))))
-        (setq epresent--org-restriction (list (point-min) (point-max)))
+        (setq orgacle--org-restriction (list (point-min) (point-max)))
         (require 'ox-org)
-        (setq epresent--org-file (org-org-export-to-org nil 'subtree))
-        (find-file epresent--org-file)
+        (setq orgacle--org-file (org-org-export-to-org nil 'subtree))
+        (find-file orgacle--org-file)
         (goto-char (point-min))
         (insert (format "#+Title: %s\n\n" title))))
-    (setq epresent-frame-level (epresent-get-frame-level))
-    (epresent--get-frame)
-    (epresent-mode)
+    (setq orgacle-frame-level (orgacle-get-frame-level))
+    (orgacle--get-frame)
+    (orgacle-mode)
     (set-buffer-modified-p nil)
-    (setq epresent-presentation-window (selected-window))
+    (setq orgacle-presentation-window (selected-window))
     ;; set/unset tooltips
-    (tooltip-mode (if epresent-tooltip-mode 1 -1))
+    (tooltip-mode (if orgacle-tooltip-mode 1 -1))
     ;; create speaker notes
-    (when epresent-speaker-notes (epresent-make-notes-buffer))
-    (run-hooks 'epresent-start-presentation-hook)))
+    (when orgacle-speaker-notes (orgacle-make-notes-buffer))
+    (run-hooks 'orgacle-start-presentation-hook)))
 
-(provide 'epresent)
-;;; epresent.el ends here
+;;; Migration
+
+;;;###autoload
+(defun orgacle-migrate-buffer (&optional beg end)
+  "Convert EPRESENT_ names to ORGACLE_ between BEG and END.
+Without BEG and END, convert the accessible portion of the buffer, or
+the region when one is active -- so a narrowed buffer only has its
+visible part converted.  Return the number of substitutions, and
+report it in the echo area when called interactively.
+
+Presentations written before the ORGACLE_ rename use the older
+names; this brings them up to date."
+  (interactive (if (use-region-p)
+                   (list (region-beginning) (region-end))
+                 (list nil nil)))
+  (let ((count 0)
+        (case-fold-search nil))
+    (save-excursion
+      (save-restriction
+        (when (and beg end) (narrow-to-region beg end))
+        (goto-char (point-min))
+        (while (re-search-forward "EPRESENT_" nil t)
+          (replace-match "ORGACLE_" t t)
+          (setq count (1+ count)))))
+    (when (called-interactively-p 'interactive)
+      (message "Converted %d name%s" count (if (= count 1) "" "s")))
+    count))
+
+;;;###autoload
+(defun orgacle-migrate-file (file)
+  "Convert EPRESENT_ names to ORGACLE_ in FILE, saving it.
+The whole file is converted, regardless of any narrowing in an
+already-open buffer visiting it.  When FILE is already open with
+unsaved changes, ask first: saving it would write those changes too."
+  (interactive "fMigrate file: ")
+  (let ((visiting (find-buffer-visiting file)))
+    (when (and visiting (buffer-modified-p visiting)
+               (not (yes-or-no-p
+                     (format "%s has unsaved changes that would also be saved.  Continue? "
+                             (file-name-nondirectory file)))))
+      (user-error "Migration cancelled")))
+  (with-current-buffer (find-file-noselect file)
+    (let ((count (save-restriction (widen) (orgacle-migrate-buffer))))
+      (save-buffer)
+      (message "Converted %d name%s in %s"
+               count (if (= count 1) "" "s") (file-name-nondirectory file))
+      count)))
+
+(provide 'orgacle)
+;;; orgacle.el ends here

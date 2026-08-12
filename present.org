@@ -1,4 +1,4 @@
-#+Title: Epresent: Presentations in Emacs
+#+Title: Orgacle: Presentations in Emacs
 #+Author: Eric Schulte, Stefano Ghirlanda
 
 * Introduction
@@ -16,18 +16,18 @@ Simple presentations in Emacs
 
 * Source code
 
-Call =epresent-run= to present an Org-mode buffer.
+Call =orgacle-run= to present an Org-mode buffer.
 
 #+begin_src emacs-lisp
   ;;;###autoload
-  (defun epresent-run ()
+  (defun orgacle-run ()
     (interactive)
     (unless (eq major-mode 'org-mode)
-      (error "EPresent can only be used from Org Mode"))
-    (setq epresent--org-buffer (current-buffer))
-    (epresent--get-frame)
-    (epresent-mode)
-    (epresent-top))
+      (error "Orgacle can only be used from Org Mode"))
+    (setq orgacle--org-buffer (current-buffer))
+    (orgacle--get-frame)
+    (orgacle-mode)
+    (orgacle-top))
 #+end_src
 
 * Three -- LaTeX images
@@ -73,8 +73,8 @@ in-line image display
 3. When a code block is executed with =C-c C-c=, the page is refreshed
    to show the results.
    #+begin_src sh
-     echo "in $(pwd)"
+     echo "hello from a source block"
    #+end_src
 
 #+RESULTS:
-: in /home/stefano/Dropbox/Software/epresent
+: hello from a source block

@@ -13,24 +13,24 @@
 
 (require 'checkdoc)
 
-(defvar epresent-checkdoc-count 0
+(defvar orgacle-checkdoc-count 0
   "Number of complaints seen during this batch run.")
 
 (setq checkdoc-create-error-function
       (lambda (text start _end &optional _unfixable)
-        (setq epresent-checkdoc-count (1+ epresent-checkdoc-count))
+        (setq orgacle-checkdoc-count (1+ orgacle-checkdoc-count))
         (message "%s:%d: %s"
                  (file-name-nondirectory (or (buffer-file-name) "?"))
                  (line-number-at-pos (or start (point)))
                  text)
         nil))
 
-(let ((files (or command-line-args-left '("epresent.el"))))
+(let ((files (or command-line-args-left '("orgacle.el"))))
   (dolist (file files)
     (checkdoc-file file))
-  (if (zerop epresent-checkdoc-count)
+  (if (zerop orgacle-checkdoc-count)
       (message "checkdoc: clean (%d file(s))" (length files))
-    (message "checkdoc: %d complaint(s)" epresent-checkdoc-count)
+    (message "checkdoc: %d complaint(s)" orgacle-checkdoc-count)
     (kill-emacs 1)))
 
 (provide 'checkdoc-batch)
