@@ -1,0 +1,537 @@
+#+TITLE: P1 — Rename to orgacle: implementation plan
+#+AUTHOR: Stefano Ghirlanda
+#+DATE: 2026-08-12
+#+OPTIONS: toc:2 num:nil
+
+#+begin_quote
+*For agentic workers:* REQUIRED SUB-SKILL: use =superpowers:subagent-driven-development=
+(recommended) or =superpowers:executing-plans= to implement this plan
+task-by-task. Steps use checkbox (=- [ ]=) syntax for tracking.
+#+end_quote
+
+*Goal:* Rename the package from =epresent= to =orgacle= — file, symbols, faces,
+group, Org properties and keywords, user-visible strings — and ship a command
+that converts existing presentation documents.
+
+*Architecture:* The rename is mechanical but not =sed=-safe: three classes of
+occurrence do not match the obvious pattern, and one pair of string literals is
+coupled across two functions. The tasks therefore separate the *symbol* rename
+from the *property* rename from the *string* rename, so each is verifiable on
+its own, with the four gates green after every one.
+
+*Tech stack:* Emacs Lisp, ERT, =checkdoc=, =package-lint=, GNU Make, GitHub
+Actions.
+
+* Global constraints
+
+- Package name becomes =orgacle=; symbol prefix =orgacle-=; file =orgacle.el=.
+- Org properties become =ORGACLE_*=, keywords =#+ORGACLE_*=.
+- =Version:= becomes =2.0.0=. =URL:= becomes
+  =https://github.com/drghirlanda/orgacle=.
+- Version floor stays =((emacs "29.1") (org "9.6"))=.
+- All four gates stay green: =make compile= (with =byte-compile-error-on-warn=),
+  =make checkdoc=, =make lint=, =make test=. CI covers 29.4, 30.2, snapshot.
+- No =EPRESENT_*= property is read at runtime. Old documents are converted by
+  =orgacle-migrate-buffer=, not supported in parallel.
+- Exit: no =epresent= or =EPresent= string survives outside the Commentary's
+  origin note and the migration command's own patterns.
+
+* Already done
+
+- The GitHub repository is renamed: =drghirlanda/epresent= now redirects to
+  =drghirlanda/orgacle=, and this checkout's =origin= points at the new URL.
+- P0 is merged to =master= (=de929b0=) and green.
+
+Not done, and deliberately left to the maintainer: renaming the local checkout
+directory from =epresent/= to =orgacle/=. It is cosmetic, and doing it while
+Emacs holds buffers in this tree would strand them.
+
+* The three traps
+
+A blanket =s/epresent/orgacle/g= gets all three of these wrong. Each task below
+names which it owns.
+
+** The export backend symbol is bare
+
+=(org-export-define-derived-backend 'epresent 'latex ...)= and, in the tests,
+=(org-export-as 'epresent ...)=. It is =epresent=, not =epresent-=, so a
+prefix-anchored replacement misses it and the backend keeps its old name while
+its functions get new ones. Same for =(provide 'epresent)= and
+=(require 'epresent)=.
+
+** The frame title is compared against a literal in another function
+
+=epresent--get-frame= creates the frame with =(title . "EPresent")=;
+=epresent-quit= decides whether to delete a frame with
+=(string= "EPresent" (frame-parameter nil 'title))=. Rename one and not the
+other and quitting silently stops deleting the presentation frame — no error,
+the user is just left in a fullscreen frame. P3 replaces this with a session
+struct; until then the two literals must move together.
+
+** =EPresent= appears inside user-visible strings and docstrings
+
+Fifteen occurrences: the frame title, the notes buffer name
+=*EPresent Notes*=, the export menu entry ="EPresent to LaTeX"=, the
+=define-derived-mode= lighter, and assorted docstrings. These are prose, not
+symbols, and each needs a judgement about capitalisation — =Orgacle=, not
+=orgacle=, in a sentence.
+
+* File structure
+
+| File                           | Change                                       | Task |
+|--------------------------------+----------------------------------------------+------|
+| =epresent.el=                  | → =orgacle.el=; symbols, properties, strings |  1–3 |
+| =test/epresent-test.el=        | → =test/orgacle-test.el=; symbols            |    1 |
+| =test/fixtures/*.org=          | =EPRESENT_*= → =ORGACLE_*=                   |    2 |
+| =test/init.el=                 | dev-dependency comment, load-path comment    |    1 |
+| =test/checkdoc-batch.el=       | default filename, defvar name                |    1 |
+| =Makefile=                     | =EL= variable                                |    1 |
+| =present.org=, =sub-level.org= | properties and keywords                      |    2 |
+| =README.org=                   | every name, plus migration documentation     |    4 |
+| =COPYING=                      | new — GPL-3                                  |    4 |
+
+* Task 1: Rename the symbols
+
+The mechanical core. Symbols, file names, the bare backend symbol, and the
+=provide=/=require= forms. Properties and prose strings are *not* touched here.
+
+*Files:*
+- Rename: =epresent.el= → =orgacle.el=, =test/epresent-test.el= → =test/orgacle-test.el=
+- Modify: =Makefile=, =test/init.el=, =test/checkdoc-batch.el=
+
+*Interfaces:*
+- Produces: every =orgacle-*= symbol the later tasks refer to, and the
+  =orgacle= export backend.
+
+- [ ] *Step 1: Rename the files with git*
+
+#+begin_src sh
+  git mv epresent.el orgacle.el
+  git mv test/epresent-test.el test/orgacle-test.el
+#+end_src
+
+- [ ] *Step 2: Replace the symbol prefix*
+
+Every =epresent-= becomes =orgacle-=, in both Elisp files. This covers 110
+symbols in the package and 60 in the tests, including the private =epresent--=
+double-dash ones, which the same pattern handles.
+
+#+begin_src sh
+  sed -i 's/\bepresent-/orgacle-/g' orgacle.el test/orgacle-test.el
+#+end_src
+
+- [ ] *Step 3: Fix the bare symbol, which the pattern above missed*
+
+Four sites, none of them matching =epresent-=:
+
+#+begin_src sh
+  grep -n "'epresent\b\|(provide 'epresent)\|(require 'epresent)" orgacle.el test/orgacle-test.el
+#+end_src
+
+Expect the export backend definition, =org-export-as 'epresent= in the tests,
+=(provide 'epresent)= and =(require 'epresent)=. Replace the symbol =epresent=
+with =orgacle= at each. Then confirm none survive:
+
+#+begin_src sh
+  grep -n "\bepresent\b" orgacle.el test/orgacle-test.el
+#+end_src
+
+Expected: no output. Any hit here is a missed symbol, not prose — prose says
+=EPresent=, capitalised, and is Task 3's.
+
+- [ ] *Step 4: Update the harness*
+
+=Makefile=: =EL = orgacle.el=.
+
+=test/checkdoc-batch.el=: the =epresent-checkdoc-count= defvar becomes
+=orgacle-checkdoc-count=, and the default file in the =let= becomes
+=orgacle.el=.
+
+=test/init.el=: =epresent-dev-dependencies= becomes
+=orgacle-dev-dependencies=; update the comments that name the package.
+
+- [ ] *Step 5: Run the gates*
+
+#+begin_src sh
+  make clean && make all
+#+end_src
+
+Expected: exit 0, 33 tests. A =void-function= failure means a symbol was missed;
+=grep -n "\bepresent" *.el test/*.el= finds it.
+
+- [ ] *Step 6: Commit*
+
+#+begin_src sh
+  git add -A
+  git commit -m "Rename every symbol from epresent to orgacle
+
+File, symbol prefix, faces, customization group, the export backend's
+own symbol, and the provide/require forms.  Org properties and
+user-visible strings are renamed in the following two commits."
+#+end_src
+
+* Task 2: Rename the Org properties and keywords
+
+*Files:*
+- Modify: =orgacle.el=, =test/orgacle-test.el=, =test/fixtures/*.org=,
+  =present.org=, =sub-level.org=
+
+*Interfaces:*
+- Consumes: Task 1's symbols.
+- Produces: the =ORGACLE_*= namespace the migration command targets.
+
+- [ ] *Step 1: List what exists*
+
+#+begin_src sh
+  grep -rho "EPRESENT_[A-Z_]*" --include="*.el" --include="*.org" . \
+    | grep -v "^./docs/" | sort -u
+#+end_src
+
+Expected, fourteen: =EPRESENT_FRAME_LEVEL=, =EPRESENT_HIDE=,
+=EPRESENT_MODE_LINE=, =EPRESENT_MUTE=, =EPRESENT_SHOW_AUTO=,
+=EPRESENT_SHOW_BELOW=, =EPRESENT_SHOW_FILE=, =EPRESENT_SHOW_PAGES=,
+=EPRESENT_SHOW_SIZE=, =EPRESENT_SHOW_VIDEO=, =EPRESENT_SHOW_WIDTH=,
+=EPRESENT_SLIDE_IN=, =EPRESENT_STEPWISE=, =EPRESENT_VIDEO_ALT=.
+
+- [ ] *Step 2: Replace them everywhere except =docs/=*
+
+=docs/= holds the design document and the plans, which describe the *history* of
+this rename and must keep saying =EPRESENT_= where they discuss the old names.
+
+#+begin_src sh
+  grep -rl "EPRESENT_" --include="*.el" --include="*.org" . \
+    | grep -v "^./docs/" \
+    | xargs sed -i 's/EPRESENT_/ORGACLE_/g'
+#+end_src
+
+- [ ] *Step 3: Check for the keyword form*
+
+The buffer-level keywords are =#+EPRESENT_FRAME_LEVEL:= and
+=#+EPRESENT_MODE_LINE:=, matched by regexps inside =orgacle.el=. Step 2's
+replacement covers the regexp strings too, since they spell the name literally.
+Confirm:
+
+#+begin_src sh
+  grep -n "ORGACLE_FRAME_LEVEL\|ORGACLE_MODE_LINE" orgacle.el
+#+end_src
+
+Expected: two hits, both inside =re-search-forward= patterns.
+
+- [ ] *Step 4: Run the gates*
+
+#+begin_src sh
+  make clean && make all
+#+end_src
+
+Expected: exit 0, 33 tests. The fixture-driven tests are what prove the
+properties and the code agree — if a fixture kept an old name, its test fails.
+
+- [ ] *Step 5: Commit*
+
+#+begin_src sh
+  git add -A
+  git commit -m "Rename the Org properties and keywords to ORGACLE_
+
+Fourteen properties and two buffer keywords, in the package, the tests,
+the fixtures and the example presentations.  docs/ is excluded: those
+documents describe the rename and must keep naming the old properties."
+#+end_src
+
+* Task 3: Rename the user-visible strings
+
+Fifteen occurrences of =EPresent= in prose and string literals. **The frame
+title is the one that bites** — see "The three traps" above.
+
+*Files:*
+- Modify: =orgacle.el=
+
+- [ ] *Step 1: Find them*
+
+#+begin_src sh
+  grep -n "EPresent" orgacle.el
+#+end_src
+
+- [ ] *Step 2: Replace, capitalised*
+
+=EPresent= → =Orgacle= throughout. In particular:
+
+- =(title . "EPresent")= in =orgacle--get-frame= → ="Orgacle"=
+- =(string= "EPresent" (frame-parameter nil 'title))= in =orgacle-quit= →
+  ="Orgacle"=. **These two must match exactly.** If they diverge, quitting
+  stops deleting the frame and the user is stranded fullscreen, with no error.
+- =(generate-new-buffer "*EPresent Notes*")= → ="*Orgacle Notes*"=
+- =(define-derived-mode orgacle-mode org-mode "EPresent" ...)= → ="Orgacle"=
+  (this is the mode-line lighter)
+- ="EPresent to LaTeX"= in the export =:menu-entry= → ="Orgacle to LaTeX"=
+- the remaining docstring mentions
+
+- [ ] *Step 3: Prove the two title literals still agree*
+
+This is the trap; check it directly rather than by eye:
+
+#+begin_src sh
+  grep -c '"Orgacle"' orgacle.el
+#+end_src
+
+Expected: at least 3 — the frame parameter, the =string== in =orgacle-quit=, and
+the mode lighter. Then read both call sites to confirm they are the same string.
+
+- [ ] *Step 4: Confirm nothing is left*
+
+#+begin_src sh
+  grep -in "epresent" orgacle.el test/orgacle-test.el
+#+end_src
+
+Expected: no output at all. (The Commentary's origin note is added in Task 4 and
+will reintroduce exactly one deliberate mention.)
+
+- [ ] *Step 5: Run the gates and commit*
+
+#+begin_src sh
+  make clean && make all
+  git add -A
+  git commit -m "Rename the user-visible strings to Orgacle
+
+Frame title, notes buffer, mode lighter, export menu entry and
+docstrings.  The frame title appears twice -- once where the frame is
+created and once where orgacle-quit decides whether to delete it -- and
+the two must stay identical or quitting silently leaves the user in a
+fullscreen frame."
+#+end_src
+
+* Task 4: Migration command, metadata and documentation
+
+*Files:*
+- Modify: =orgacle.el=, =test/orgacle-test.el=, =README.org=
+- Create: =test/fixtures/legacy.org=, =COPYING=
+
+*Interfaces:*
+- Produces:
+  - =(orgacle-migrate-buffer &optional beg end)= — interactive; rewrites
+    =EPRESENT_= to =ORGACLE_= in the region or whole buffer; returns the count.
+  - =(orgacle-migrate-file FILE)= — interactive; same, on a file, saved in place.
+
+- [ ] *Step 1: Write the fixture*
+
+Create =test/fixtures/legacy.org=, a document in the old namespace:
+
+#+begin_src org :eval no
+  ,#+TITLE: Legacy
+  ,#+EPRESENT_FRAME_LEVEL: 2
+
+  ,* Old slide
+  :PROPERTIES:
+  :EPRESENT_SHOW_FILE: figure.pdf
+  :EPRESENT_SLIDE_IN: no
+  :END:
+
+  Body text mentioning EPRESENT_SHOW_FILE in prose.
+#+end_src
+
+- [ ] *Step 2: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  ;;; Migration
+
+  (ert-deftest orgacle-test-migrate-renames-properties ()
+    "Drawer properties and buffer keywords are both converted."
+    (orgacle-test-with-fixture "legacy.org"
+      (orgacle-migrate-buffer)
+      (should (string-match-p "^:ORGACLE_SHOW_FILE: figure\\.pdf$" (buffer-string)))
+      (should (string-match-p "^#\\+ORGACLE_FRAME_LEVEL: 2$" (buffer-string)))))
+
+  (ert-deftest orgacle-test-migrate-reports-a-count ()
+    "The number of substitutions is returned."
+    (orgacle-test-with-fixture "legacy.org"
+      ;; two drawer properties, one keyword, one prose mention
+      (should (equal 4 (orgacle-migrate-buffer)))))
+
+  (ert-deftest orgacle-test-migrate-leaves-nothing-behind ()
+    "No EPRESENT_ name survives migration."
+    (orgacle-test-with-fixture "legacy.org"
+      (orgacle-migrate-buffer)
+      (should-not (string-match-p "EPRESENT_" (buffer-string)))))
+
+  (ert-deftest orgacle-test-migrate-is-idempotent ()
+    "Running it twice changes nothing the second time."
+    (orgacle-test-with-fixture "legacy.org"
+      (orgacle-migrate-buffer)
+      (let ((once (buffer-string)))
+        (should (equal 0 (orgacle-migrate-buffer)))
+        (should (equal once (buffer-string))))))
+
+  (ert-deftest orgacle-test-migrate-honours-a-region ()
+    "With a region active, only that region is converted."
+    (orgacle-test-with-fixture "legacy.org"
+      (goto-char (point-min))
+      (re-search-forward "^:PROPERTIES:$")
+      (let ((beg (match-beginning 0)))
+        (re-search-forward "^:END:$")
+        (orgacle-migrate-buffer beg (match-end 0)))
+      ;; the drawer converted, the keyword above it did not
+      (should (string-match-p "^:ORGACLE_SHOW_FILE:" (buffer-string)))
+      (should (string-match-p "^#\\+EPRESENT_FRAME_LEVEL:" (buffer-string)))))
+#+end_src
+
+- [ ] *Step 3: Run them to verify they fail*
+
+Run: =make test=
+Expected: FAIL, five tests, =void-function orgacle-migrate-buffer=.
+
+- [ ] *Step 4: Implement the migration*
+
+Place it near the other interactive commands:
+
+#+begin_src emacs-lisp :eval no
+  ;;;###autoload
+  (defun orgacle-migrate-buffer (&optional beg end)
+    "Convert EPRESENT_ names to ORGACLE_ between BEG and END.
+Without BEG and END, convert the whole buffer, or the region when one
+is active.  Return the number of substitutions, and report it in the
+echo area when called interactively.
+
+Presentations written for epresent, the package Orgacle grew out of,
+use the older names; this brings them up to date."
+    (interactive (if (use-region-p)
+                     (list (region-beginning) (region-end))
+                   (list nil nil)))
+    (let ((count 0))
+      (save-excursion
+        (save-restriction
+          (when (and beg end) (narrow-to-region beg end))
+          (goto-char (point-min))
+          (while (re-search-forward "EPRESENT_" nil t)
+            (replace-match "ORGACLE_" t t)
+            (setq count (1+ count)))))
+      (when (called-interactively-p 'interactive)
+        (message "Converted %d name%s" count (if (= count 1) "" "s")))
+      count))
+
+  ;;;###autoload
+  (defun orgacle-migrate-file (file)
+    "Convert EPRESENT_ names to ORGACLE_ in FILE, saving it."
+    (interactive "fMigrate file: ")
+    (with-current-buffer (find-file-noselect file)
+      (let ((count (orgacle-migrate-buffer)))
+        (save-buffer)
+        (message "Converted %d name%s in %s"
+                 count (if (= count 1) "" "s") (file-name-nondirectory file))
+        count)))
+#+end_src
+
+- [ ] *Step 5: Run the tests*
+
+Run: =make test=
+Expected: PASS, 38 tests. If the count test disagrees, count the =EPRESENT_=
+occurrences in the fixture and correct the *test* — the fixture is the
+authority on how many there are.
+
+- [ ] *Step 6: Update the package header*
+
+#+begin_src emacs-lisp :eval no
+  ;;; orgacle.el --- Present Org-mode files as slide shows  -*- lexical-binding: t; -*-
+  ;; URL: https://github.com/drghirlanda/orgacle
+  ;; Version: 2.0.0
+#+end_src
+
+Keep the existing =Authors:=, =Maintainer:=, =Keywords:= and
+=Package-Requires:= lines unchanged.
+
+- [ ] *Step 7: Add the origin note to the Commentary*
+
+This is the one deliberate mention of the old name that survives:
+
+#+begin_src emacs-lisp :eval no
+  ;; Orgacle began as a fork of epresent, by Tom Tromey, Phil Hagelberg,
+  ;; Eric Schulte, Puneeth Chaganti and Lee Hinman, which has been
+  ;; unmaintained since 2016.  Presentations written for epresent use
+  ;; EPRESENT_ property names; `orgacle-migrate-buffer' converts them.
+#+end_src
+
+- [ ] *Step 8: Add COPYING*
+
+The header claims GPL-3; ship the licence text. Fetch the canonical text or
+copy it from another GPL-3 project on this machine, verbatim.
+
+- [ ] *Step 9: Update the README*
+
+Rename every =epresent= to =orgacle= and =EPresent= to =Orgacle=, including the
+=M-x= invocations and the =with-eval-after-load= snippet. Then extend the
+"Breaking changes" section P0 added, with the rename itself:
+
+#+begin_src org :eval no
+  ,- The package is now called =orgacle=. Every command, variable and face
+    is renamed from =epresent-...= to =orgacle-...=, and Org properties
+    from =EPRESENT_...= to =ORGACLE_...=.
+  ,- Run =M-x orgacle-migrate-buffer= on an existing presentation to
+    convert its properties, or =M-x orgacle-migrate-file= on a file.
+  ,- Settings in your init file need renaming by hand: =orgacle-migrate-buffer=
+    converts presentation documents, not Emacs configuration. A
+    =(setq epresent-slide-in t)= becomes =(setq orgacle-slide-in t)=.
+#+end_src
+
+- [ ] *Step 10: Run the gates and commit*
+
+#+begin_src sh
+  make clean && make all
+  git add -A
+  git commit -m "Add the migration command, bump to 2.0.0, document the rename
+
+orgacle-migrate-buffer and orgacle-migrate-file convert EPRESENT_ names
+in existing presentations.  Records in the README that init-file
+settings must be renamed by hand, since the command converts documents
+and not configuration."
+#+end_src
+
+* Task 5: Verify and publish
+
+- [ ] *Step 1: Prove the rename is complete*
+
+#+begin_src sh
+  grep -rin "epresent" --include="*.el" --include="*.org" --include="Makefile" \
+       --include="*.yml" . | grep -v "^./docs/" | grep -v "^./.superpowers/"
+#+end_src
+
+Expected: exactly three kinds of hit, all deliberate — the Commentary origin
+note, the README's breaking-changes entries, and the migration command's own
+=EPRESENT_= pattern plus the tests and fixture that exercise it. Anything else
+is a miss.
+
+- [ ] *Step 2: Prove it installs and loads under the new name*
+
+#+begin_src sh
+  emacs -Q --batch -L . --eval '(progn (require (quote orgacle)) (message "orgacle loads"))'
+#+end_src
+
+- [ ] *Step 3: Prove the migration works end to end on a real document*
+
+Copy =present.org= to a scratch file, revert its properties to =EPRESENT_= with
+=sed=, run =M-x orgacle-migrate-file= on it in batch, and confirm the result
+matches the committed =present.org=.
+
+- [ ] *Step 4: Run the gates and push*
+
+#+begin_src sh
+  make clean && make all
+  git push
+  gh run watch
+#+end_src
+
+Expected: green on 29.4, 30.2 and snapshot.
+
+- [ ] *Step 5: Record P1 complete in the design document*
+
+Mark P1 done in =docs/superpowers/specs/2026-08-10-orgacle-design.org=, noting
+anything that differed from the plan.
+
+* Verification
+
+P1 is done when:
+
+- =make clean && make all= exits 0 and CI is green on all three Emacs versions;
+- the suite is 38 tests;
+- =emacs -Q --batch -L . --eval '(require (quote orgacle))'= succeeds;
+- no =epresent= or =EPresent= string survives outside the Commentary origin
+  note, the README's breaking-changes section, and the migration machinery;
+- =orgacle-migrate-file= converts a real epresent presentation and the result
+  presents correctly.
