@@ -1,6 +1,6 @@
 EMACS ?= emacs
 BATCH  = $(EMACS) -Q --batch -l test/init.el
-EL     = orgacle-core.el orgacle.el
+EL     = orgacle-core.el orgacle-nav.el orgacle-fontify.el orgacle.el
 
 .PHONY: all deps compile checkdoc lint test clean
 

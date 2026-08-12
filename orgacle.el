@@ -59,6 +59,8 @@
 (require 'cl-lib)
 (require 'org-superstar nil t)
 (require 'orgacle-core)
+(require 'orgacle-nav)
+(require 'orgacle-fontify)
 
 ;; `pdf-tools' and `image-mode' are optional; every call site below is
 ;; guarded by a `major-mode' check, except `flyspell-mode-off', which is
@@ -78,79 +80,6 @@
 (declare-function flyspell-mode-off "flyspell" ())
 
 ;; functions
-(defun orgacle-get-frame-level ()
-  "Get the heading level to show as different frames."
-  (interactive)
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (if (re-search-forward
-           "^#\\+ORGACLE_FRAME_LEVEL:[ \t]*\\(.*?\\)[ \t]*$" nil t)
-          (string-to-number (match-string 1))
-        orgacle-frame-level))))
-
-(defun orgacle-get-mode-line ()
-  "Get the presentation-specific mode-line."
-  (interactive)
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (if (re-search-forward
-           "^#\\+ORGACLE_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
-          (car (read-from-string (match-string 1)))
-        orgacle-mode-line))))
-
-(defun orgacle-goto-top-level ()
-  "Go to the current top level heading containing point."
-  (interactive)
-  (unless (org-at-heading-p) (outline-previous-heading))
-  (let ((level (ignore-errors (org-reduced-level (org-current-level)))))
-    (when (and level (> level orgacle-frame-level))
-      (org-up-heading-all (- level orgacle-frame-level)))))
-
-(defun orgacle-jump-to-page (num)
-  "Jump directly to page NUM of the presentation."
-  (interactive "npage number: ")
-  (orgacle-top)
-  (dotimes (_ (1- num)) (orgacle-next-page)))
-
-(defun orgacle-current-page (&optional backward)
-  "Present the current outline heading.
-BACKWARD, if non-nil, means a leading \"TITLE PAGE\" heading is
-skipped by moving to the previous page instead of the next one, so
-that skipping moves in the direction the user is already navigating."
-  (interactive)
-  (when orgacle-aux-window
-    (delete-window orgacle-aux-window)
-    (setq orgacle-aux-window nil))
-  (if (org-current-level)
-      (progn
-	(orgacle-goto-top-level)
-	;; skipe a TITLE PAGE heading, used for introductory speaker notes
-	(if (string= (downcase (org-entry-get nil "ITEM")) "title page")
-	    (if backward
-		(orgacle-previous-page t)
-	      (orgacle-next-page t)))
-	(org-narrow-to-subtree)
-	(outline-show-all)
-	(outline-hide-body)
-	(when (>= (org-reduced-level (org-current-level))
-		  orgacle-frame-level)
-	  (org-fold-show-subtree)
-	  (org-cycle-set-visibility-according-to-property) ;; folds children
-	  (let ((orgacle-src-block-toggle-state
-		 (if orgacle-src-blocks-visible :show :hide)))
-	    (orgacle-toggle-hide-src-blocks)))
-	(orgacle-show-file-auto)
-	(orgacle-slide-in-effect)
-	(orgacle-show-indicators-maybe)
-	(orgacle-position-notes))
-    ;; before first headline -- fold up subtrees as TOC
-    (org-cycle '(4)))
-  ; this is sometimes useful:
-  (redraw-display))
 
 (defun orgacle-show-indicators-maybe ()
   "Draw the fringe indicators unless this slide displays its file by itself.
@@ -185,78 +114,6 @@ square an ORGACLE_SHOW_VIDEO property."
                      'before-string
                      (propertize " " 'display '(right-fringe hollow-square)))))))
 
-(defun orgacle--slide-in-p ()
-  "Return non-nil when the current slide should slide in.
-`orgacle-slide-in' is the default; an ORGACLE_SLIDE_IN property of
-\"no\", \"nil\" or \"off\" turns the animation off for one slide, and
-any other value turns it on."
-  (let ((property (org-entry-get nil "ORGACLE_SLIDE_IN")))
-    (cond ((null property) orgacle-slide-in)
-          ((member (downcase property) '("no" "nil" "off")) nil)
-          (t t))))
-
-(defun orgacle-slide-in-effect ()
-  "Animate the current slide sliding in from below."
-  (interactive)
-  (when (orgacle--slide-in-p)
-    (save-excursion
-      (goto-char (point-min))
-      (forward-line)
-      ;; if there is a drawer, skip it
-      (if (looking-at "[ \t]*:PROPERTIES:")
-          (re-search-forward "^[ \t]*:END:[ \r\n]" nil t))
-      (let ((ov (make-overlay (point) (point))))
-        (dotimes (i orgacle-slide-in-lines)
-          (if (eq i 1) (sit-for orgacle-slide-in-pause))
-          (overlay-put ov 'after-string
-                       (make-string (- orgacle-slide-in-lines i) ?\n))
-          (sit-for (/ orgacle-slide-in-duration orgacle-slide-in-lines)))
-        (delete-overlay ov)))))
-
-(defun orgacle-top ()
-  "Present the first outline heading."
-  (interactive)
-  (widen)
-  (goto-char (point-min))
-  (setq orgacle-page-number 1)
-  ;; rewind notes buffer if present
-  (if orgacle-notes-buffer
-      (with-current-buffer orgacle-notes-buffer
-	(goto-char (point-min))))
-  (orgacle-current-page))
-
-(defun orgacle-next-page (&optional skip)
-  "Advance to the next outline heading and present it.
-With SKIP non-nil the page counter advances but nothing is displayed,
-which is how a TITLE PAGE heading is stepped over."
-  (interactive)
-  (orgacle-goto-top-level)
-  (widen)
-  (when (if (< (or (ignore-errors (org-reduced-level (org-current-level))) 0)
-               orgacle-frame-level)
-            (outline-next-heading)
-          (org-get-next-sibling))
-    (cl-incf orgacle-page-number))
-  (unless skip
-    (orgacle-current-page)))
-
-(defun orgacle-previous-page (&optional _skip)
-  "Present the previous outline heading.
-SKIP is accepted for the same calling convention as
-`orgacle-next-page' but currently has no effect: this command
-always redisplays the destination page regardless of SKIP."
-  (interactive)
-  (orgacle-goto-top-level)
-  (widen)
-  (org-content)
-  (if (< (or (ignore-errors (org-reduced-level (org-current-level))) 0)
-         orgacle-frame-level)
-      (outline-previous-heading)
-    (org-get-previous-sibling))
-  (when (> orgacle-page-number 1)
-    (cl-decf orgacle-page-number))
-  (orgacle-current-page t))
-
 (defun orgacle-position-notes ()
   "Scroll the notes buffer to the notes for the current slide."
   (interactive)
@@ -269,24 +126,6 @@ always redisplays the destination page regardless of SKIP."
         (re-search-forward find-me)
         (org-narrow-to-subtree)
         (recenter 0)))))
-
-(defun orgacle-next-subheading ()
-  "Advance to next subheading, unhiding it if hidden."
-  (interactive)
-  (when (and (org-entry-get nil "ORGACLE_STEPWISE")
-	   (> (org-current-level) 1))
-      (outline-hide-subtree))
-  (org-next-visible-heading 1)
-  (org-fold-show-subtree))
-
-(defun orgacle-previous-subheading ()
-  "Go back to previous subheading, possibly hiding the current one."
-  (interactive)
-  (when (> (org-current-level) 1)
-    (outline-hide-subtree))
-  (org-next-visible-heading -1) ; -1 means previous
-  (if (> (org-current-level) 1) ; show if we found a subheading
-      (org-fold-show-subtree)))
 
 (defun orgacle-quit ()
   "Quit the current presentation."
@@ -333,146 +172,6 @@ always redisplays the destination page regardless of SKIP."
   (when (bufferp orgacle-notes-buffer)
     (delete-frame (window-frame (get-buffer-window orgacle-notes-buffer)))
     (kill-buffer orgacle-notes-buffer)))
-
-(defconst orgacle-scalable-faces
-  '(orgacle-title-face orgacle-heading-face orgacle-subheading-face
-    orgacle-author-face orgacle-bullet-face)
-  "Faces whose height `orgacle-increase-font' and its opposite change.")
-
-(defconst orgacle-font-step 10
-  "Amount `orgacle--scale-font' adds to or subtracts from an absolute height.
-Applies to a face in `orgacle-scalable-faces' whose current :height is
-an integer, i.e. an absolute size in 1/10 pt, such as
-`orgacle-title-face'.")
-
-(defconst orgacle-font-factor 1.1
-  "Factor `orgacle--scale-font' multiplies or divides a relative height by.
-Applies to a face in `orgacle-scalable-faces' whose current :height is
-a float, i.e. a multiplier of the frame's default height, such as
-`orgacle-author-face'.")
-
-(defun orgacle--scale-font (grow)
-  "Scale the height of every face in `orgacle-scalable-faces'.
-With GROW non-nil the faces get larger, otherwise smaller.
-
-`orgacle-scalable-faces' mixes faces whose :height is an absolute
-integer with faces whose :height is a relative float multiplier.  An
-absolute height is stepped by `orgacle-font-step'; a relative height
-is scaled by `orgacle-font-factor'.  Either kind is clamped above
-zero, so no sequence of calls can produce a non-positive height, which
-`set-face-attribute' rejects."
-  (dolist (face orgacle-scalable-faces)
-    (let ((height (face-attribute face :height)))
-      (set-face-attribute
-       face nil :height
-       (if (integerp height)
-           (max 1 (+ height (if grow orgacle-font-step (- orgacle-font-step))))
-         (max 0.1 (if grow (* height orgacle-font-factor)
-                    (/ height orgacle-font-factor))))))))
-
-(defun orgacle-increase-font ()
-  "Make the presentation font one step larger."
-  (interactive)
-  (orgacle--scale-font t))
-
-(defun orgacle-decrease-font ()
-  "Make the presentation font one step smaller."
-  (interactive)
-  (orgacle--scale-font nil))
-
-(defun orgacle-fontify ()
-  "Overlay additional presentation faces to Org-mode."
-  (save-excursion
-    ;; hide all comments
-    (goto-char (point-min))
-    (while (re-search-forward
-            "^[ \t]*#\\(\\+\\(author\\|title\\|date\\):\\)?.*\n"
-            nil t)
-      (cond
-       ;; this avoids hiding title, author, or date
-       ((and (match-string 2)
-             (save-match-data
-               (string-match (regexp-opt '("title" "author" "date"))
-                             (match-string 2)))))
-       ;; special handling of #+results
-       ((and (match-string 2)
-	     (save-match-data
-	       (string-match org-babel-results-keyword (match-string 2))))
-        ;; This pulls back the end of the hidden overlay by one to
-        ;; avoid hiding image results of code blocks.  I'm not sure
-        ;; why this is required, or why images start on the preceding
-        ;; newline, but not knowing why doesn't make it less true.
-        (push (make-overlay (match-beginning 0) (- (match-end 0) 1))
-              orgacle-overlays)
-        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))
-       ((save-match-data
-	  (string-match "^[ \t]*#\\+attr_org:.*?\n" (match-string 0)))
-        (push (make-overlay (match-beginning 0) (- (match-end 0) 1))
-              orgacle-overlays)
-        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))
-       ;; this hides all other comments
-       (t (push (make-overlay (match-beginning 0) (match-end 0))
-                orgacle-overlays)
-          (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))))
-    ;; page title faces and heading/subheading faces
-    (goto-char (point-min))
-    (while (re-search-forward "^\\(*+\\)\\([ \t]+\\)\\(.*\\)$" nil t)
-      ;; hide the first match, that is the stars
-      (push (make-overlay (match-beginning 1) (or (match-end 2)
-                                                 (match-end 1)))
-           orgacle-overlays)
-      (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide)
-      ;; apply faces to heading and subheading
-      (push (make-overlay (match-beginning 3) (match-end 3)) orgacle-overlays)
-      (if (> (length (match-string 1)) 1)
-          (overlay-put (car orgacle-overlays) 'face 'orgacle-subheading-face)
-	  (overlay-put (car orgacle-overlays) 'face 'orgacle-heading-face)))
-    ;; fancy bullet points, when the package is available
-    (when (and orgacle-use-org-superstar (fboundp 'org-superstar-mode))
-      (org-superstar-mode 1))
-    ;; hide todos
-    (when orgacle-hide-todos
-      (goto-char (point-min))
-      (while (re-search-forward org-todo-line-regexp nil t)
-        (when (match-string 2)
-          (push (make-overlay (match-beginning 2) (1+ (match-end 2)))
-                orgacle-overlays)
-          (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))))
-    ;; hide tags
-    (when orgacle-hide-tags
-      (goto-char (point-min))
-      (while (re-search-forward
-              "^\\*+.*?\\([ \t]+:[[:alnum:]_@#%:]+:\\)[ \r\n]"
-              nil t)
-        (push (make-overlay (match-beginning 1) (match-end 1)) orgacle-overlays)
-        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide)))
-    ;; hide properties
-    (when orgacle-hide-properties
-      (goto-char (point-min))
-      (while (re-search-forward org-drawer-regexp nil t)
-        (let ((beg (match-beginning 0))
-              (end (re-search-forward
-                    "^[ \t]*:END:[ \r\n]"
-                    (save-excursion (outline-next-heading) (point)) t)))
-          (push (make-overlay beg end) orgacle-overlays)
-          (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide))))
-    (dolist (el '("title" "author" "date"))
-      (goto-char (point-min))
-      (when (re-search-forward (format "^\\(#\\+%s:[ \t]*\\)[ \t]*\\(.*\\)$" el) nil t)
-        (push (make-overlay (match-beginning 1) (match-end 1)) orgacle-overlays)
-        (overlay-put (car orgacle-overlays) 'invisible 'orgacle-hide)
-        (push (make-overlay (match-beginning 2) (match-end 2)) orgacle-overlays)
-        (overlay-put
-         (car orgacle-overlays) 'face (intern (format "orgacle-%s-face" el)))))
-    ;; inline images
-    (orgacle--link-preview-clear)
-    (orgacle--link-preview-refresh)))
-
-(defun orgacle-refresh ()
-  "Delete the current slide's overlays and re-fontify it."
-  (interactive)
-  (orgacle-clean-overlays (point-min) (point-max))
-  (orgacle-fontify))
 
 (defun orgacle-setup-src-edit ()
   "Switch to a box cursor for editing a source block in place.
