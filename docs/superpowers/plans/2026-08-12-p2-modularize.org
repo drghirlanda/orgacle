@@ -1,0 +1,625 @@
+#+TITLE: P2 — Modularization: implementation plan
+#+AUTHOR: Stefano Ghirlanda
+#+DATE: 2026-08-12
+#+OPTIONS: toc:2 num:nil
+
+#+begin_quote
+*For agentic workers:* REQUIRED SUB-SKILL: use =superpowers:subagent-driven-development=
+(recommended) or =superpowers:executing-plans= to implement this plan
+task-by-task. Steps use checkbox (=- [ ]=) syntax for tracking.
+#+end_quote
+
+*Goal:* Split =orgacle.el= into focused modules, replace the hard-coded calls
+between subsystems with a single extension point, put the session's state in
+one explicit place, and make the remaining third-party dependencies degrade
+gracefully at runtime.
+
+*Architecture:* One leaf module (=orgacle-core.el=) holds the customization
+surface, the session state and the shared helpers. Feature modules depend on
+core and never on each other. =orgacle.el= depends on everything and defines
+the mode, the keymap and the entry points. The coupling that exists today —
+=orgacle-current-page= calling four subsystems by name, and =orgacle-show-file=
+reaching into overlay state owned by the indicator code — is replaced by
+=orgacle-page-hook=, which each feature module joins at load time.
+
+*Tech stack:* Emacs Lisp, ERT, =checkdoc=, =package-lint=, GNU Make, GitHub
+Actions.
+
+* Global constraints
+
+- Package name stays =orgacle=; symbol prefix =orgacle-=; the main file stays
+  =orgacle.el= and keeps the full package header.
+- Version floor stays =((emacs "29.1") (org "9.6"))=. Nothing beyond Emacs and
+  Org may become a hard requirement.
+- All four gates stay green after *every* task: =make compile= (with
+  =byte-compile-error-on-warn=), =make checkdoc=, =make lint=, =make test=.
+  CI covers Emacs 29.4, 30.2 and snapshot.
+- The suite is 40 tests at the start of this phase and must never shrink.
+- **No behaviour changes except where a task says so.** This phase moves code
+  and changes how modules find each other. Tasks 8 and 9 change structure that
+  is observable; everything before them must be a pure move.
+- Every new file needs its own header line, =;;; Commentary:=, =;;; Code:=,
+  a =provide= and a closing =;;; name.el ends here=, or checkdoc and
+  package-lint will fail it.
+
+* Deferred items from earlier phases that this phase closes
+
+Carried from the P0 and P1 ledgers, which live in a git-ignored workspace.
+Recording them here makes them survive.
+
+- =orgacle-inline-image-overlays= is write-only dead bookkeeping — set in
+  =orgacle-mode=, never read since the Org 9.8 shim landed. Task 9 removes it
+  with the rest of the ad-hoc state.
+- The comment above the =declare-function= block claims every call site below
+  is guarded by a =major-mode= check; =flyspell-mode-off= is guarded by
+  =fboundp= instead. Task 1 moves that block and corrects the comment.
+- =orgacle-latex-property-drawer= uses =let= where the =width= and =pages=
+  initialisers each depend on match data the other destroys; it is correct only
+  because =let= evaluates left to right. Task 7 moves that function and makes
+  it =let*=.
+
+Explicitly *not* in this phase, and still open: the one-way =m= mouse toggle
+(=orgacle-mouse-visible= is never assigned) and the slide-vector navigation
+rewrite, both P3; the =orgacle-migrate-*= minors, unscheduled.
+
+* Target file structure
+
+| File                 | Responsibility                                                                                                                        | Depends on |
+|----------------------+---------------------------------------------------------------------------------------------------------------------------------------+------------|
+| =orgacle-core.el=    | group, faces, defcustoms, session state, compat shims, declare-functions, overlay bookkeeping, frame and pointer, =orgacle-page-hook= | —          |
+| =orgacle-nav.el=     | frame level, mode line, page and subheading navigation                                                                                | core       |
+| =orgacle-fontify.el= | overlay fontification and hiding, font scaling, the slide-in effect                                                                   | core       |
+| =orgacle-src.el=     | source-block navigation, editing, execution flash, hide/show                                                                          | core       |
+| =orgacle-media.el=   | show-file and its auxiliary window, video, fringe indicators                                                                          | core       |
+| =orgacle-notes.el=   | speaker-notes collection, the notes buffer, speaking-time estimate                                                                    | core       |
+| =ox-orgacle.el=      | the LaTeX/PDF export backend                                                                                                          | ox-latex   |
+| =orgacle.el=         | package header, mode, keymaps, =orgacle-run=, =orgacle-quit=, migration commands, autoloads                                           | all above  |
+
+=ox-orgacle.el= is loadable on its own, without starting a presentation.
+
+* Task 1: Create orgacle-core.el
+
+The leaf everything else depends on. Moving it first means every later
+extraction has somewhere to put its shared references.
+
+*Files:*
+- Create: =orgacle-core.el=
+- Modify: =orgacle.el=, =Makefile=, =test/init.el=
+
+*Interfaces:*
+- Produces, for every later task: the customization group =orgacle=; the six
+  faces; all twenty-one =defcustom= forms; the session-state =defvar= forms;
+  =orgacle--link-preview-refresh=, =orgacle--link-preview-clear=,
+  =orgacle--link-preview-overlays=; the =declare-function= block; the four bare
+  X11 =defvar= declarations; =orgacle-clean-overlays=,
+  =orgacle-clean-fringe-overlays=; =orgacle--get-frame=; =orgacle-toggle-mouse=;
+  and =orgacle-page-hook= (defined here, used from Task 8).
+
+- [ ] *Step 1: Create the file with its header*
+
+#+begin_src emacs-lisp :eval no
+  ;;; orgacle-core.el --- Shared state and helpers for Orgacle  -*- lexical-binding: t; -*-
+
+  ;; This file is part of Orgacle.  See orgacle.el for the package header,
+  ;; copyright and licence.
+
+  ;;; Commentary:
+
+  ;; The leaf module: the customization surface, the state a running
+  ;; presentation keeps, the compatibility shims, and the helpers every other
+  ;; module needs.  It requires nothing from the rest of the package, so the
+  ;; feature modules can depend on it without a cycle.
+
+  ;;; Code:
+
+  (require 'org)
+  (require 'cl-lib)
+
+  ;; ... moved content ...
+
+  (provide 'orgacle-core)
+  ;;; orgacle-core.el ends here
+#+end_src
+
+- [ ] *Step 2: Move the content, verbatim*
+
+Cut from =orgacle.el= and paste into =orgacle-core.el=, in this order, changing
+nothing but position:
+
+1. the three =orgacle--link-preview-*= shims and their comment
+2. the four bare =(defvar x-pointer-...)= declarations and their comment
+3. the nine =declare-function= forms
+4. =(defgroup orgacle ...)= and the six =defface= forms
+5. every =defcustom= (twenty-one of them)
+6. every state =defvar= — =orgacle--frame=, =orgacle--org-buffer=,
+   =orgacle--org-restriction=, =orgacle--org-file=, =orgacle-overlays=,
+   =orgacle-fringe-overlays=, =orgacle-aux-fringe-overlay=,
+   =orgacle-inline-image-overlays=, =orgacle-src-fontify-natively=,
+   =orgacle-hide-emphasis-markers=, =orgacle-outline-ellipsis=,
+   =orgacle-pretty-entities=, =orgacle-page-number=,
+   =orgacle-user-x-pointer-shape=,
+   =orgacle-user-x-sensitive-text-pointer-shape=, =orgacle-mouse-visible=,
+   =orgacle-frame-level=, =orgacle-notes-buffer=,
+   =orgacle-src-block-toggle-state=, =orgacle-show-filename=,
+   =orgacle-aux-window=, =orgacle-presentation-window=, =orgacle-show-buffer=
+7. =orgacle--get-frame=, =orgacle-toggle-mouse=
+8. =orgacle-clean-overlays=, =orgacle-clean-fringe-overlays=
+
+- [ ] *Step 3: Correct the =declare-function= comment while moving it*
+
+It claims every call site below is guarded by a =major-mode= check.
+=flyspell-mode-off= is guarded by =fboundp= at its call site instead. Say so.
+
+- [ ] *Step 4: Add the page hook*
+
+Nothing uses it until Task 8; defining it here means the feature modules can
+join it as they are extracted.
+
+#+begin_src emacs-lisp :eval no
+  (defvar orgacle-page-hook nil
+    "Hook run after a slide has been displayed and narrowed.
+Each feature module adds its own function here, so that displaying a
+slide does not have to know which subsystems exist.  Members run inside
+a `condition-case': a failure is logged and the remaining members still
+run, because nothing should be able to end a presentation mid-talk.")
+#+end_src
+
+- [ ] *Step 5: Require it from orgacle.el*
+
+Add =(require 'orgacle-core)= to =orgacle.el= after the existing requires.
+
+- [ ] *Step 6: Teach the harness about multiple files*
+
+=Makefile=: introduce a variable listing every Elisp file the package ships,
+and use it for =compile=, =checkdoc= and =lint=:
+
+#+begin_src makefile :eval no
+  EL = orgacle-core.el orgacle.el
+#+end_src
+
+Extend it in each later task as files appear. =batch-byte-compile=,
+=checkdoc-batch.el= and =package-lint-batch-and-exit= all accept several files.
+
+- [ ] *Step 7: Run the gates*
+
+#+begin_src sh
+  make clean && make all
+#+end_src
+
+Expected: exit 0, 40 tests. A =void-variable= or =void-function= failure means
+something was left behind that still refers to a moved definition; the
+byte-compiler names it.
+
+- [ ] *Step 8: Commit*
+
+#+begin_src sh
+  git add -A
+  git commit -m "Extract orgacle-core.el
+
+The leaf module: customization surface, session state, compat shims and
+the helpers everything else needs.  Pure move, plus the page-hook
+definition later tasks will use and a correction to the declare-function
+comment, which claimed a guard that flyspell-mode-off does not have."
+#+end_src
+
+* Task 2: Extract orgacle-nav.el and orgacle-fontify.el
+
+Two modules in one task: they are the two that =orgacle-mode= and
+=orgacle-run= lean on most, and doing them together keeps the intermediate
+state coherent.
+
+*Files:*
+- Create: =orgacle-nav.el=, =orgacle-fontify.el=
+- Modify: =orgacle.el=, =Makefile=
+
+*Interfaces:*
+- Consumes: everything Task 1 produced.
+- Produces: =orgacle-get-frame-level=, =orgacle-get-mode-line=,
+  =orgacle-goto-top-level=, =orgacle-current-page=, =orgacle-top=,
+  =orgacle-next-page=, =orgacle-previous-page=, =orgacle-jump-to-page=,
+  =orgacle-next-subheading=, =orgacle-previous-subheading= (nav);
+  =orgacle-fontify=, =orgacle-refresh=, =orgacle--scale-font=,
+  =orgacle-increase-font=, =orgacle-decrease-font=, =orgacle--slide-in-p=,
+  =orgacle-slide-in-effect= (fontify).
+
+- [ ] *Step 1: Create both files with headers*
+
+Same shape as Task 1's Step 1. Summaries: =Slide navigation for Orgacle= and
+=Slide rendering for Orgacle=. Both =(require 'orgacle-core)=; =orgacle-nav.el=
+also needs =(require 'org)=.
+
+- [ ] *Step 2: Move the functions verbatim*
+
+To =orgacle-nav.el=: =orgacle-get-frame-level=, =orgacle-get-mode-line=,
+=orgacle-goto-top-level=, =orgacle-jump-to-page=, =orgacle-current-page=,
+=orgacle-top=, =orgacle-next-page=, =orgacle-previous-page=,
+=orgacle-next-subheading=, =orgacle-previous-subheading=.
+
+To =orgacle-fontify.el=: =orgacle--scale-font=, =orgacle-increase-font=,
+=orgacle-decrease-font=, =orgacle-fontify=, =orgacle-refresh=,
+=orgacle--slide-in-p=, =orgacle-slide-in-effect=, and the
+=orgacle-scalable-faces= defconst.
+
+*Leave =orgacle-current-page='s calls to the media and notes subsystems exactly
+as they are.* They will not compile cleanly yet — see the next step.
+
+- [ ] *Step 3: Declare the not-yet-extracted callees*
+
+=orgacle-current-page= calls =orgacle-show-file-auto=,
+=orgacle-slide-in-effect=, =orgacle-show-indicators-maybe= and
+=orgacle-position-notes=. After this task, two of those live in
+=orgacle.el= still, which =orgacle-nav.el= does not require — the compiler will
+warn.
+
+Add =declare-function= forms for them at the top of =orgacle-nav.el=, with a
+comment saying they are temporary and Task 8 removes them by replacing the
+calls with the page hook. This is the honest way to hold an intermediate state:
+the alternative is a dependency cycle.
+
+- [ ] *Step 4: Update requires and the Makefile, run the gates, commit*
+
+=orgacle.el= requires both new modules. =EL= grows by two.
+
+Expected: =make clean && make all= exit 0, 40 tests.
+
+* Task 3: Extract orgacle-src.el and orgacle-media.el
+
+*Files:*
+- Create: =orgacle-src.el=, =orgacle-media.el=
+- Modify: =orgacle.el=, =orgacle-nav.el=, =Makefile=
+
+*Interfaces:*
+- Produces: =orgacle-setup-src-edit=, =orgacle-flash-cursor=,
+  =orgacle-next-src-block=, =orgacle-previous-src-block=,
+  =orgacle-toggle-hide-src-blocks=, =orgacle-toggle-hide-src-block= (src);
+  =orgacle-show-indicators=, =orgacle-show-indicators-maybe=,
+  =orgacle-show-file=, =orgacle-advance-file=, =orgacle-show-file-or-advance=,
+  =orgacle-update-aux-fringe-overlay=, =orgacle-show-file-auto=,
+  =orgacle-show-video= (media).
+
+- [ ] *Step 1: Create both files, move the functions verbatim*
+
+Summaries: =Source-block interaction for Orgacle= and
+=Files, video and fringe indicators for Orgacle=. Both require
+=orgacle-core=; =orgacle-media.el= also needs =(require 'org)=.
+
+- [ ] *Step 2: Drop the now-satisfiable declarations from orgacle-nav.el*
+
+Two of Task 2's temporary =declare-function= forms —
+=orgacle-show-file-auto= and =orgacle-show-indicators-maybe= — now have a real
+home. =orgacle-nav.el= must not require =orgacle-media.el=: that is the
+sideways dependency this phase exists to remove. Keep the declarations, and
+keep the comment explaining that Task 8 deletes them along with the calls.
+
+- [ ] *Step 3: Update requires and the Makefile, run the gates, commit*
+
+Expected: exit 0, 40 tests.
+
+* Task 4: Extract orgacle-notes.el and ox-orgacle.el
+
+*Files:*
+- Create: =orgacle-notes.el=, =ox-orgacle.el=
+- Modify: =orgacle.el=, =test/orgacle-test.el=, =Makefile=
+
+*Interfaces:*
+- Produces: =orgacle--collect-notes=, =orgacle-make-notes-buffer=,
+  =orgacle-position-notes=, =orgacle--speaker-word-count=,
+  =orgacle--speaking-time=, =orgacle-estimate-time= (notes);
+  =orgacle-latex-property-drawer=, the =orgacle= export backend,
+  =orgacle-export-as-latex=, =orgacle-export-to-latex=,
+  =orgacle-export-to-pdf= (ox-orgacle).
+
+- [ ] *Step 1: Create both files, move the functions verbatim*
+
+Summaries: =Speaker notes for Orgacle= and
+=LaTeX and PDF export for Orgacle=. =orgacle-notes.el= requires
+=orgacle-core=; =ox-orgacle.el= requires =ox=, =ox-latex= and =ox-org=, and
+notably *not* =orgacle-core= — it must stay loadable without starting a
+presentation.
+
+- [ ] *Step 2: Fix the match-data fragility while moving the translator*
+
+=orgacle-latex-property-drawer= binds =width= and =pages= with =let=, and each
+initialiser runs a =string-match= that destroys the match data the other
+depends on. It works only because =let= evaluates initialisers left to right,
+so reordering two bindings — a change that looks free — would silently make
+=width= pick up the pages match. Change it to =let*= and add a comment naming
+the constraint. Behaviour is identical; the fragility is not.
+
+- [ ] *Step 3: Point the tests at the export module*
+
+=test/orgacle-test.el= exercises the backend through =org-export-as 'orgacle=.
+Add =(require 'ox-orgacle)= to the test file so the backend is registered even
+if a future change stops =orgacle.el= from pulling it in.
+
+- [ ] *Step 4: Update requires and the Makefile, run the gates, commit*
+
+Expected: exit 0, 40 tests. If the five export tests fail with
+=No such export backend=, the =require= in Step 3 is missing or =ox-orgacle=
+is not on the load path.
+
+* Task 5: Replace the sideways calls with the page hook
+
+The architectural point of this phase.
+
+*Files:*
+- Modify: =orgacle-nav.el=, =orgacle-media.el=, =orgacle-notes.el=,
+  =orgacle-fontify.el=, =test/orgacle-test.el=
+
+*Interfaces:*
+- Consumes: =orgacle-page-hook= from Task 1.
+- Produces: a =orgacle-current-page= that names no subsystem.
+
+- [ ] *Step 1: Write the failing test*
+
+The hook is an observable contract, so test it as one:
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-page-hook-runs-on-display ()
+    "Displaying a slide runs `orgacle-page-hook'."
+    (orgacle-test-with-fixture "plain.org"
+      (let* ((ran 0)
+             (orgacle-page-hook (list (lambda () (setq ran (1+ ran))))))
+        (goto-char (point-min))
+        (orgacle-current-page)
+        (should (= ran 1)))))
+
+  (ert-deftest orgacle-test-page-hook-survives-a-failing-member ()
+    "A member that signals does not stop the others or the presentation."
+    (orgacle-test-with-fixture "plain.org"
+      (let* ((ran nil)
+             (orgacle-page-hook
+              (list (lambda () (error "Deliberate failure"))
+                    (lambda () (setq ran t)))))
+        (goto-char (point-min))
+        (should (progn (orgacle-current-page) t))
+        (should ran))))
+#+end_src
+
+- [ ] *Step 2: Run them to verify they fail*
+
+Run: =make test=
+Expected: FAIL — the first because nothing runs the hook, the second because
+the error propagates out of =orgacle-current-page=.
+
+- [ ] *Step 3: Run the hook, safely*
+
+In =orgacle-core.el=, add the runner. Every member is insulated:
+
+#+begin_src emacs-lisp :eval no
+  (defun orgacle--run-page-hook ()
+    "Run `orgacle-page-hook', surviving a member that signals.
+A failing member is reported in the echo area and logged, and the
+remaining members still run: nothing a single subsystem does should be
+able to end a presentation."
+    (dolist (fn orgacle-page-hook)
+      (condition-case err
+          (funcall fn)
+        (error
+         (message "Orgacle: %s failed: %s" fn (error-message-string err))))))
+#+end_src
+
+In =orgacle-nav.el=, replace the four hard-coded calls at the end of
+=orgacle-current-page= with =(orgacle--run-page-hook)=, and delete the
+temporary =declare-function= forms Tasks 2 and 3 left there.
+
+- [ ] *Step 4: Have each module join the hook at load time*
+
+At the end of each module, after its definitions:
+
+#+begin_src emacs-lisp :eval no
+  ;; orgacle-fontify.el
+  (add-hook 'orgacle-page-hook #'orgacle-slide-in-effect)
+
+  ;; orgacle-media.el
+  (add-hook 'orgacle-page-hook #'orgacle-show-file-auto)
+  (add-hook 'orgacle-page-hook #'orgacle-show-indicators-maybe)
+
+  ;; orgacle-notes.el
+  (add-hook 'orgacle-page-hook #'orgacle-position-notes)
+#+end_src
+
+Order matters and =add-hook= prepends by default, so pass APPEND non-nil, or
+register in an order that reproduces today's sequence: file first, then
+slide-in, then indicators, then notes. Say in your report which you chose and
+why the resulting order matches the old behaviour.
+
+- [ ] *Step 5: Run the gates*
+
+Expected: exit 0, 42 tests. Both new tests pass, and the forty existing ones
+still do — several of them display slides, so they exercise the new path.
+
+- [ ] *Step 6: Commit*
+
+* Task 6: One place for session state
+
+*Files:*
+- Modify: =orgacle-core.el=, =orgacle.el=, =test/orgacle-test.el=
+
+*Interfaces:*
+- Produces: =orgacle--save-user-state=, =orgacle--restore-user-state=, and an
+  =orgacle-quit= that can be called twice.
+
+- [ ] *Step 1: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-user-state-round-trips ()
+    "Saving then restoring leaves the user's Org settings as they were."
+    (let ((org-src-fontify-natively 'sentinel)
+          (org-hide-emphasis-markers 'sentinel)
+          (org-pretty-entities 'sentinel))
+      (orgacle--save-user-state)
+      (setq org-src-fontify-natively t
+            org-hide-emphasis-markers t
+            org-pretty-entities t)
+      (orgacle--restore-user-state)
+      (should (eq org-src-fontify-natively 'sentinel))
+      (should (eq org-hide-emphasis-markers 'sentinel))
+      (should (eq org-pretty-entities 'sentinel))))
+
+  (ert-deftest orgacle-test-quit-is-idempotent ()
+    "Quitting when no presentation is running does nothing and does not signal."
+    (should (progn (orgacle-quit) t))
+    (should (progn (orgacle-quit) t)))
+#+end_src
+
+- [ ] *Step 2: Run them to verify they fail*
+
+Expected: FAIL — the helpers do not exist, and =orgacle-quit= signals or
+misbehaves when called with nothing running.
+
+- [ ] *Step 3: Replace the ad-hoc save/restore*
+
+Today =orgacle-mode= copies four Org variables into four =orgacle-*= globals
+and =orgacle-quit= copies them back by hand, which is why adding a variable
+means remembering two places. Replace with one declared list and two functions
+in =orgacle-core.el=:
+
+#+begin_src emacs-lisp :eval no
+  (defconst orgacle-saved-variables
+    '(org-src-fontify-natively
+      org-hide-emphasis-markers
+      org-pretty-entities
+      org-fontify-quote-and-verse-blocks)
+    "Variables Orgacle changes while presenting and restores on quit.
+Adding one here is enough; both directions are handled.")
+
+  (defvar orgacle--saved-state nil
+    "Alist of (SYMBOL . VALUE) captured by `orgacle--save-user-state'.")
+
+  (defun orgacle--save-user-state ()
+    "Record the current value of every `orgacle-saved-variables'."
+    (setq orgacle--saved-state
+          (mapcar (lambda (sym) (cons sym (symbol-value sym)))
+                  orgacle-saved-variables)))
+
+  (defun orgacle--restore-user-state ()
+    "Put every variable saved by `orgacle--save-user-state' back."
+    (dolist (entry orgacle--saved-state)
+      (set (car entry) (cdr entry)))
+    (setq orgacle--saved-state nil))
+#+end_src
+
+Delete the four now-unused =orgacle-src-fontify-natively=,
+=orgacle-hide-emphasis-markers=, =orgacle-pretty-entities= and
+=orgacle-inline-image-overlays= globals — the last of which has been write-only
+since the Org 9.8 shim landed. The display-table slot
+(=orgacle-outline-ellipsis=) is not a variable and stays as it is.
+
+- [ ] *Step 4: Make quit idempotent*
+
+=orgacle-quit= currently assumes a presentation is running: it deletes a frame,
+kills buffers and restores state unconditionally. Guard each step on the thing
+existing, and wrap the body in =unwind-protect= so a failure part-way through
+still restores what it can. Keep it to that — P3 rewrites this function around
+an explicit session struct, and the goal here is only that calling it twice, or
+calling it with nothing running, is harmless.
+
+- [ ] *Step 5: Run the gates and commit*
+
+Expected: exit 0, 44 tests.
+
+* Task 7: Optional dependencies at runtime, and the version floor for a multi-file package
+
+*Files:*
+- Modify: =orgacle-media.el=, =orgacle-core.el=, =test/orgacle-test.el=,
+  =orgacle.el=
+
+- [ ] *Step 1: Write the failing tests*
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-video-player-is-detected ()
+    "A configured player that is not installed is reported, not run."
+    (let ((orgacle-video-player "definitely-not-a-real-player"))
+      (should-error (orgacle--video-command "film.mp4" nil) :type 'user-error)))
+
+  (ert-deftest orgacle-test-video-command-quotes-its-filename ()
+    "A filename with a space survives as one argument."
+    (let ((orgacle-video-player "mplayer"))
+      (should (string-match-p "'my film\\.mp4'\\|\"my film\\.mp4\""
+                              (orgacle--video-command "my film.mp4" nil)))))
+#+end_src
+
+- [ ] *Step 2: Extract the command builder and check the player exists*
+
+=orgacle-show-video= builds a shell command and runs it in one function, so
+neither half can be tested. Split out =orgacle--video-command=, returning the
+string, and have it =user-error= when =executable-find= cannot see the
+configured player — today a missing player produces whatever the shell says,
+after the frame has already left full screen.
+
+Keep =shell-quote-argument= on the filename; it is already there and the second
+test pins it.
+
+- [ ] *Step 3: Let a PDF slide degrade*
+
+=orgacle-show-file= fits a PDF to the window through =pdf-tools=. Without that
+package the file opens in whatever mode Emacs picks and the fitting silently
+does not happen. Guard the =pdf-view-mode= branch on =(featurep 'pdf-tools)=,
+and when it is absent say so once — a presenter who set
+=ORGACLE_SHOW_FILE: figure.pdf= and got an unscaled buffer deserves to know
+why.
+
+- [ ] *Step 4: Run the gates and commit*
+
+Expected: exit 0, 46 tests.
+
+* Task 8: Verify and publish
+
+- [ ] *Step 1: Prove the module boundaries hold*
+
+No feature module may require another. Check it, do not assume it:
+
+#+begin_src sh
+  for f in orgacle-nav orgacle-fontify orgacle-src orgacle-media orgacle-notes; do
+    echo "== $f"; grep -n "^(require 'orgacle" $f.el
+  done
+#+end_src
+
+Expected: every hit is =orgacle-core=. Any module requiring a sibling is a
+boundary violation and the reason this phase exists.
+
+- [ ] *Step 2: Prove each module compiles alone*
+
+#+begin_src sh
+  for f in orgacle-core orgacle-nav orgacle-fontify orgacle-src \
+           orgacle-media orgacle-notes ox-orgacle orgacle; do
+    emacs -Q --batch -l test/init.el \
+      --eval '(setq byte-compile-error-on-warn t)' \
+      -f batch-byte-compile $f.el || echo "FAILED: $f"
+  done
+#+end_src
+
+- [ ] *Step 3: Prove =ox-orgacle= loads without the rest of the package*
+
+#+begin_src sh
+  emacs -Q --batch -l test/init.el --eval "(progn (require 'ox-orgacle) (message \"ok\"))"
+#+end_src
+
+- [ ] *Step 4: Prove the package still installs as one thing*
+
+=package-lint= treats the file with =Package-Requires= as the main file and the
+rest as part of the same package. Confirm =make lint= passes over all eight
+files and that only =orgacle.el= carries the full header.
+
+- [ ] *Step 5: Run everything and push*
+
+#+begin_src sh
+  make clean && make all
+  git push
+  gh run watch
+#+end_src
+
+- [ ] *Step 6: Record P2 complete in the design document*
+
+* Verification
+
+P2 is done when:
+
+- =make clean && make all= exits 0 and CI is green on 29.4, 30.2 and snapshot;
+- the suite is 46 tests;
+- no feature module requires another;
+- each of the eight files byte-compiles alone with warnings as errors;
+- =ox-orgacle.el= loads without =orgacle.el=;
+- =orgacle-current-page= names no subsystem — it runs =orgacle-page-hook=;
+- =orgacle-quit= can be called twice, and with nothing running, harmlessly.
