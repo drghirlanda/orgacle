@@ -47,15 +47,9 @@ ORGACLE_SHOW_PAGES."
                             (insert-file-contents filename)
                             (org-export-string-as (buffer-string) 'latex t))))
           ;; everything else is treated as an image
-          ;; `let*', not `let': WIDTH's and PAGES' initialisers each run a
-          ;; `string-match' against INPUT before reading their own capture
-          ;; with `match-string', which overwrites whatever match data the
-          ;; other initialiser left behind.  `let' evaluates initialisers in
-          ;; source order, so today's order (WIDTH before PAGES) only works
-          ;; because each one's own `string-match'/`match-string' pair runs
-          ;; back-to-back with nothing of the other's in between; swapping
-          ;; the two bindings would look like a free reordering but would
-          ;; break that pairing.  `let*' pins the ordering explicitly.
+          ;; `let*' states sequential intent, not a fix: WIDTH and PAGES are
+          ;; independent, each running its own `string-match' immediately
+          ;; before its own `match-string', so the order does not matter.
           (let* ((width (if (string-match "ORGACLE_SHOW_WIDTH:\s+\\(.+\\)" input)
                             (match-string 1 input)
                           "0.5"))
