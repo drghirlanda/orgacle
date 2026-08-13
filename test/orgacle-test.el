@@ -708,6 +708,55 @@ migrated, leaving EPRESENT_ names on disk outside the narrowed region."
       (should (progn (orgacle-current-page) t))
       (should ran))))
 
+(defun orgacle-test--signal-deliberate-failure ()
+  "Signal an error, for use as a deliberately failing page-hook member."
+  (error "Deliberate failure"))
+
+(ert-deftest orgacle-test-page-hook-logs-a-failing-member ()
+  "A failing member leaves a log entry naming the function, the slide
+index, and the error, in `orgacle--log-buffer-name', and the remaining
+members still run."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-next-page) ; index 1, "Second slide"
+    (let* ((ran nil)
+           (orgacle-page-hook
+            (list #'orgacle-test--signal-deliberate-failure
+                  (lambda () (setq ran t)))))
+      (when (get-buffer orgacle--log-buffer-name)
+        (kill-buffer orgacle--log-buffer-name))
+      (unwind-protect
+          (progn
+            (orgacle-current-page)
+            (should ran)
+            (with-current-buffer (get-buffer orgacle--log-buffer-name)
+              (let ((contents (buffer-string)))
+                (should (string-match-p
+                         "orgacle-test--signal-deliberate-failure" contents))
+                (should (string-match-p "\\bslide index 1\\b" contents))
+                (should (string-match-p "Deliberate failure" contents)))))
+        (when (get-buffer orgacle--log-buffer-name)
+          (kill-buffer orgacle--log-buffer-name))))))
+
+(ert-deftest orgacle-test-page-hook-log-buffer-stays-hidden ()
+  "A failing page-hook member never pops `orgacle--log-buffer-name' up
+onto the screen; it is for reading after the presentation, not during
+it."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-next-page) ; a real slide, so the page hook actually runs
+    (let ((orgacle-page-hook
+           (list (lambda () (error "Deliberate failure")))))
+      (when (get-buffer orgacle--log-buffer-name)
+        (kill-buffer orgacle--log-buffer-name))
+      (unwind-protect
+          (progn
+            (orgacle-current-page)
+            (should (get-buffer orgacle--log-buffer-name))
+            (should-not (get-buffer-window orgacle--log-buffer-name t)))
+        (when (get-buffer orgacle--log-buffer-name)
+          (kill-buffer orgacle--log-buffer-name))))))
+
 (ert-deftest orgacle-test-page-hook-order-is-file-slide-in-indicators-notes ()
   "The real, global `orgacle-page-hook' runs file, slide-in, indicators,
 then notes, in that order -- not merely some order the four `add-hook'

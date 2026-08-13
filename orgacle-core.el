@@ -563,6 +563,52 @@ failure the next member sees the buffer and window this one started
 with; a failure is logged and does not stop the remaining members,
 because nothing should be able to end a presentation mid-talk.")
 
+(defconst orgacle--log-buffer-name "*Orgacle Log*"
+  "Name of the buffer that records a failing `orgacle-page-hook' member.
+Created on first use by `orgacle--log-page-hook-failure'.  Never
+displayed by Orgacle itself -- read it afterwards with `switch-to-buffer'
+or similar; a window appearing mid-presentation to announce a failure
+would be worse than the failure it reports.")
+
+(defun orgacle--log-page-hook-failure (fn err)
+  "Append a note that FN signalled ERR to `orgacle--log-buffer-name'.
+FN is the page-hook member `orgacle--run-page-hook' was calling and ERR
+the error its `condition-case' caught.  The entry also carries the
+running session's index slot, read fresh via `orgacle--session-ensure',
+so a presenter reading the log after the talk knows which slide broke;
+the index is left as \"unknown\" rather than signalling when nothing has
+built a slide deck yet, which happens in tests that call
+`orgacle--run-page-hook' without first calling `orgacle--start-slides'.
+
+No true backtrace: by the time this function runs, the `condition-case'
+in `orgacle--run-page-hook' has already unwound the stack that ERR was
+signalled from, so there is nothing of the original call left to walk;
+capturing frames from inside this handler would only describe this
+handler, not the failure.  Producing a real one needs either
+`condition-case-unless-debug', which stops catching the error at all
+and drops into the debugger instead whenever the presenter happens to
+have `debug-on-error' set -- the opposite of surviving a failure
+mid-talk -- or rebinding the global `debugger' function around every
+hook member to intercept the error before it unwinds, which is
+session-wide state to mutate on every single slide change for a
+backtrace that `error-message-string' already mostly conveys.  Neither
+is worth risking the one guarantee this mechanism exists for, so this
+logs the function, the slide index and the error text only.
+
+Deliberately has no `condition-case' of its own: `orgacle--run-page-hook'
+wraps its call to this function in `ignore-errors', which is what keeps
+a problem here -- an unwritable `orgacle--log-buffer-name', a disk
+error, anything -- from turning a failing hook member into a failing
+presentation; see that call site."
+  (let ((index (orgacle--session-index (orgacle--session-ensure))))
+    (with-current-buffer (get-buffer-create orgacle--log-buffer-name)
+      (goto-char (point-max))
+      (insert (format "[%s] slide index %s: %s failed: %s\n"
+                       (format-time-string "%Y-%m-%d %H:%M:%S")
+                       (if index index "unknown")
+                       (if (symbolp fn) fn "anonymous function")
+                       (error-message-string err))))))
+
 (defun orgacle--run-page-hook ()
   "Run `orgacle-page-hook', surviving a member that signals.
 Uses `run-hook-wrapped' rather than `dolist': a plain `dolist' over the
@@ -584,9 +630,14 @@ Each member additionally runs inside `save-current-buffer' and
 selected window and then signals (for example `orgacle-show-file',
 which only re-selects the presentation window on its last line)
 cannot hand the wrong buffer or window to the members that run after
-it.  A failing member is reported in the echo area and logged; an
-anonymous function is named generically rather than `%s'-formatted,
-since that would print its whole byte-code object."
+it.  A failing member is reported in the echo area immediately, via
+`message', and logged to `orgacle--log-buffer-name' for after the talk,
+via `orgacle--log-page-hook-failure'; an anonymous function is named
+generically rather than `%s'-formatted, since that would print its
+whole byte-code object.  The logging call is wrapped in `ignore-errors'
+so that a problem while logging -- as opposed to the original failure
+being logged -- can never itself stop the remaining hook members from
+running."
   (run-hook-wrapped
    'orgacle-page-hook
    (lambda (fn)
@@ -597,7 +648,8 @@ since that would print its whole byte-code object."
            (error
             (message "Orgacle: %s failed: %s"
                      (if (symbolp fn) fn "anonymous function")
-                     (error-message-string err))))))
+                     (error-message-string err))
+            (ignore-errors (orgacle--log-page-hook-failure fn err))))))
      nil)))
 
 (provide 'orgacle-core)
