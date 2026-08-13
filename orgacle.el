@@ -85,12 +85,13 @@
   "Quit the current presentation.
 Safe to call when no presentation is running, and safe to call twice:
 every step is guarded on the thing it acts on actually existing, and
-the user's Org-mode variables and display-table slot are restored in
-an `unwind-protect' cleanup so a failure earlier in this function
-still restores them.  That same cleanup discards `orgacle--session'
-unconditionally, so a failure partway through this function still
-leaves no session behind for the next `orgacle-run' to inherit stale
-state from -- for example a narrowed `org-restriction' slot."
+the user's Org-mode variables, display-table slot and `tooltip-mode'
+setting are restored in an `unwind-protect' cleanup so a failure
+earlier in this function still restores them.  That same cleanup
+discards `orgacle--session' unconditionally, so a failure partway
+through this function still leaves no session behind for the next
+`orgacle-run' to inherit stale state from -- for example a narrowed
+`org-restriction' slot."
   (interactive)
   (let ((session orgacle--session))
     (unwind-protect
@@ -116,8 +117,6 @@ state from -- for example a narrowed `org-restriction' slot."
           ;; delete all orgacle overlays
           (orgacle-clean-overlays)
           (orgacle-clean-fringe-overlays)
-          ;; restore tooltips to how the user had them
-          (tooltip-mode (if orgacle-user-tooltip-mode 1 -1))
           ;; reset mouse pointer shape and colour
           (when (boundp 'x-pointer-shape)
             (setq x-pointer-shape orgacle-user-x-pointer-shape)
@@ -305,8 +304,8 @@ the display."
     (orgacle-mode)
     (set-buffer-modified-p nil)
     (setf (orgacle--session-presentation-window orgacle--session) (selected-window))
-    ;; set/unset tooltips, saving the user's setting first
-    (setq orgacle-user-tooltip-mode tooltip-mode)
+    ;; set/unset tooltips; `orgacle-mode', called above, has already
+    ;; saved the user's prior setting via `orgacle--save-user-state'
     (tooltip-mode (if orgacle-tooltip-mode 1 -1))
     ;; create speaker notes
     (when orgacle-speaker-notes (orgacle-make-notes-buffer))

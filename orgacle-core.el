@@ -260,13 +260,31 @@ saved and restored directly with `display-table-slot' and
 `set-display-table-slot' rather than through `orgacle-saved-variables';
 see `orgacle--save-user-state', which guards it the same way.")
 
+(defvar orgacle-user-tooltip-mode nil
+  "Whether tooltips were on before the presentation started.
+Saved by `orgacle--save-user-state', under the same re-entrancy guard
+that protects `orgacle-saved-variables' and `orgacle-outline-ellipsis',
+before `orgacle-run' sets `tooltip-mode' to `orgacle-tooltip-mode' for
+the duration of the presentation; put back by `orgacle--restore-user-state',
+which only runs when a save is actually pending, so a stray
+`orgacle-quit' with nothing running leaves `tooltip-mode' alone instead
+of forcing it off.  `tooltip-mode' is a global minor mode, not a plain
+variable -- restoring it means calling the mode function again, so its
+own setup and teardown run, rather than just `setq'ing the variable
+back -- which is why it cannot join `orgacle-saved-variables' itself,
+the same way `orgacle-user-x-pointer-shape' (defined further down,
+alongside the rest of the pointer-shape state) cannot.")
+
 (defun orgacle--save-user-state ()
   "Record the user's state, once, until it is restored.
 Captures the current value of every variable in
 `orgacle-saved-variables', plus the outline-ellipsis display-table
-slot into `orgacle-outline-ellipsis' -- the latter cannot join that
-list because it is a display-table slot, not a variable, but it needs
-the same protection, so this function owns both.
+slot into `orgacle-outline-ellipsis' and whether tooltips were on into
+`orgacle-user-tooltip-mode' -- neither of the latter two can join that
+list, the first because it is a display-table slot and the second
+because `tooltip-mode' is a global minor mode rather than a plain
+variable, but both need the same protection, so this function owns all
+three.
 
 A no-op when a save is already pending: `orgacle-mode' calls this
 unconditionally on every entry, and entering it a second time with no
@@ -277,7 +295,10 @@ the *current* buffer's major mode -- must not let the second entry's
 save overwrite the user's original values with the presentation's own.
 The first save wins; `orgacle--restore-user-state' is what clears
 `orgacle--saved-state' back to nil, making the guard live again for the
-next genuine entry.
+next genuine entry.  Since `orgacle-run' toggles `tooltip-mode' to
+`orgacle-tooltip-mode' only after calling `orgacle-mode', capturing
+`tooltip-mode' here, under the same guard, always sees the user's true
+prior setting rather than a presentation's own.
 
 `standard-display-table' is nil until something creates it, which the
 autoloaded `disp-table.el' normally does as a side effect of its own
@@ -291,12 +312,23 @@ yet, so this vivifies it directly first, using the same idiom
     (unless (char-table-p standard-display-table)
       (setq standard-display-table (make-display-table)))
     (setq orgacle-outline-ellipsis
-          (display-table-slot standard-display-table 'selective-display))))
+          (display-table-slot standard-display-table 'selective-display))
+    (setq orgacle-user-tooltip-mode tooltip-mode)))
 
 (defun orgacle--restore-user-state ()
-  "Put every variable saved by `orgacle--save-user-state' back.
-Does nothing when nothing has been saved, so it is safe to call even
-when no presentation is running."
+  "Put back everything saved by `orgacle--save-user-state'.
+Restores every variable in `orgacle-saved-variables' and, when a save
+is actually pending -- guarding on `orgacle--saved-state' the same way
+`orgacle--save-user-state' does, so this stays a no-op when nothing has
+been saved and is safe to call even when no presentation is running,
+including twice in a row -- also puts `tooltip-mode' back by calling
+the mode function again, since restoring a global minor mode correctly
+means running its own setup or teardown, not just `setq'ing the
+variable.  Without that guard, calling this with nothing saved would
+unconditionally turn tooltips off, because `orgacle-user-tooltip-mode'
+defaults to nil."
+  (when orgacle--saved-state
+    (tooltip-mode (if orgacle-user-tooltip-mode 1 -1)))
   (dolist (entry orgacle--saved-state)
     (set (car entry) (cdr entry)))
   (setq orgacle--saved-state nil))
@@ -312,16 +344,6 @@ stays a variable of its own instead of being computed on every read.
 `orgacle--goto-slide' is the only place that sets it.")
 (defvar orgacle-user-x-pointer-shape nil)
 (defvar orgacle-user-x-sensitive-text-pointer-shape nil)
-
-(defvar orgacle-user-tooltip-mode nil
-  "Whether tooltips were on before the presentation started.
-Saved by `orgacle-run', which then sets `tooltip-mode' to
-`orgacle-tooltip-mode' for the duration of the presentation, and put
-back by `orgacle-quit'.  `tooltip-mode' is a global minor mode, not a
-plain variable -- restoring it means calling the mode function again,
-so its own setup and teardown run, rather than just `setq'ing the
-variable back -- which is why it cannot join `orgacle-saved-variables',
-the same way `orgacle-user-x-pointer-shape' above cannot.")
 
 (defvar orgacle-mouse-visible t
   "Whether the mouse pointer is currently visible.

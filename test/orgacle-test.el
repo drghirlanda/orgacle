@@ -1103,5 +1103,42 @@ stubbed out, matching
             (should tooltip-mode))
         (tooltip-mode (if original 1 -1))))))
 
+(ert-deftest orgacle-test-quit-with-no-session-does-not-touch-tooltip-mode ()
+  "Quitting with nothing running leaves `tooltip-mode' exactly as it was.
+`orgacle--restore-user-state' guards its `tooltip-mode' restore on
+`orgacle--saved-state' actually holding something, the same way it
+already guards restoring the tracked variables and the
+outline-ellipsis display-table slot.  Without that guard, calling
+`orgacle-quit' with no presentation ever having started -- so
+`orgacle--save-user-state' never ran and never captured the user's
+real setting -- would unconditionally turn tooltips off, since
+`orgacle-user-tooltip-mode' defaults to nil; this is the P2
+\"quit is idempotent\" guarantee restated as \"no effect\", not merely
+\"no signal\", for this one extra piece of state.
+
+Both `orgacle-user-tooltip-mode' and `orgacle--saved-state' are
+dynamically let-bound to their true \"nothing saved yet\" defaults
+here, rather than trusted to already be that way: an earlier test in
+the same batch run that legitimately saved and restored tooltip state
+leaves `orgacle-user-tooltip-mode' holding its last real value, not
+nil, since nothing ever resets it between tests -- and with the guard
+missing, that leftover value can accidentally make the unconditional
+restore land on the right answer anyway, hiding the exact regression
+this test exists to catch.  Caught by running this test alone against
+the unfixed code (RED) versus running the whole suite against it
+(spuriously green, because of that leftover value) while developing
+it; binding both variables here makes the test's result independent of
+what ran before it."
+  (let ((original tooltip-mode)
+        (orgacle-user-tooltip-mode nil)
+        (orgacle--saved-state nil))
+    (unwind-protect
+        (progn
+          (tooltip-mode 1)
+          (orgacle-quit)
+          (orgacle-quit)
+          (should tooltip-mode))
+      (tooltip-mode (if original 1 -1)))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
