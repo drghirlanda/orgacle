@@ -177,8 +177,8 @@ zero, so no sequence of calls can produce a non-positive height, which
 ;; `orgacle--build-notes-buffer' is defined in orgacle-notes.el, a
 ;; sibling module loaded after this one -- see the Makefile's EL list
 ;; and orgacle.el's `require' order.  `orgacle-refresh' below needs it
-;; to keep a live notes buffer in step with a rebuilt
-;; `orgacle--slides', but `require'-ing orgacle-notes here would load
+;; to keep a live notes buffer in step with a rebuilt slides slot, but
+;; `require'-ing orgacle-notes here would load
 ;; it, and run its own `add-hook' call, before this file's own
 ;; `add-hook' call a little further down runs -- putting notes ahead
 ;; of slide-in and indicators in `orgacle-page-hook' instead of after
@@ -195,14 +195,14 @@ zero, so no sequence of calls can produce a non-positive height, which
 Bound to r, g, and to the key that exits `orgacle-edit-text', and
 added to `org-babel-after-execute-hook' -- all points where the
 presenter may just have edited the outline, which can move, add,
-remove or hide a slide out from under `orgacle--slides' as it stood
-when the presentation started (or since the last refresh).  Without
-rebuilding here, a stale vector entry can go on pointing at a heading
-that no longer qualifies as a slide -- for example one just given an
-ORGACLE_HIDE property, or one whose marker collapsed onto a different
-heading because the slide it used to identify was deleted -- so later
-navigation would display it anyway, with no error to say so.
-Re-derives `orgacle--slide-index' from point via
+remove or hide a slide out from under the session's slides slot as it
+stood when the presentation started (or since the last refresh).
+Without rebuilding here, a stale vector entry can go on pointing at a
+heading that no longer qualifies as a slide -- for example one just
+given an ORGACLE_HIDE property, or one whose marker collapsed onto a
+different heading because the slide it used to identify was deleted --
+so later navigation would display it anyway, with no error to say so.
+Re-derives the session's index slot from point via
 `orgacle--slide-index-at-point' rather than leaving it at its
 pre-refresh value, so the presenter stays on the slide they were
 actually looking at even when the edit changed how many slides come
@@ -210,20 +210,21 @@ before it; `orgacle--sync-page-number' keeps `orgacle-page-number' in
 step with that, including the empty-deck case.
 
 Also rebuilds a live notes buffer via `orgacle--build-notes-buffer'.
-Without that, `orgacle--notes-markers' would go on pointing at the
-deck as it stood when the notes buffer was last built: inserting a
+Without that, the session's notes-markers slot would go on pointing at
+the deck as it stood when the notes buffer was last built: inserting a
 slide before the current one and refreshing would then leave the
-re-derived `orgacle--slide-index' indexing the *old*, now-misaligned
-marker vector, so the next navigation would show the wrong slide's
-notes -- silently, since the guard in `orgacle-position-notes' only
-catches an index that runs past the end of the vector, not one that
-is merely pointing at a different slide within it."
+re-derived index slot indexing the *old*, now-misaligned marker
+vector, so the next navigation would show the wrong slide's notes --
+silently, since the guard in `orgacle-position-notes' only catches an
+index that runs past the end of the vector, not one that is merely
+pointing at a different slide within it."
   (interactive)
-  (setq orgacle--slides (orgacle--build-slides))
-  (setq orgacle--slide-index (orgacle--slide-index-at-point))
+  (let ((session (orgacle--session-ensure)))
+    (setf (orgacle--session-slides session) (orgacle--build-slides))
+    (setf (orgacle--session-index session) (orgacle--slide-index-at-point))
+    (when (buffer-live-p (orgacle--session-notes-buffer session))
+      (orgacle--build-notes-buffer)))
   (orgacle--sync-page-number)
-  (when (buffer-live-p orgacle-notes-buffer)
-    (orgacle--build-notes-buffer))
   (orgacle-clean-overlays (point-min) (point-max))
   (orgacle-fontify))
 

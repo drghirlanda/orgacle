@@ -25,8 +25,8 @@
 ;; P3 Task 2 re-examined this rather than carrying it forward
 ;; unexamined: the mutual recursion between `orgacle-current-page' and
 ;; the page-movement commands is gone now that navigation is index
-;; arithmetic over `orgacle--slides', but that recursion was never
-;; what motivated this declaration.  The sequencing constraint above
+;; arithmetic over the session's slides slot, but that recursion was
+;; never what motivated this declaration.  The sequencing constraint above
 ;; -- src-block visibility has to be set inside the same conditional
 ;; that decides whether this heading is a real slide, strictly before
 ;; `orgacle--run-page-hook' -- is untouched by the rewrite, so the
@@ -42,42 +42,45 @@
       (org-up-heading-all (- level orgacle-frame-level)))))
 
 (defun orgacle--start-slides ()
-  "Build `orgacle--slides' and reset navigation to the first slide.
-Sets `orgacle--slides' from `orgacle--build-slides', `orgacle--slide-index'
-to 0, and `orgacle-page-number' to match via `orgacle--sync-page-number'
--- the index alone is not enough, or a second presentation started in
-the same Emacs session would open still showing the previous
+  "Build the session's slides slot and reset navigation to the first slide.
+Sets the slides slot from `orgacle--build-slides', the index slot to 0,
+and `orgacle-page-number' to match via `orgacle--sync-page-number' --
+the index alone is not enough, or a second presentation started in the
+same Emacs session would open still showing the previous
 presentation's page number until the first navigation command ran.
 Called once per presentation -- by `orgacle-run', and directly by
 tests that exercise navigation without starting a full presentation --
 after which `orgacle-top', `orgacle-next-page', `orgacle-previous-page'
 and `orgacle-jump-to-page' are index arithmetic over the vector it
 builds."
-  (setq orgacle--slides (orgacle--build-slides))
-  (setq orgacle--slide-index 0)
+  (let ((session (orgacle--session-ensure)))
+    (setf (orgacle--session-slides session) (orgacle--build-slides))
+    (setf (orgacle--session-index session) 0))
   (orgacle--sync-page-number))
 
 (defun orgacle--goto-slide (index)
-  "Move to slide INDEX of `orgacle--slides' and present it.
+  "Move to slide INDEX of the session's slides slot and present it.
 INDEX is clamped to the deck here -- below 0 goes to the first slide,
 at or past the last valid index goes to the last slide -- which is why
 `orgacle-next-page', `orgacle-previous-page' and `orgacle-jump-to-page'
 below can pass plain arithmetic and leave clamping to this, their one
-shared entry point, rather than each repeating it.  Sets
-`orgacle--slide-index' to the clamped value and `orgacle-page-number'
-to match via `orgacle--sync-page-number', widens the buffer, moves
-point to the slide's marker, and calls `orgacle-current-page' exactly
-once.  That single call is what makes jumping any number of slides
-cost one redisplay instead of one per slide skipped over.  Does
-nothing when `orgacle--slides' is empty, which an Org buffer with no
-headings at all produces; there is then no slide to move to."
-  (when (> (length orgacle--slides) 0)
-    (setq orgacle--slide-index
-          (max 0 (min (1- (length orgacle--slides)) index)))
-    (orgacle--sync-page-number)
-    (widen)
-    (goto-char (aref orgacle--slides orgacle--slide-index))
-    (orgacle-current-page)))
+shared entry point, rather than each repeating it.  Sets the session's
+index slot to the clamped value and `orgacle-page-number' to match via
+`orgacle--sync-page-number', widens the buffer, moves point to the
+slide's marker, and calls `orgacle-current-page' exactly once.  That
+single call is what makes jumping any number of slides cost one
+redisplay instead of one per slide skipped over.  Does nothing when
+the slides slot is empty, which an Org buffer with no headings at all
+produces; there is then no slide to move to."
+  (let* ((session (orgacle--session-ensure))
+         (slides (orgacle--session-slides session)))
+    (when (> (length slides) 0)
+      (setf (orgacle--session-index session)
+            (max 0 (min (1- (length slides)) index)))
+      (orgacle--sync-page-number)
+      (widen)
+      (goto-char (aref slides (orgacle--session-index session)))
+      (orgacle-current-page))))
 
 (defun orgacle-jump-to-page (num)
   "Jump directly to page NUM of the presentation.
@@ -89,9 +92,10 @@ the first slide, above the last slide goes to the last one."
 (defun orgacle-current-page ()
   "Present the current outline heading as a slide."
   (interactive)
-  (when orgacle-aux-window
-    (delete-window orgacle-aux-window)
-    (setq orgacle-aux-window nil))
+  (let ((session (orgacle--session-ensure)))
+    (when (orgacle--session-aux-window session)
+      (delete-window (orgacle--session-aux-window session))
+      (setf (orgacle--session-aux-window session) nil)))
   (if (org-current-level)
       (progn
 	(org-narrow-to-subtree)
@@ -114,9 +118,10 @@ the first slide, above the last slide goes to the last one."
   "Present the first slide."
   (interactive)
   ;; rewind notes buffer if present
-  (if orgacle-notes-buffer
-      (with-current-buffer orgacle-notes-buffer
-	(goto-char (point-min))))
+  (let ((notes-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))))
+    (if notes-buffer
+        (with-current-buffer notes-buffer
+          (goto-char (point-min)))))
   (orgacle--goto-slide 0))
 
 (defun orgacle-next-page ()
@@ -124,14 +129,14 @@ the first slide, above the last slide goes to the last one."
 Past the last slide, nothing moves and the last slide stays on
 display; `orgacle--goto-slide' is what clamps that."
   (interactive)
-  (orgacle--goto-slide (1+ orgacle--slide-index)))
+  (orgacle--goto-slide (1+ (orgacle--session-index (orgacle--session-ensure)))))
 
 (defun orgacle-previous-page ()
   "Present the previous slide.
 Before the first slide, nothing moves and the first slide stays on
 display; `orgacle--goto-slide' is what clamps that."
   (interactive)
-  (orgacle--goto-slide (1- orgacle--slide-index)))
+  (orgacle--goto-slide (1- (orgacle--session-index (orgacle--session-ensure)))))
 
 (defun orgacle-next-subheading ()
   "Advance to next subheading, unhiding it if hidden."

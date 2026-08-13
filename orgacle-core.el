@@ -203,17 +203,39 @@ Supported players are \"mplayer\" and \"vlc\"."
   :type 'string
   :group 'orgacle)
 
-(defvar orgacle--frame nil
-  "Frame for Orgacle.")
+(cl-defstruct (orgacle--session (:constructor orgacle--session-create))
+  "The state one running presentation keeps.
+Slots replace what used to be individually loose `defvar' forms: the
+presentation frame, the original Org buffer and its restriction, the
+temporary file used for a narrowed presentation, the slide vector and
+the index into it, the speaker-notes buffer and its marker vector, and
+the auxiliary and presentation windows.  `orgacle--session-ensure' is
+almost always the right way to reach a slot; see its docstring for
+why."
+  frame org-buffer org-restriction org-file
+  slides index notes-buffer notes-markers
+  aux-window presentation-window)
 
-(defvar orgacle--org-buffer nil
-  "Original Org-mode buffer.")
+(defvar orgacle--session nil
+  "The running presentation, or nil when none is running.
+An `orgacle--session' struct once a presentation exists; nil before
+the first `orgacle-run' and again after every `orgacle-quit'.
+`orgacle-run' replaces this with a fresh session on every call rather
+than mutating whatever is already here, so a presentation whose frame
+was killed without going through `orgacle-quit' cannot leave stale
+state -- for example a narrowed `org-restriction' slot -- for the next
+presentation to inherit.")
 
-(defvar orgacle--org-restriction nil
-  "Original restriction in Org-mode buffer.")
-
-(defvar orgacle--org-file nil
-  "Temporary Org-mode file used when a narrowed region.")
+(defun orgacle--session-ensure ()
+  "Return `orgacle--session', creating one first when it is nil.
+Several functions that read or write session state -- slide
+navigation, notes positioning, building the notes buffer, and more --
+are also called directly by the test suite and can run before
+`orgacle-run' has started a presentation.  Auto-vivifying here, rather
+than guarding every read and write site against a nil session, is what
+lets those call sites look like an ordinary accessor call regardless of
+whether a presentation is actually running."
+  (or orgacle--session (setq orgacle--session (orgacle--session-create))))
 
 (defconst orgacle-saved-variables
   '(org-src-fontify-natively
@@ -284,26 +306,10 @@ when no presentation is running."
 (defvar orgacle-aux-fringe-overlay nil)
 (defvar orgacle-page-number 0
   "Number of the slide currently on display, counting from 1.
-Always kept equal to `orgacle--slide-index' plus one; the mode line
-reads this variable, and a user may too, which is why it stays a
-variable of its own instead of being computed on every read.
+Always kept equal to the running session's index slot plus one; the
+mode line reads this variable, and a user may too, which is why it
+stays a variable of its own instead of being computed on every read.
 `orgacle--goto-slide' is the only place that sets it.")
-(defvar orgacle--slides nil
-  "Vector of markers built by `orgacle--build-slides', one per slide.
-Set once per presentation by `orgacle--start-slides'; navigation is
-then index arithmetic over this vector.")
-(defvar orgacle--slide-index 0
-  "Index into `orgacle--slides' of the slide currently on display.
-Zero-based; `orgacle-page-number' is always this plus one.")
-(defvar orgacle--notes-markers nil
-  "Vector of markers into `orgacle-notes-buffer', one per slide.
-Built by `orgacle--build-notes-buffer' in the same order as
-`orgacle--slides', so `orgacle-position-notes' can jump to a slide's
-notes by `orgacle--slide-index' instead of searching for its heading
-text.  Nil when there is no notes buffer, and possibly shorter than
-`orgacle--slides' after `orgacle-refresh' rebuilds the latter without
-rebuilding the notes buffer; `orgacle-position-notes' guards both
-cases.")
 (defvar orgacle-user-x-pointer-shape nil)
 (defvar orgacle-user-x-sensitive-text-pointer-shape nil)
 
@@ -316,19 +322,11 @@ state.")
 
 (defvar orgacle-frame-level 1)
 
-(defvar orgacle-notes-buffer nil)
-
 (defvar orgacle-src-block-toggle-state nil)
 
 (defvar orgacle-show-filename nil
   "Filename shown in the auxiliary window.
 See `orgacle-show-file'.")
-
-(defvar orgacle-aux-window nil
-  "Auxiliary window for showing files.  See `orgacle-show-file'.")
-
-(defvar orgacle-presentation-window nil
-  "The Orgacle presentation window.")
 
 (defvar orgacle-show-buffer nil)
 
@@ -397,61 +395,67 @@ text and keeps pointing at it."
     (vconcat (nreverse slides))))
 
 (defun orgacle--slide-index-at-point (&optional pos)
-  "Return the index into `orgacle--slides' of the slide at or before POS.
-POS defaults to point.  Used to re-derive `orgacle--slide-index' after
-an edit may have changed which headings are slides -- adding or
+  "Return the index into the session's slides slot of the slide at or before POS.
+POS defaults to point.  Used to re-derive the session's index slot
+after an edit may have changed which headings are slides -- adding or
 removing a heading, or changing whether an existing one qualifies as
 `orgacle--slide-p' -- so that navigation reflects where point actually
 is rather than a position recorded before the edit.  Returns 0 when
-POS precedes every slide, or when `orgacle--slides' is empty (in the
+POS precedes every slide, or when the slides slot is empty (in the
 latter case the return value is meaningless; callers must check
 emptiness separately, the same way `orgacle--goto-slide' does)."
-  (let ((pos (or pos (point))) (index 0))
-    (dotimes (i (length orgacle--slides))
-      (when (<= (aref orgacle--slides i) pos)
+  (let ((pos (or pos (point))) (index 0)
+        (slides (orgacle--session-slides (orgacle--session-ensure))))
+    (dotimes (i (length slides))
+      (when (<= (aref slides i) pos)
         (setq index i)))
     index))
 
 (defun orgacle--sync-page-number ()
-  "Set `orgacle-page-number' from `orgacle--slide-index'.
-Zero when `orgacle--slides' is empty, since there is then no page to
-number; the index plus one otherwise.  This is the only place that
-computes `orgacle-page-number', so every caller that changes
-`orgacle--slide-index' -- or rebuilds `orgacle--slides' out from under
-it, as `orgacle-refresh' does -- gets a consistent page number without
-having to remember the empty-deck special case itself."
-  (setq orgacle-page-number
-        (if (> (length orgacle--slides) 0) (1+ orgacle--slide-index) 0)))
+  "Set `orgacle-page-number' from the running session's index slot.
+Zero when the session's slides slot is empty, since there is then no
+page to number; the index plus one otherwise.  This is the only place
+that computes `orgacle-page-number', so every caller that changes the
+index slot -- or rebuilds the slides slot out from under it, as
+`orgacle-refresh' does -- gets a consistent page number without having
+to remember the empty-deck special case itself."
+  (let ((session (orgacle--session-ensure)))
+    (setq orgacle-page-number
+          (if (> (length (orgacle--session-slides session)) 0)
+              (1+ (orgacle--session-index session))
+            0))))
 
 (defun orgacle--get-frame ()
   "Create and set up the Orgacle frame."
-  (unless (frame-live-p orgacle--frame)
-    (setq orgacle--frame (make-frame '((minibuffer . nil)
-                                        (title . "Orgacle")
-                                        (fullscreen . fullboth)
-                                        (menu-bar-lines . 0)
-                                        (tool-bar-lines . 0)
-                                        (vertical-scroll-bars . nil)
-                                        (left-fringe . 0)
-					(right-fringe . 40)
-					(right-divider-width . 0)
-                                        (cursor-type . nil)
-					(internal-border-width . 75)))))
-  (raise-frame orgacle--frame)
-  (select-frame-set-input-focus orgacle--frame)
-  ;; set fringe background to same as frame background
-  (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters))))
-  ;; set mouse pointer shape, saving the user's setting first
-  (when (boundp 'x-pointer-shape)
-    (setq orgacle-user-x-pointer-shape x-pointer-shape)
-    (setq orgacle-user-x-sensitive-text-pointer-shape
-          x-sensitive-text-pointer-shape)
-    (setq x-pointer-shape orgacle-x-pointer-shape)
-    (setq x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
-    (setq void-text-area-pointer 'text)
-    ;; setting the mouse colour to its current value applies the shapes
-    (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
-  orgacle--frame)
+  (let ((session (orgacle--session-ensure)))
+    (unless (frame-live-p (orgacle--session-frame session))
+      (setf (orgacle--session-frame session)
+            (make-frame '((minibuffer . nil)
+                          (title . "Orgacle")
+                          (fullscreen . fullboth)
+                          (menu-bar-lines . 0)
+                          (tool-bar-lines . 0)
+                          (vertical-scroll-bars . nil)
+                          (left-fringe . 0)
+                          (right-fringe . 40)
+                          (right-divider-width . 0)
+                          (cursor-type . nil)
+                          (internal-border-width . 75)))))
+    (raise-frame (orgacle--session-frame session))
+    (select-frame-set-input-focus (orgacle--session-frame session))
+    ;; set fringe background to same as frame background
+    (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters))))
+    ;; set mouse pointer shape, saving the user's setting first
+    (when (boundp 'x-pointer-shape)
+      (setq orgacle-user-x-pointer-shape x-pointer-shape)
+      (setq orgacle-user-x-sensitive-text-pointer-shape
+            x-sensitive-text-pointer-shape)
+      (setq x-pointer-shape orgacle-x-pointer-shape)
+      (setq x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
+      (setq void-text-area-pointer 'text)
+      ;; setting the mouse colour to its current value applies the shapes
+      (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
+    (orgacle--session-frame session)))
 
 (defun orgacle-toggle-mouse ()
   "Show or hide the mouse pointer.

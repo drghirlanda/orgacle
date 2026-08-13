@@ -156,8 +156,8 @@ version of the code."
 (ert-deftest orgacle-test-collect-notes-emits-the-last-heading-once ()
   "The final heading is emitted exactly once, not twice.
 
-`orgacle--collect-notes' now walks the fixed-length `orgacle--slides'
-vector instead of a heading-by-heading loop that tested \(< (point)
+`orgacle--collect-notes' now walks the fixed-length slides slot
+instead of a heading-by-heading loop that tested \(< (point)
 \(point-max)) before advancing and so ran its body once more on the
 last heading.  This test replaces
 `orgacle-test-collect-notes-repeats-the-last-heading', which pinned
@@ -173,41 +173,53 @@ is correct here."
 ;;; Notes by index
 
 (defmacro orgacle-test-with-notes-buffer (&rest body)
-  "Run BODY with a scratch `orgacle-notes-buffer' shown in the selected window.
-Requires `orgacle--slides' to already be built.  Builds
-`orgacle-notes-buffer' and `orgacle--notes-markers' fresh with
-`orgacle--build-notes-buffer', dynamically lets both variables so
-their previous values come back when BODY exits, and restores the
-window configuration and kills the scratch buffer afterwards -- all
-regardless of how BODY exits -- so a notes test cannot leak a live
-buffer or a repointed window into whatever test happens to run next in
-the same batch process.  `orgacle-refresh', called from within BODY,
-may replace `orgacle-notes-buffer' with a new buffer object; since
-both variables are plain dynamic bindings, the replacement is what
-gets cleaned up here, not the original."
+  "Run BODY with a scratch notes buffer shown in the selected window.
+Requires the session's slides to already be built (`orgacle--start-slides'
+having run).  Builds a fresh notes buffer and marker vector with
+`orgacle--build-notes-buffer' into the current session's notes-buffer
+and notes-markers slots, saving whatever was there before and
+restoring it -- along with the window configuration, and killing the
+scratch buffer -- afterwards, regardless of how BODY exits, so a notes
+test cannot leak a live buffer or a repointed window into whatever
+test happens to run next in the same batch process.  The slots are
+restored by value rather than by dynamically let-binding a variable,
+because they are now slots of the single, session-wide
+`orgacle--session' struct rather than variables of their own; this is
+also why `orgacle-refresh', called from within BODY and free to replace
+the notes-buffer slot with a new buffer object, still gets that
+replacement cleaned up here, not the original."
   (declare (indent 0) (debug (body)))
-  `(let (orgacle-notes-buffer orgacle--notes-markers)
+  `(let* ((session (orgacle--session-ensure))
+          (orgacle-test--saved-notes-buffer (orgacle--session-notes-buffer session))
+          (orgacle-test--saved-notes-markers (orgacle--session-notes-markers session)))
+     (setf (orgacle--session-notes-buffer session) nil)
+     (setf (orgacle--session-notes-markers session) nil)
      (orgacle--build-notes-buffer)
      (unwind-protect
          (save-window-excursion
-           (set-window-buffer (selected-window) orgacle-notes-buffer)
+           (set-window-buffer (selected-window)
+                               (orgacle--session-notes-buffer session))
            ,@body)
-       (when (buffer-live-p orgacle-notes-buffer)
-         (kill-buffer orgacle-notes-buffer)))))
+       (when (buffer-live-p (orgacle--session-notes-buffer session))
+         (kill-buffer (orgacle--session-notes-buffer session)))
+       (setf (orgacle--session-notes-buffer session)
+             orgacle-test--saved-notes-buffer)
+       (setf (orgacle--session-notes-markers session)
+             orgacle-test--saved-notes-markers))))
 
 (ert-deftest orgacle-test-position-notes-disambiguates-same-titled-slides ()
   "Two slides with the same title each keep their own notes block.
 
 A text search for \"Results\" would always land on the first slide's
-notes; `orgacle-position-notes' instead jumps by
-`orgacle--slide-index', so the second \"Results\" slide's notes are
-the second block, not the first."
+notes; `orgacle-position-notes' instead jumps by the session's index
+slot, so the second \"Results\" slide's notes are the second block,
+not the first."
   (orgacle-test-with-fixture "notes-duplicate-titles.org"
     (orgacle--start-slides)
     (orgacle-test-with-notes-buffer
-      (setq orgacle--slide-index 1)
+      (setf (orgacle--session-index (orgacle--session-ensure)) 1)
       (orgacle-position-notes)
-      (with-current-buffer orgacle-notes-buffer
+      (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
         (should (string-match-p "Second results block" (buffer-string)))
         (should-not (string-match-p "First results block" (buffer-string)))))))
 
@@ -216,31 +228,32 @@ the second block, not the first."
   (orgacle-test-with-fixture "notes-duplicate-titles.org"
     (orgacle--start-slides)
     (orgacle-test-with-notes-buffer
-      (setq orgacle--slide-index 0)
+      (setf (orgacle--session-index (orgacle--session-ensure)) 0)
       (orgacle-position-notes)
-      (with-current-buffer orgacle-notes-buffer
+      (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
         (should (string-match-p "First results block" (buffer-string)))
         (should-not (string-match-p "Second results block" (buffer-string)))))))
 
 (ert-deftest orgacle-test-position-notes-without-a-notes-buffer-does-not-signal ()
-  "With `orgacle-notes-buffer' nil, positioning is a no-op, not an error."
+  "With no notes buffer, positioning is a no-op, not an error."
   (orgacle-test-with-fixture "plain.org"
     (orgacle--start-slides)
-    (let ((orgacle-notes-buffer nil)
-          (orgacle--notes-markers nil))
-      (should (progn (orgacle-position-notes) t)))))
+    (let ((session (orgacle--session-ensure)))
+      (setf (orgacle--session-notes-buffer session) nil)
+      (setf (orgacle--session-notes-markers session) nil))
+    (should (progn (orgacle-position-notes) t))))
 
 (ert-deftest orgacle-test-position-notes-with-no-speaker-notes-does-not-signal ()
   "A deck with no Speaker notes subtrees anywhere still navigates."
   (orgacle-test-with-fixture "plain.org"
     (orgacle--start-slides)
     (orgacle-test-with-notes-buffer
-      (dotimes (i (length orgacle--slides))
-        (setq orgacle--slide-index i)
+      (dotimes (i (length (orgacle--session-slides (orgacle--session-ensure))))
+        (setf (orgacle--session-index (orgacle--session-ensure)) i)
         (should (progn (orgacle-position-notes) t))))))
 
 (ert-deftest orgacle-test-position-notes-stale-index-does-not-signal ()
-  "An index past the end of `orgacle--notes-markers' does not signal.
+  "An index past the end of the notes-markers slot does not signal.
 
 `orgacle-refresh' now keeps a live notes buffer from going stale this
 way in the first place (see
@@ -250,15 +263,16 @@ other way the two vectors could end up out of step."
   (orgacle-test-with-fixture "notes-duplicate-titles.org"
     (orgacle--start-slides)
     (orgacle-test-with-notes-buffer
-      (setq orgacle--slide-index (length orgacle--notes-markers))
+      (setf (orgacle--session-index (orgacle--session-ensure))
+            (length (orgacle--session-notes-markers (orgacle--session-ensure))))
       (should (progn (orgacle-position-notes) t)))))
 
 (ert-deftest orgacle-test-notes-markers-count-matches-slides-despite-body-content ()
   "Marker count always equals slide count, by construction, not inference.
 
-`orgacle--notes-markers' used to be built by re-scanning the finished
+The notes-markers slot used to be built by re-scanning the finished
 notes buffer for lines that look like a level-1 heading, trusting the
-count and order to match `orgacle--slides'.  It is now recorded at the
+count and order to match the slides slot.  It is now recorded at the
 moment each slide's segment is inserted, so the two sequences share a
 construction step instead of being linked by an inference.
 
@@ -266,33 +280,35 @@ This fixture's first slide has, inside an example block in its own
 Speaker notes, a line that reads like a heading.  Org's outline
 scanning is line-based rather than block-aware, so that line is not
 actually exempt the way block-fenced content might be assumed to be:
-`orgacle--slides' has three entries here, not two, because the line
+the slides slot has three entries here, not two, because the line
 really is treated as its own (degenerate) slide -- confirmed by the
 first assertion below.  That is a pre-existing, more general
 limitation of line-based Org outline parsing, present before this
 task and not something its fix changes or could change.  What this
 test actually verifies is the fix's own guarantee, which holds
-regardless of that limitation: the marker count tracks whatever
-`orgacle--slides' turns out to be, exactly, with no separate scan of
-the notes buffer that could disagree with it, and the last index still
+regardless of that limitation: the marker count tracks whatever the
+slides slot turns out to be, exactly, with no separate scan of the
+notes buffer that could disagree with it, and the last index still
 resolves to the last slide's own content, not a neighbour's."
   (orgacle-test-with-fixture "notes-example-block.org"
     (orgacle--start-slides)
-    (should (= 3 (length orgacle--slides)))
+    (should (= 3 (length (orgacle--session-slides (orgacle--session-ensure)))))
     (orgacle-test-with-notes-buffer
-      (should (= (length orgacle--slides) (length orgacle--notes-markers)))
-      (setq orgacle--slide-index (1- (length orgacle--slides)))
+      (should (= (length (orgacle--session-slides (orgacle--session-ensure)))
+                 (length (orgacle--session-notes-markers (orgacle--session-ensure)))))
+      (setf (orgacle--session-index (orgacle--session-ensure))
+            (1- (length (orgacle--session-slides (orgacle--session-ensure)))))
       (orgacle-position-notes)
-      (with-current-buffer orgacle-notes-buffer
+      (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
         (should (string-match-p "Two's real notes" (buffer-string)))
         (should-not (string-match-p "One's real notes" (buffer-string)))))))
 
 (ert-deftest orgacle-test-refresh-rebuilds-the-notes-buffer ()
   "A live notes buffer is rebuilt on refresh, not left stale.
 
-Without this, `orgacle-refresh' rebuilds `orgacle--slides' and
-re-derives `orgacle--slide-index', but `orgacle--notes-markers' keeps
-pointing at the deck as it stood when the notes buffer was last built.
+Without this, `orgacle-refresh' rebuilds the slides slot and
+re-derives the index slot, but the notes-markers slot keeps pointing
+at the deck as it stood when the notes buffer was last built.
 Inserting a slide before the current one and refreshing then leaves
 the re-derived index pointing at a different slide in the stale
 vector -- silently the wrong slide's notes, not a signal, since the
@@ -304,7 +320,7 @@ stale vector is still long enough for the guard in
       (orgacle-top)
       (orgacle-next-page)                ; "Beta", the second slide
       (should (equal "Beta" (org-entry-get nil "ITEM")))
-      (with-current-buffer orgacle-notes-buffer
+      (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
         (should (string-match-p "Beta notes" (buffer-string))))
       ;; simulate a live edit: insert a new slide right before "Beta"
       (widen)
@@ -318,9 +334,9 @@ stale vector is still long enough for the guard in
       (orgacle-refresh)
       ;; re-navigate to wherever refresh put the presenter -- this is
       ;; what re-triggers `orgacle-position-notes' via the page hook
-      (orgacle-jump-to-page (1+ orgacle--slide-index))
+      (orgacle-jump-to-page (1+ (orgacle--session-index (orgacle--session-ensure))))
       (should (equal "Beta" (org-entry-get nil "ITEM")))
-      (with-current-buffer orgacle-notes-buffer
+      (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
         (should (string-match-p "Beta notes" (buffer-string)))
         (should-not (string-match-p "Alpha notes\\|Gamma notes"
                                      (buffer-string)))))))
@@ -758,7 +774,7 @@ previous presentation's page number."
     (orgacle-jump-to-page 3)
     (should (= 3 orgacle-page-number))
     (orgacle--start-slides)
-    (should (= 0 orgacle--slide-index))
+    (should (= 0 (orgacle--session-index (orgacle--session-ensure))))
     (should (= 1 orgacle-page-number))))
 
 (ert-deftest orgacle-test-nav-empty-deck-does-not-signal ()
@@ -769,7 +785,7 @@ slide to show."
     (let ((org-mode-hook nil)) (org-mode))
     (insert "* Title page\nNothing to see.\n")
     (orgacle--start-slides)
-    (should (= 0 (length orgacle--slides)))
+    (should (= 0 (length (orgacle--session-slides (orgacle--session-ensure)))))
     (should (= 0 orgacle-page-number))
     (should (progn (orgacle-top) t))
     (should (progn (orgacle-next-page) t))
@@ -804,7 +820,7 @@ not a stale snapshot from before the edit."
     (goto-char (point-min))
     (re-search-forward "^\\* Second slide")
     (orgacle-refresh)
-    (should (= 2 (length orgacle--slides)))
+    (should (= 2 (length (orgacle--session-slides (orgacle--session-ensure)))))
     (should (= 1 orgacle-page-number))
     (should (equal "Second slide" (org-entry-get nil "ITEM")))
     ;; walk the whole, refreshed deck: no ORGACLE_HIDE heading is ever
@@ -837,16 +853,85 @@ not a stale snapshot from before the edit."
   (should (progn (orgacle-quit) t))
   (should (progn (orgacle-quit) t)))
 
+(ert-deftest orgacle-test-quit-does-not-leave-a-stale-restriction ()
+  "A restriction from a narrowed presentation does not leak into the next.
+
+Presenting an ordinary, unnarrowed buffer afterwards, with a proper
+`orgacle-quit' in between, must not leave that buffer narrowed to the
+earlier restriction's bounds.  This already passed before the session
+struct existed -- `orgacle-quit' has always reset the org-buffer and
+org-restriction state together whenever it ran to completion -- but
+stays as a regression guard now that the two are session slots
+instead; see `orgacle-test-restriction-does-not-survive-a-skipped-quit'
+for the related scenario that did not already pass."
+  (orgacle-test-with-fixture "slides.org"
+    (goto-char (point-min))
+    (re-search-forward "^\\* First slide")
+    (org-narrow-to-subtree)
+    ;; simulate the narrowing bookkeeping `orgacle-run' does, without
+    ;; creating a frame
+    (setq orgacle--session (orgacle--session-create))
+    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
+    (setf (orgacle--session-org-restriction orgacle--session)
+          (list (point-min) (point-max)))
+    (orgacle-quit))
+  (orgacle-test-with-fixture "plain.org"
+    ;; an ordinary, unnarrowed presentation of a different buffer
+    (setq orgacle--session (orgacle--session-create))
+    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
+    (orgacle-quit)
+    (should-not (buffer-narrowed-p))))
+
+(ert-deftest orgacle-test-restriction-does-not-survive-a-skipped-quit ()
+  "A stale restriction does not survive a presentation that skips `orgacle-quit'.
+
+Reproduces the sequence where a presentation's frame is killed with the
+window manager instead of pressing q -- a re-entrancy scenario this
+package already documents and partially guards against elsewhere, see
+`orgacle--save-user-state' -- leaving a narrowed org-restriction slot
+set when the next, unrelated `orgacle-run' begins.  `orgacle-run'
+replacing `orgacle--session' with a fresh struct on every call, rather
+than mutating whatever was already there, is what discards the stale
+restriction regardless of whether the earlier presentation was ever
+quit; before the session struct, this sequence signalled
+`args-out-of-range' instead of merely narrowing to the wrong bounds,
+because `orgacle--org-restriction' held raw buffer positions from an
+entirely different, smaller buffer."
+  (orgacle-test-with-fixture "slides.org"
+    (goto-char (point-min))
+    (re-search-forward "^\\* First slide")
+    (org-narrow-to-subtree)
+    ;; simulate the narrowing bookkeeping `orgacle-run' does, without
+    ;; creating a frame, and without quitting afterwards; `orgacle-mode'
+    ;; always calls `orgacle--save-user-state' first, so this does too,
+    ;; to avoid the `orgacle-quit' below restoring a display-table slot
+    ;; that was never actually captured
+    (orgacle--save-user-state)
+    (setq orgacle--session (orgacle--session-create))
+    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
+    (setf (orgacle--session-org-restriction orgacle--session)
+          (list (point-min) (point-max))))
+  (orgacle-test-with-fixture "plain.org"
+    ;; a later, unrelated, ordinary presentation of a different buffer;
+    ;; the re-entrancy guard in `orgacle--save-user-state' makes this a
+    ;; no-op, exactly as it would be for a real second `orgacle-mode'
+    ;; entry with no intervening `orgacle-quit'
+    (orgacle--save-user-state)
+    (setq orgacle--session (orgacle--session-create))
+    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
+    (orgacle-quit)
+    (should-not (buffer-narrowed-p))))
+
 (ert-deftest orgacle-test-mode-enters ()
   "Entering `orgacle-mode' on a plain buffer completes without signaling.
 
 A smoke test, not a characterization of everything the mode does: it
 exists because nothing in the suite called `orgacle-mode' at all,
 which let a byte-compile-only crash in its display-table handling
-reach users unnoticed.  Batch mode has no frame of its own, so
-`orgacle--frame' stays nil here; `set-face-attribute' with a nil frame
-argument means the selected frame, which exists even in batch, so the
-mode's frame-facing calls do not need a real one to complete.
+reach users unnoticed.  Batch mode has no frame of its own, so the
+session's frame slot stays nil here; `set-face-attribute' with a nil
+frame argument means the selected frame, which exists even in batch,
+so the mode's frame-facing calls do not need a real one to complete.
 
 Quits at the end, in an `unwind-protect': other tests rely on
 `orgacle--save-user-state' having nothing already saved when they
