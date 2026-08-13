@@ -313,6 +313,16 @@ stays a variable of its own instead of being computed on every read.
 (defvar orgacle-user-x-pointer-shape nil)
 (defvar orgacle-user-x-sensitive-text-pointer-shape nil)
 
+(defvar orgacle-user-tooltip-mode nil
+  "Whether tooltips were on before the presentation started.
+Saved by `orgacle-run', which then sets `tooltip-mode' to
+`orgacle-tooltip-mode' for the duration of the presentation, and put
+back by `orgacle-quit'.  `tooltip-mode' is a global minor mode, not a
+plain variable -- restoring it means calling the mode function again,
+so its own setup and teardown run, rather than just `setq'ing the
+variable back -- which is why it cannot join `orgacle-saved-variables',
+the same way `orgacle-user-x-pointer-shape' above cannot.")
+
 (defvar orgacle-mouse-visible t
   "Whether the mouse pointer is currently visible.
 `orgacle-toggle-mouse' reads this, but nothing in this file ever sets
@@ -443,8 +453,11 @@ to remember the empty-deck special case itself."
                           (internal-border-width . 75)))))
     (raise-frame (orgacle--session-frame session))
     (select-frame-set-input-focus (orgacle--session-frame session))
-    ;; set fringe background to same as frame background
-    (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters))))
+    ;; set fringe background to same as frame background, on this frame
+    ;; only -- omitting FRAME here would rewrite the `fringe' face for
+    ;; every frame, including ones no presentation ever touched
+    (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters)))
+                         (orgacle--session-frame session))
     ;; set mouse pointer shape, saving the user's setting first
     (when (boundp 'x-pointer-shape)
       (setq orgacle-user-x-pointer-shape x-pointer-shape)

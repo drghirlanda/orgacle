@@ -1010,5 +1010,98 @@ quitting leaves the invisible space in place instead of restoring it."
     (should (equal (display-table-slot standard-display-table 'selective-display)
                    "user-ellipsis"))))
 
+;;; Frame lookup and restored global state
+
+(ert-deftest orgacle-test-quit-deletes-the-sessions-frame ()
+  "`orgacle-quit' deletes the frame recorded in the session.
+Stubs `delete-frame' rather than really deleting the frame batch Emacs
+runs in -- there is only one, and deleting the sole frame signals an
+error (\"Attempt to delete the sole visible or iconified frame\")."
+  (let ((session (orgacle--session-ensure))
+        (deleted 'not-called))
+    (unwind-protect
+        (cl-letf (((symbol-function 'delete-frame)
+                   (lambda (&optional frame _force) (setq deleted frame))))
+          (setf (orgacle--session-frame session) (selected-frame))
+          (orgacle-quit)
+          (should (eq deleted (selected-frame))))
+      (setq orgacle--session nil))))
+
+(ert-deftest orgacle-test-quit-does-not-delete-an-unrelated-frame-titled-orgacle ()
+  "A frame the user happens to have titled \"Orgacle\" is left alone.
+`orgacle-quit' used to decide whether to delete a frame by comparing
+`(frame-parameter nil \\='title)' to the literal string \"Orgacle\" --
+any frame a user titled that way matched, regardless of whether it was
+the presentation's own frame.  Batch Emacs has only the one, real, live
+frame it starts with and cannot create a second one to stand in for
+\"the user's other frame\", so this titles *that* frame \"Orgacle\" and
+records no frame of its own in the session -- nil fails `frame-live-p'
+exactly like a session that never reached `orgacle--get-frame', or one
+whose frame was already killed by the window manager -- to prove the
+decision now comes from the session, not the selected frame's title."
+  (let ((session (orgacle--session-ensure))
+        (deleted 'not-called)
+        (orig-title (frame-parameter nil 'title)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'delete-frame)
+                   (lambda (&optional frame _force) (setq deleted frame))))
+          (set-frame-parameter nil 'title "Orgacle")
+          (setf (orgacle--session-frame session) nil)
+          (orgacle-quit)
+          (should (eq deleted 'not-called))
+          (should (frame-live-p (selected-frame))))
+      (set-frame-parameter nil 'title orig-title)
+      (setq orgacle--session nil))))
+
+(ert-deftest orgacle-test-get-frame-sets-fringe-only-on-its-own-frame ()
+  "`orgacle--get-frame' scopes the `fringe' face to its own frame.
+Calling `set-face-background' with no FRAME argument rewrites the
+global default that every frame -- past and future -- inherits, not
+just the presentation's own frame; that is the leak.  Batch Emacs
+cannot create a second frame to show that some *other* frame is left
+alone directly, so this instead seeds the session's frame slot with the
+one real, live frame batch does have, which makes `orgacle--get-frame'
+take its \"already have a live frame\" branch instead of calling
+`make-frame' (which fails in batch), and checks the *global* default
+via `(face-attribute \\='fringe :background t)' -- t as the FRAME
+argument there means \"the value new frames would inherit\", which only
+budges when `orgacle--get-frame' passes no FRAME of its own to
+`set-face-background'; a properly scoped call leaves it unspecified."
+  (let ((session (orgacle--session-ensure))
+        (orig-x-pointer-shape (and (boundp 'x-pointer-shape) x-pointer-shape))
+        (orig-x-sensitive (and (boundp 'x-sensitive-text-pointer-shape)
+                                x-sensitive-text-pointer-shape)))
+    (unwind-protect
+        (progn
+          (setf (orgacle--session-frame session) (selected-frame))
+          (orgacle--get-frame)
+          (should (eq 'unspecified (face-attribute 'fringe :background t))))
+      (set-face-attribute 'fringe (selected-frame) :background 'unspecified)
+      (setf (orgacle--session-frame session) nil)
+      (when (boundp 'x-pointer-shape)
+        (setq x-pointer-shape orig-x-pointer-shape)
+        (setq x-sensitive-text-pointer-shape orig-x-sensitive)))))
+
+(ert-deftest orgacle-test-quit-restores-tooltip-mode ()
+  "A presentation's `tooltip-mode' setting does not outlive it.
+`orgacle-run' sets `tooltip-mode' to `orgacle-tooltip-mode' for the
+duration of the presentation and used to never put it back, so a user
+who had tooltips on lost them permanently after one presentation.
+Batch Emacs cannot create a real frame, so `orgacle--get-frame' is
+stubbed out, matching
+`orgacle-test-restriction-does-not-survive-a-skipped-quit'."
+  (orgacle-test-with-fixture "plain.org"
+    (let ((original tooltip-mode))
+      (unwind-protect
+          (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                    (orgacle-speaker-notes nil)
+                    (orgacle-tooltip-mode nil))
+            (tooltip-mode 1)
+            (orgacle-run)
+            (should-not tooltip-mode)
+            (orgacle-quit)
+            (should tooltip-mode))
+        (tooltip-mode (if original 1 -1))))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

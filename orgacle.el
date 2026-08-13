@@ -99,8 +99,8 @@ state from -- for example a narrowed `org-restriction' slot."
           (org-clear-latex-preview)
           (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
           (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh)
-          (when (string= "Orgacle" (frame-parameter nil 'title))
-            (delete-frame (selected-frame)))
+          (when (and session (frame-live-p (orgacle--session-frame session)))
+            (delete-frame (orgacle--session-frame session)))
           (when (and session (orgacle--session-org-file session))
             (let ((buf (get-file-buffer (orgacle--session-org-file session))))
               (when buf (kill-buffer buf)))
@@ -116,6 +116,8 @@ state from -- for example a narrowed `org-restriction' slot."
           ;; delete all orgacle overlays
           (orgacle-clean-overlays)
           (orgacle-clean-fringe-overlays)
+          ;; restore tooltips to how the user had them
+          (tooltip-mode (if orgacle-user-tooltip-mode 1 -1))
           ;; reset mouse pointer shape and colour
           (when (boundp 'x-pointer-shape)
             (setq x-pointer-shape orgacle-user-x-pointer-shape)
@@ -303,7 +305,8 @@ the display."
     (orgacle-mode)
     (set-buffer-modified-p nil)
     (setf (orgacle--session-presentation-window orgacle--session) (selected-window))
-    ;; set/unset tooltips
+    ;; set/unset tooltips, saving the user's setting first
+    (setq orgacle-user-tooltip-mode tooltip-mode)
     (tooltip-mode (if orgacle-tooltip-mode 1 -1))
     ;; create speaker notes
     (when orgacle-speaker-notes (orgacle-make-notes-buffer))
