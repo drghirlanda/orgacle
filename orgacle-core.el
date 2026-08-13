@@ -178,12 +178,15 @@ builds, so this is nil elsewhere."
   :type 'boolean
   :group 'orgacle)
 
-(defcustom orgacle-internal-border-width 50
+(defcustom orgacle-internal-border-width 75
   "Border width, in pixels, around the presented material.
 Passed straight through to `make-frame' as the presentation frame's
 own `internal-border-width' parameter, so it takes effect once, when
 the frame is created; changing it while a presentation is already
-running has no effect on that frame."
+running has no effect on that frame.  Defaults to 75, matching the
+hardcoded value every presentation used before this variable was wired
+in, so wiring it in changes no existing user's display until they
+actually customize it."
   :type 'integer
   :group 'orgacle)
 
@@ -428,7 +431,11 @@ alternate correctly instead of the toggle only ever hiding the pointer.
 This is updated unconditionally, even on a build without X11 pointer
 support, since it records what was *requested* rather than the X
 pointer state itself; only applying that request to the actual pointer
-needs `x-pointer-shape' to be bound.")
+needs `x-pointer-shape' to be bound.  `orgacle--get-frame' also resets
+this to t every time it forces the pointer visible, which keeps a
+leftover nil from a previous, already-quit presentation's `m' press
+from disagreeing with the next presentation's actual, always-visible
+starting state.")
 
 (defvar orgacle-frame-level 1)
 
@@ -536,7 +543,13 @@ to remember the empty-deck special case itself."
             0))))
 
 (defun orgacle--get-frame ()
-  "Create and set up the Orgacle frame."
+  "Create and set up the Orgacle frame.
+Always forces the mouse pointer visible, resetting `orgacle-mouse-visible'
+to t to match: a presentation's frame starts with the pointer shown
+regardless of whatever `orgacle-toggle-mouse' left that variable at in
+a previous, already-quit presentation, and without this reset the two
+could disagree across a quit/re-run, making the next `m' press in the
+new presentation silently apply a shape the pointer already has."
   (let ((session (orgacle--session-ensure)))
     (unless (frame-live-p (orgacle--session-frame session))
       (setf (orgacle--session-frame session)
@@ -565,6 +578,11 @@ to remember the empty-deck special case itself."
       (setq x-pointer-shape orgacle-x-pointer-shape)
       (setq x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
       (setq void-text-area-pointer 'text)
+      ;; keep the "requested" bookkeeping variable in sync with the
+      ;; pointer this unconditionally forces visible, so a leftover nil
+      ;; from a previous, already-quit presentation's `m' press cannot
+      ;; make the next presentation's first `m' press a silent no-op
+      (setq orgacle-mouse-visible t)
       ;; setting the mouse colour to its current value applies the shapes
       (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
     (orgacle--session-frame session)))

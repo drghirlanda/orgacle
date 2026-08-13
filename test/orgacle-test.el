@@ -1156,6 +1156,40 @@ budges when `orgacle--get-frame' passes no FRAME of its own to
         (setq x-pointer-shape orig-x-pointer-shape)
         (setq x-sensitive-text-pointer-shape orig-x-sensitive)))))
 
+(ert-deftest orgacle-test-get-frame-resyncs-mouse-visible-across-a-quit ()
+  "`orgacle--get-frame' resets `orgacle-mouse-visible' when it forces the pointer visible.
+Reproduces the session-boundary desync a code review caught: press `m'
+in one presentation to hide the pointer, quit, start a second
+presentation -- `orgacle--get-frame' always forces the actual pointer
+visible for the new frame regardless of what the previous, already-quit
+presentation left `orgacle-mouse-visible' at, but before this fix
+nothing reset the variable to match.  With the variable still nil from
+the earlier session and the pointer now genuinely visible, the first
+`m' press in the new presentation would see `orgacle-mouse-visible' as
+nil, decide \"already hidden, so show it\" -- and apply a shape the
+pointer already has, a silent no-op; a second press would be needed
+before anything visible happened.  Simulates the leftover nil directly,
+the same way `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
+simulates \"already have a live frame\" by seeding the session's frame
+slot with the one real frame batch Emacs has, taking `orgacle--get-frame's
+\"already have a live frame\" branch instead of calling `make-frame'
+\(which fails in batch\)."
+  (let ((session (orgacle--session-ensure))
+        (orgacle-mouse-visible nil)
+        (orig-x-pointer-shape (and (boundp 'x-pointer-shape) x-pointer-shape))
+        (orig-x-sensitive (and (boundp 'x-sensitive-text-pointer-shape)
+                                x-sensitive-text-pointer-shape)))
+    (unwind-protect
+        (progn
+          (setf (orgacle--session-frame session) (selected-frame))
+          (orgacle--get-frame)
+          (should orgacle-mouse-visible))
+      (set-face-attribute 'fringe (selected-frame) :background 'unspecified)
+      (setf (orgacle--session-frame session) nil)
+      (when (boundp 'x-pointer-shape)
+        (setq x-pointer-shape orig-x-pointer-shape)
+        (setq x-sensitive-text-pointer-shape orig-x-sensitive)))))
+
 (ert-deftest orgacle-test-toggle-mouse-flips-visibility-state-both-ways ()
   "`orgacle-toggle-mouse' actually alternates, instead of only ever hiding.
 Before this fix, `orgacle-mouse-visible' was initialised to t and never
