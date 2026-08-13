@@ -133,6 +133,7 @@ version of the code."
 (ert-deftest orgacle-test-collect-notes-keeps-slide-headings ()
   "Every frame-level heading contributes a heading to the notes text."
   (orgacle-test-with-fixture "notes.org"
+    (orgacle--start-slides)
     (let ((notes (orgacle--collect-notes)))
       (should (string-match-p "^\\* First slide$" notes))
       (should (string-match-p "^\\* Second slide$" notes))
@@ -141,6 +142,7 @@ version of the code."
 (ert-deftest orgacle-test-collect-notes-keeps-note-bodies ()
   "The body of each Speaker notes subtree is carried over."
   (orgacle-test-with-fixture "notes.org"
+    (orgacle--start-slides)
     (let ((notes (orgacle--collect-notes)))
       (should (string-match-p "One two three four five\\." notes))
       (should (string-match-p "Six seven eight\\." notes)))))
@@ -148,18 +150,88 @@ version of the code."
 (ert-deftest orgacle-test-collect-notes-omits-slide-bodies ()
   "Text outside a Speaker notes subtree is not collected."
   (orgacle-test-with-fixture "notes.org"
+    (orgacle--start-slides)
     (should-not (string-match-p "Visible text" (orgacle--collect-notes)))))
 
-(ert-deftest orgacle-test-collect-notes-repeats-the-last-heading ()
-  "Current behaviour: the final heading is emitted twice.
+(ert-deftest orgacle-test-collect-notes-emits-the-last-heading-once ()
+  "The final heading is emitted exactly once, not twice.
 
-The loop tests (< (point) (point-max)) before advancing, so on the last
-heading its body runs once more with point unmoved.  P3 replaces this
-loop with the slide vector; until then the duplication is pinned here so
-that the lexical-binding conversion cannot change it unnoticed."
+`orgacle--collect-notes' now walks the fixed-length `orgacle--slides'
+vector instead of a heading-by-heading loop that tested \(< (point)
+\(point-max)) before advancing and so ran its body once more on the
+last heading.  This test replaces
+`orgacle-test-collect-notes-repeats-the-last-heading', which pinned
+that duplication in P0 specifically so this phase could remove it; see
+the P3 task 3 report for why changing a pinned characterization test
+is correct here."
   (orgacle-test-with-fixture "notes.org"
-    (should (string-match-p "\\* Third slide\n\\* Third slide"
-                            (orgacle--collect-notes)))))
+    (orgacle--start-slides)
+    (let ((notes (orgacle--collect-notes)))
+      (should (string-match-p "\\* Third slide" notes))
+      (should-not (string-match-p "\\* Third slide\n\\* Third slide" notes)))))
+
+;;; Notes by index
+
+(ert-deftest orgacle-test-position-notes-disambiguates-same-titled-slides ()
+  "Two slides with the same title each keep their own notes block.
+
+A text search for \"Results\" would always land on the first slide's
+notes; `orgacle-position-notes' instead jumps by
+`orgacle--slide-index', so the second \"Results\" slide's notes are
+the second block, not the first."
+  (orgacle-test-with-fixture "notes-duplicate-titles.org"
+    (orgacle--start-slides)
+    (orgacle--build-notes-buffer)
+    (set-window-buffer (selected-window) orgacle-notes-buffer)
+    (setq orgacle--slide-index 1)
+    (orgacle-position-notes)
+    (with-current-buffer orgacle-notes-buffer
+      (should (string-match-p "Second results block" (buffer-string)))
+      (should-not (string-match-p "First results block" (buffer-string))))))
+
+(ert-deftest orgacle-test-position-notes-first-slide ()
+  "The first slide's notes are still reachable by index."
+  (orgacle-test-with-fixture "notes-duplicate-titles.org"
+    (orgacle--start-slides)
+    (orgacle--build-notes-buffer)
+    (set-window-buffer (selected-window) orgacle-notes-buffer)
+    (setq orgacle--slide-index 0)
+    (orgacle-position-notes)
+    (with-current-buffer orgacle-notes-buffer
+      (should (string-match-p "First results block" (buffer-string)))
+      (should-not (string-match-p "Second results block" (buffer-string))))))
+
+(ert-deftest orgacle-test-position-notes-without-a-notes-buffer-does-not-signal ()
+  "With `orgacle-notes-buffer' nil, positioning is a no-op, not an error."
+  (orgacle-test-with-fixture "plain.org"
+    (orgacle--start-slides)
+    (let ((orgacle-notes-buffer nil)
+          (orgacle--notes-markers nil))
+      (should (progn (orgacle-position-notes) t)))))
+
+(ert-deftest orgacle-test-position-notes-with-no-speaker-notes-does-not-signal ()
+  "A deck with no Speaker notes subtrees anywhere still navigates."
+  (orgacle-test-with-fixture "plain.org"
+    (orgacle--start-slides)
+    (orgacle--build-notes-buffer)
+    (set-window-buffer (selected-window) orgacle-notes-buffer)
+    (dotimes (i (length orgacle--slides))
+      (setq orgacle--slide-index i)
+      (should (progn (orgacle-position-notes) t)))))
+
+(ert-deftest orgacle-test-position-notes-stale-index-does-not-signal ()
+  "An index past the end of `orgacle--notes-markers' does not signal.
+
+This is what `orgacle-refresh' can leave behind: it rebuilds
+`orgacle--slides' but not the notes buffer, so the slide vector can
+grow past the notes markers built for the deck as it stood when the
+presentation started."
+  (orgacle-test-with-fixture "notes-duplicate-titles.org"
+    (orgacle--start-slides)
+    (orgacle--build-notes-buffer)
+    (set-window-buffer (selected-window) orgacle-notes-buffer)
+    (setq orgacle--slide-index (length orgacle--notes-markers))
+    (should (progn (orgacle-position-notes) t))))
 
 ;;; Speaking time
 

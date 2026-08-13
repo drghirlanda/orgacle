@@ -295,6 +295,15 @@ then index arithmetic over this vector.")
 (defvar orgacle--slide-index 0
   "Index into `orgacle--slides' of the slide currently on display.
 Zero-based; `orgacle-page-number' is always this plus one.")
+(defvar orgacle--notes-markers nil
+  "Vector of markers into `orgacle-notes-buffer', one per slide.
+Built by `orgacle--build-notes-buffer' in the same order as
+`orgacle--slides', so `orgacle-position-notes' can jump to a slide's
+notes by `orgacle--slide-index' instead of searching for its heading
+text.  Nil when there is no notes buffer, and possibly shorter than
+`orgacle--slides' after `orgacle-refresh' rebuilds the latter without
+rebuilding the notes buffer; `orgacle-position-notes' guards both
+cases.")
 (defvar orgacle-user-x-pointer-shape nil)
 (defvar orgacle-user-x-sensitive-text-pointer-shape nil)
 

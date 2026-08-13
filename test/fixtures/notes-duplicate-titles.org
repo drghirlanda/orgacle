@@ -1,0 +1,13 @@
+#+TITLE: Notes with duplicate titles
+
+* Results
+
+** Speaker notes
+
+First results block.
+
+* Results
+
+** Speaker notes
+
+Second results block.
