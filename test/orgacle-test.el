@@ -889,38 +889,60 @@ Reproduces the sequence where a presentation's frame is killed with the
 window manager instead of pressing q -- a re-entrancy scenario this
 package already documents and partially guards against elsewhere, see
 `orgacle--save-user-state' -- leaving a narrowed org-restriction slot
-set when the next, unrelated `orgacle-run' begins.  `orgacle-run'
-replacing `orgacle--session' with a fresh struct on every call, rather
-than mutating whatever was already there, is what discards the stale
-restriction regardless of whether the earlier presentation was ever
-quit; before the session struct, this sequence signalled
+set when the next, unrelated `orgacle-run' begins.  Drives the real
+`orgacle-run' for both presentations, with `orgacle--get-frame' stubbed
+out (batch Emacs cannot create a real frame) and `orgacle-speaker-notes'
+off (its notes frame uses `switch-to-buffer-other-frame', which signals
+in batch), so this exercises `orgacle-run' replacing `orgacle--session'
+with a fresh struct on every call -- the actual fix -- rather than a
+hand-rolled stand-in for it: reverting that one line back to reusing an
+existing session turns this test red again (verified; see the P3 task 4
+report).  Before the session struct, this sequence signalled
 `args-out-of-range' instead of merely narrowing to the wrong bounds,
 because `orgacle--org-restriction' held raw buffer positions from an
-entirely different, smaller buffer."
-  (orgacle-test-with-fixture "slides.org"
-    (goto-char (point-min))
-    (re-search-forward "^\\* First slide")
-    (org-narrow-to-subtree)
-    ;; simulate the narrowing bookkeeping `orgacle-run' does, without
-    ;; creating a frame, and without quitting afterwards; `orgacle-mode'
-    ;; always calls `orgacle--save-user-state' first, so this does too,
-    ;; to avoid the `orgacle-quit' below restoring a display-table slot
-    ;; that was never actually captured
-    (orgacle--save-user-state)
-    (setq orgacle--session (orgacle--session-create))
-    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
-    (setf (orgacle--session-org-restriction orgacle--session)
-          (list (point-min) (point-max))))
-  (orgacle-test-with-fixture "plain.org"
-    ;; a later, unrelated, ordinary presentation of a different buffer;
-    ;; the re-entrancy guard in `orgacle--save-user-state' makes this a
-    ;; no-op, exactly as it would be for a real second `orgacle-mode'
-    ;; entry with no intervening `orgacle-quit'
-    (orgacle--save-user-state)
-    (setq orgacle--session (orgacle--session-create))
-    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
-    (orgacle-quit)
-    (should-not (buffer-narrowed-p))))
+entirely different, smaller buffer.
+
+The first presentation needs a real file-visiting buffer, not the
+anonymous `with-temp-buffer' `orgacle-test-with-fixture' uses: the
+narrowed-region branch of `orgacle-run' calls `org-org-export-to-org',
+which derives its output filename from `buffer-file-name' and prompts
+interactively -- hanging batch Emacs -- when there is none."
+  (let (source-file exported-file)
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (setq source-file (make-temp-file "orgacle-test-restriction" nil ".org"))
+          (copy-file (expand-file-name "slides.org" orgacle-test-fixture-directory)
+                     source-file t)
+          (find-file source-file)
+          (goto-char (point-min))
+          (re-search-forward "^\\* First slide")
+          (org-narrow-to-subtree)
+          ;; a real presentation of a narrowed subtree, whose frame is
+          ;; never quit -- simulating the window manager killing it
+          ;; instead of `orgacle-quit' being pressed
+          (orgacle-run)
+          (setq exported-file (orgacle--session-org-file orgacle--session))
+          (orgacle-test-with-fixture "plain.org"
+            ;; a later, unrelated, ordinary presentation of a different,
+            ;; unnarrowed buffer, with no `orgacle-quit' in between
+            (orgacle-run)
+            (orgacle-quit)
+            (should-not (buffer-narrowed-p))))
+      ;; both temp files and their buffers are cleaned up by
+      ;; `orgacle-quit' in the ordinary case -- deliberately never
+      ;; called for the first presentation here, so nothing else does
+      ;; that cleanup; do it by hand instead
+      (when exported-file
+        (let ((buf (get-file-buffer exported-file)))
+          (when buf (kill-buffer buf)))
+        (when (file-exists-p exported-file)
+          (delete-file exported-file)))
+      (when source-file
+        (let ((buf (find-buffer-visiting source-file)))
+          (when buf (kill-buffer buf)))
+        (when (file-exists-p source-file)
+          (delete-file source-file))))))
 
 (ert-deftest orgacle-test-mode-enters ()
   "Entering `orgacle-mode' on a plain buffer completes without signaling.
