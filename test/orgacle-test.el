@@ -172,6 +172,29 @@ is correct here."
 
 ;;; Notes by index
 
+(defmacro orgacle-test-with-notes-buffer (&rest body)
+  "Run BODY with a scratch `orgacle-notes-buffer' shown in the selected window.
+Requires `orgacle--slides' to already be built.  Builds
+`orgacle-notes-buffer' and `orgacle--notes-markers' fresh with
+`orgacle--build-notes-buffer', dynamically lets both variables so
+their previous values come back when BODY exits, and restores the
+window configuration and kills the scratch buffer afterwards -- all
+regardless of how BODY exits -- so a notes test cannot leak a live
+buffer or a repointed window into whatever test happens to run next in
+the same batch process.  `orgacle-refresh', called from within BODY,
+may replace `orgacle-notes-buffer' with a new buffer object; since
+both variables are plain dynamic bindings, the replacement is what
+gets cleaned up here, not the original."
+  (declare (indent 0) (debug (body)))
+  `(let (orgacle-notes-buffer orgacle--notes-markers)
+     (orgacle--build-notes-buffer)
+     (unwind-protect
+         (save-window-excursion
+           (set-window-buffer (selected-window) orgacle-notes-buffer)
+           ,@body)
+       (when (buffer-live-p orgacle-notes-buffer)
+         (kill-buffer orgacle-notes-buffer)))))
+
 (ert-deftest orgacle-test-position-notes-disambiguates-same-titled-slides ()
   "Two slides with the same title each keep their own notes block.
 
@@ -181,25 +204,23 @@ notes; `orgacle-position-notes' instead jumps by
 the second block, not the first."
   (orgacle-test-with-fixture "notes-duplicate-titles.org"
     (orgacle--start-slides)
-    (orgacle--build-notes-buffer)
-    (set-window-buffer (selected-window) orgacle-notes-buffer)
-    (setq orgacle--slide-index 1)
-    (orgacle-position-notes)
-    (with-current-buffer orgacle-notes-buffer
-      (should (string-match-p "Second results block" (buffer-string)))
-      (should-not (string-match-p "First results block" (buffer-string))))))
+    (orgacle-test-with-notes-buffer
+      (setq orgacle--slide-index 1)
+      (orgacle-position-notes)
+      (with-current-buffer orgacle-notes-buffer
+        (should (string-match-p "Second results block" (buffer-string)))
+        (should-not (string-match-p "First results block" (buffer-string)))))))
 
 (ert-deftest orgacle-test-position-notes-first-slide ()
   "The first slide's notes are still reachable by index."
   (orgacle-test-with-fixture "notes-duplicate-titles.org"
     (orgacle--start-slides)
-    (orgacle--build-notes-buffer)
-    (set-window-buffer (selected-window) orgacle-notes-buffer)
-    (setq orgacle--slide-index 0)
-    (orgacle-position-notes)
-    (with-current-buffer orgacle-notes-buffer
-      (should (string-match-p "First results block" (buffer-string)))
-      (should-not (string-match-p "Second results block" (buffer-string))))))
+    (orgacle-test-with-notes-buffer
+      (setq orgacle--slide-index 0)
+      (orgacle-position-notes)
+      (with-current-buffer orgacle-notes-buffer
+        (should (string-match-p "First results block" (buffer-string)))
+        (should-not (string-match-p "Second results block" (buffer-string)))))))
 
 (ert-deftest orgacle-test-position-notes-without-a-notes-buffer-does-not-signal ()
   "With `orgacle-notes-buffer' nil, positioning is a no-op, not an error."
@@ -213,25 +234,96 @@ the second block, not the first."
   "A deck with no Speaker notes subtrees anywhere still navigates."
   (orgacle-test-with-fixture "plain.org"
     (orgacle--start-slides)
-    (orgacle--build-notes-buffer)
-    (set-window-buffer (selected-window) orgacle-notes-buffer)
-    (dotimes (i (length orgacle--slides))
-      (setq orgacle--slide-index i)
-      (should (progn (orgacle-position-notes) t)))))
+    (orgacle-test-with-notes-buffer
+      (dotimes (i (length orgacle--slides))
+        (setq orgacle--slide-index i)
+        (should (progn (orgacle-position-notes) t))))))
 
 (ert-deftest orgacle-test-position-notes-stale-index-does-not-signal ()
   "An index past the end of `orgacle--notes-markers' does not signal.
 
-This is what `orgacle-refresh' can leave behind: it rebuilds
-`orgacle--slides' but not the notes buffer, so the slide vector can
-grow past the notes markers built for the deck as it stood when the
-presentation started."
+`orgacle-refresh' now keeps a live notes buffer from going stale this
+way in the first place (see
+`orgacle-test-refresh-rebuilds-the-notes-buffer'), but the guard in
+`orgacle-position-notes' stays regardless, as defense against any
+other way the two vectors could end up out of step."
   (orgacle-test-with-fixture "notes-duplicate-titles.org"
     (orgacle--start-slides)
-    (orgacle--build-notes-buffer)
-    (set-window-buffer (selected-window) orgacle-notes-buffer)
-    (setq orgacle--slide-index (length orgacle--notes-markers))
-    (should (progn (orgacle-position-notes) t))))
+    (orgacle-test-with-notes-buffer
+      (setq orgacle--slide-index (length orgacle--notes-markers))
+      (should (progn (orgacle-position-notes) t)))))
+
+(ert-deftest orgacle-test-notes-markers-count-matches-slides-despite-body-content ()
+  "Marker count always equals slide count, by construction, not inference.
+
+`orgacle--notes-markers' used to be built by re-scanning the finished
+notes buffer for lines that look like a level-1 heading, trusting the
+count and order to match `orgacle--slides'.  It is now recorded at the
+moment each slide's segment is inserted, so the two sequences share a
+construction step instead of being linked by an inference.
+
+This fixture's first slide has, inside an example block in its own
+Speaker notes, a line that reads like a heading.  Org's outline
+scanning is line-based rather than block-aware, so that line is not
+actually exempt the way block-fenced content might be assumed to be:
+`orgacle--slides' has three entries here, not two, because the line
+really is treated as its own (degenerate) slide -- confirmed by the
+first assertion below.  That is a pre-existing, more general
+limitation of line-based Org outline parsing, present before this
+task and not something its fix changes or could change.  What this
+test actually verifies is the fix's own guarantee, which holds
+regardless of that limitation: the marker count tracks whatever
+`orgacle--slides' turns out to be, exactly, with no separate scan of
+the notes buffer that could disagree with it, and the last index still
+resolves to the last slide's own content, not a neighbour's."
+  (orgacle-test-with-fixture "notes-example-block.org"
+    (orgacle--start-slides)
+    (should (= 3 (length orgacle--slides)))
+    (orgacle-test-with-notes-buffer
+      (should (= (length orgacle--slides) (length orgacle--notes-markers)))
+      (setq orgacle--slide-index (1- (length orgacle--slides)))
+      (orgacle-position-notes)
+      (with-current-buffer orgacle-notes-buffer
+        (should (string-match-p "Two's real notes" (buffer-string)))
+        (should-not (string-match-p "One's real notes" (buffer-string)))))))
+
+(ert-deftest orgacle-test-refresh-rebuilds-the-notes-buffer ()
+  "A live notes buffer is rebuilt on refresh, not left stale.
+
+Without this, `orgacle-refresh' rebuilds `orgacle--slides' and
+re-derives `orgacle--slide-index', but `orgacle--notes-markers' keeps
+pointing at the deck as it stood when the notes buffer was last built.
+Inserting a slide before the current one and refreshing then leaves
+the re-derived index pointing at a different slide in the stale
+vector -- silently the wrong slide's notes, not a signal, since the
+stale vector is still long enough for the guard in
+`orgacle-position-notes' to pass."
+  (orgacle-test-with-fixture "notes-refresh.org"
+    (orgacle--start-slides)
+    (orgacle-test-with-notes-buffer
+      (orgacle-top)
+      (orgacle-next-page)                ; "Beta", the second slide
+      (should (equal "Beta" (org-entry-get nil "ITEM")))
+      (with-current-buffer orgacle-notes-buffer
+        (should (string-match-p "Beta notes" (buffer-string))))
+      ;; simulate a live edit: insert a new slide right before "Beta"
+      (widen)
+      (goto-char (point-min))
+      (re-search-forward "^\\* Beta")
+      (org-back-to-heading)
+      (insert "* Zero\n\nInserted before Beta.\n\n")
+      ;; back to where the presenter was actually looking
+      (goto-char (point-min))
+      (re-search-forward "^\\* Beta")
+      (orgacle-refresh)
+      ;; re-navigate to wherever refresh put the presenter -- this is
+      ;; what re-triggers `orgacle-position-notes' via the page hook
+      (orgacle-jump-to-page (1+ orgacle--slide-index))
+      (should (equal "Beta" (org-entry-get nil "ITEM")))
+      (with-current-buffer orgacle-notes-buffer
+        (should (string-match-p "Beta notes" (buffer-string)))
+        (should-not (string-match-p "Alpha notes\\|Gamma notes"
+                                     (buffer-string)))))))
 
 ;;; Speaking time
 

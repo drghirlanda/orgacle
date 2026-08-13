@@ -174,6 +174,22 @@ zero, so no sequence of calls can produce a non-positive height, which
     (orgacle--link-preview-clear)
     (orgacle--link-preview-refresh)))
 
+;; `orgacle--build-notes-buffer' is defined in orgacle-notes.el, a
+;; sibling module loaded after this one -- see the Makefile's EL list
+;; and orgacle.el's `require' order.  `orgacle-refresh' below needs it
+;; to keep a live notes buffer in step with a rebuilt
+;; `orgacle--slides', but `require'-ing orgacle-notes here would load
+;; it, and run its own `add-hook' call, before this file's own
+;; `add-hook' call a little further down runs -- putting notes ahead
+;; of slide-in and indicators in `orgacle-page-hook' instead of after
+;; them; see orgacle-notes.el for that ordering.  `declare-function'
+;; only silences the byte-compiler about a call to a function it
+;; cannot see yet; orgacle.el's `require' order is what actually
+;; guarantees the function exists by the time this is called for
+;; real.  Same idiom as orgacle-nav.el's declaration of
+;; `orgacle-toggle-hide-src-blocks'.
+(declare-function orgacle--build-notes-buffer "orgacle-notes" ())
+
 (defun orgacle-refresh ()
   "Rebuild the slide vector, then delete overlays and re-fontify.
 Bound to r, g, and to the key that exits `orgacle-edit-text', and
@@ -191,11 +207,23 @@ Re-derives `orgacle--slide-index' from point via
 pre-refresh value, so the presenter stays on the slide they were
 actually looking at even when the edit changed how many slides come
 before it; `orgacle--sync-page-number' keeps `orgacle-page-number' in
-step with that, including the empty-deck case."
+step with that, including the empty-deck case.
+
+Also rebuilds a live notes buffer via `orgacle--build-notes-buffer'.
+Without that, `orgacle--notes-markers' would go on pointing at the
+deck as it stood when the notes buffer was last built: inserting a
+slide before the current one and refreshing would then leave the
+re-derived `orgacle--slide-index' indexing the *old*, now-misaligned
+marker vector, so the next navigation would show the wrong slide's
+notes -- silently, since the guard in `orgacle-position-notes' only
+catches an index that runs past the end of the vector, not one that
+is merely pointing at a different slide within it."
   (interactive)
   (setq orgacle--slides (orgacle--build-slides))
   (setq orgacle--slide-index (orgacle--slide-index-at-point))
   (orgacle--sync-page-number)
+  (when (buffer-live-p orgacle-notes-buffer)
+    (orgacle--build-notes-buffer))
   (orgacle-clean-overlays (point-min) (point-max))
   (orgacle-fontify))
 
