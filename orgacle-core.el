@@ -571,6 +571,15 @@ new presentation silently apply a shape the pointer already has."
     ;; every frame, including ones no presentation ever touched
     (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters)))
                          (orgacle--session-frame session))
+    ;; keep the "requested" bookkeeping variable in sync with the pointer
+    ;; this unconditionally forces visible below, so a leftover nil from a
+    ;; previous, already-quit presentation's `m' press cannot make the next
+    ;; presentation's first `m' press a silent no-op -- outside the
+    ;; `(boundp 'x-pointer-shape)' guard below, because `orgacle-mouse-visible'
+    ;; is a plain, always-bound variable that tracks the presenter's request
+    ;; on every build, X11 or not, the same distinction `orgacle-toggle-mouse'
+    ;; already draws between itself and the X11-only pointer variables
+    (setq orgacle-mouse-visible t)
     ;; set mouse pointer shape for the presentation; `orgacle--save-user-state',
     ;; called by `orgacle-run' before this function, has already captured
     ;; the user's prior setting to restore on `orgacle-quit'
@@ -578,11 +587,6 @@ new presentation silently apply a shape the pointer already has."
       (setq x-pointer-shape orgacle-x-pointer-shape)
       (setq x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
       (setq void-text-area-pointer 'text)
-      ;; keep the "requested" bookkeeping variable in sync with the
-      ;; pointer this unconditionally forces visible, so a leftover nil
-      ;; from a previous, already-quit presentation's `m' press cannot
-      ;; make the next presentation's first `m' press a silent no-op
-      (setq orgacle-mouse-visible t)
       ;; setting the mouse colour to its current value applies the shapes
       (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
     (orgacle--session-frame session)))
