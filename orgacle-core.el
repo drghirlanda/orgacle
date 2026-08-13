@@ -324,11 +324,30 @@ been saved and is safe to call even when no presentation is running,
 including twice in a row -- also puts `tooltip-mode' back by calling
 the mode function again, since restoring a global minor mode correctly
 means running its own setup or teardown, not just `setq'ing the
-variable.  Without that guard, calling this with nothing saved would
+variable, and puts the outline-ellipsis display-table slot back.
+Without that guard, calling this with nothing saved would
 unconditionally turn tooltips off, because `orgacle-user-tooltip-mode'
-defaults to nil."
+defaults to nil, and would unconditionally overwrite the
+`selective-display' slot of `standard-display-table' with
+`orgacle-outline-ellipsis' -- nil by default -- whenever that table
+happens to already exist, clobbering a slot some other package or the
+user set, even though no Orgacle save ever ran to justify touching it.
+
+The `char-table-p' check on `standard-display-table' guards a
+byte-compilation-only hazard, not the same-shape problem above:
+`orgacle--save-user-state' vivifies the table as part of the very same
+guarded block that sets `orgacle-outline-ellipsis', so by the time
+`orgacle--saved-state' is non-nil the table is already guaranteed to be
+a real char-table; the check stays anyway, since under byte-compiled
+evaluation `set-display-table-slot's first-ever call in a process
+evaluates a nil DISPLAY-TABLE argument before the autoloaded
+`disp-table.el' has a chance to auto-vivify it, and signals
+`wrong-type-argument' instead."
   (when orgacle--saved-state
-    (tooltip-mode (if orgacle-user-tooltip-mode 1 -1)))
+    (tooltip-mode (if orgacle-user-tooltip-mode 1 -1))
+    (when (char-table-p standard-display-table)
+      (set-display-table-slot standard-display-table
+                              'selective-display orgacle-outline-ellipsis)))
   (dolist (entry orgacle--saved-state)
     (set (car entry) (cdr entry)))
   (setq orgacle--saved-state nil))

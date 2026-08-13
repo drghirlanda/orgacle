@@ -129,18 +129,9 @@ through this function still leaves no session behind for the next
             (let ((win (get-buffer-window (orgacle--session-notes-buffer session))))
               (when win (delete-frame (window-frame win))))
             (kill-buffer (orgacle--session-notes-buffer session))))
-      ;; restore the user's Org-mode variables, even if something above failed
+      ;; restore the user's Org-mode variables, tooltip setting and
+      ;; display-table slot, even if something above failed
       (orgacle--restore-user-state)
-      ;; `standard-display-table' only exists once something has created
-      ;; it -- `orgacle-mode' does, when a presentation actually starts.
-      ;; Guard on that instead of unconditionally calling
-      ;; `set-display-table-slot': under byte-compilation, its first-ever
-      ;; call in a process evaluates a nil DISPLAY-TABLE argument before
-      ;; the autoloaded `disp-table.el' has a chance to auto-vivify the
-      ;; table, and signals `wrong-type-argument' instead.
-      (when (char-table-p standard-display-table)
-        (set-display-table-slot standard-display-table
-                                'selective-display orgacle-outline-ellipsis))
       (setq orgacle--session nil))))
 
 (defvar orgacle-mode-map
@@ -201,14 +192,15 @@ Each frame-level heading becomes a slide.  Navigate with
 \\{orgacle-mode-map}"
   ;; make Org-mode be as pretty as possible
   (add-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
-  ;; `orgacle--save-user-state' captures both the tracked variables and
-  ;; the outline-ellipsis display-table slot, and is a no-op when a save
-  ;; is already pending -- see its docstring -- which is what makes
-  ;; re-entering this mode without an intervening `orgacle-quit' safe.
-  ;; It also vivifies `standard-display-table' when necessary, so by the
-  ;; time control reaches the `set-display-table-slot' call below, the
-  ;; table is guaranteed to be a real char-table; this mirrors the
-  ;; `char-table-p' guard `orgacle-quit' uses on the way back.
+  ;; `orgacle--save-user-state' captures the tracked variables, the
+  ;; outline-ellipsis display-table slot and the tooltip-mode setting,
+  ;; and is a no-op when a save is already pending -- see its docstring
+  ;; -- which is what makes re-entering this mode without an
+  ;; intervening `orgacle-quit' safe.  It also vivifies
+  ;; `standard-display-table' when necessary, so by the time control
+  ;; reaches the `set-display-table-slot' call below, the table is
+  ;; guaranteed to be a real char-table; this mirrors the `char-table-p'
+  ;; guard `orgacle--restore-user-state' uses on the way back.
   (orgacle--save-user-state)
   (setq org-src-fontify-natively t)
   (setq org-fontify-quote-and-verse-blocks t)

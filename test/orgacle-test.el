@@ -1140,5 +1140,45 @@ what ran before it."
           (should tooltip-mode))
       (tooltip-mode (if original 1 -1)))))
 
+(ert-deftest orgacle-test-quit-with-no-session-does-not-touch-display-table ()
+  "Quitting with nothing running leaves the display table exactly as it was.
+The same shape as
+`orgacle-test-quit-with-no-session-does-not-touch-tooltip-mode', for
+the other piece of state `orgacle--restore-user-state' puts back:
+`orgacle-quit' used to overwrite the `selective-display' slot of
+`standard-display-table' with `orgacle-outline-ellipsis' -- nil by
+default -- whenever that table happened to already exist as a
+char-table, regardless of whether `orgacle--save-user-state' had ever
+actually captured it, clobbering a glyph the user or some other
+package had set there.  `standard-display-table' commonly does already
+exist by the time this runs -- Org itself, or many other packages, can
+vivify it -- which is exactly what made this a live bug rather than a
+theoretical one; setting it up explicitly here does not need any
+unusual scaffolding to reproduce.
+
+`orgacle-outline-ellipsis' and `orgacle--saved-state' are dynamically
+let-bound to their true \"nothing saved yet\" defaults, for the same
+test-order-independence reason as the tooltip test: an earlier test
+that legitimately saved and restored the display table (for example
+`orgacle-test-second-entry-preserves-outline-ellipsis') leaves
+`orgacle-outline-ellipsis' holding its last real value, not nil, and
+with the guard missing that leftover value could land on the right
+answer by accident instead of proving anything."
+  (unless (char-table-p standard-display-table)
+    (setq standard-display-table (make-display-table)))
+  (let ((original (display-table-slot standard-display-table 'selective-display))
+        (orgacle-outline-ellipsis nil)
+        (orgacle--saved-state nil))
+    (unwind-protect
+        (progn
+          (set-display-table-slot standard-display-table 'selective-display
+                                   "distinctive-user-glyph")
+          (orgacle-quit)
+          (orgacle-quit)
+          (should (equal "distinctive-user-glyph"
+                         (display-table-slot standard-display-table
+                                             'selective-display))))
+      (set-display-table-slot standard-display-table 'selective-display original))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
