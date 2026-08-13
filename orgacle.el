@@ -292,6 +292,17 @@ the display."
     (tooltip-mode (if orgacle-tooltip-mode 1 -1))
     ;; create speaker notes
     (when orgacle-speaker-notes (orgacle-make-notes-buffer))
+    ;; display the first slide: `orgacle--start-slides' only builds the
+    ;; slide vector and resets the index and page number, it does not
+    ;; narrow the buffer or run the page hook, so without this call the
+    ;; buffer would stay unnarrowed with `orgacle-page-number' at 1 but
+    ;; nothing actually on display, and the first `orgacle-next-page'
+    ;; would compute (1+ 0) and jump straight to slide 2 -- slide 1
+    ;; would then be reachable only via `orgacle-top', `t' or `1'.
+    ;; Called after `orgacle-make-notes-buffer' so the page hook's
+    ;; `orgacle-position-notes' has a notes buffer to position when it
+    ;; fires as part of showing this first slide.
+    (orgacle-top)
     (run-hooks 'orgacle-start-presentation-hook)))
 
 ;;; Migration

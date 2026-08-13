@@ -1018,6 +1018,32 @@ interactively -- hanging batch Emacs -- when there is none."
         (when (file-exists-p source-file)
           (delete-file source-file))))))
 
+(ert-deftest orgacle-test-run-displays-the-first-slide ()
+  "`orgacle-run' narrows to slide 1 and shows page 1, not nothing.
+
+`orgacle--start-slides' only builds the slide vector and resets the
+index and page number to match; before this fix nothing narrowed the
+buffer or ran the page hook, so `orgacle-run' left the presentation
+looking blank with `orgacle-page-number' already at 1, and the first
+`orgacle-next-page' computed (1+ 0) and jumped straight to slide 2 --
+slide 1 was reachable only via `orgacle-top', `t' or `1'.  Batch Emacs
+cannot create a real frame or an other-frame notes buffer, so
+`orgacle--get-frame' is stubbed out and `orgacle-speaker-notes' is off,
+matching `orgacle-test-quit-restores-tooltip-mode'."
+  (orgacle-test-with-fixture "slides.org"
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (orgacle-run)
+          (should (buffer-narrowed-p))
+          (should (equal "First slide" (org-entry-get nil "ITEM")))
+          (should-not (string-match-p "Second slide" (buffer-string)))
+          (should (= 1 orgacle-page-number))
+          (orgacle-next-page)
+          (should (equal "Second slide" (org-entry-get nil "ITEM")))
+          (should (= 2 orgacle-page-number)))
+      (orgacle-quit))))
+
 (ert-deftest orgacle-test-mode-enters ()
   "Entering `orgacle-mode' on a plain buffer completes without signaling.
 
