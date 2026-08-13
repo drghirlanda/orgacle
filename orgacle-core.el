@@ -639,10 +639,14 @@ would be worse than the failure it reports.")
   "Append a note that FN signalled ERR to `orgacle--log-buffer-name'.
 FN is the page-hook member `orgacle--run-page-hook' was calling and ERR
 the error its `condition-case' caught.  The entry also carries the
-running session's index slot, read fresh via `orgacle--session-ensure',
-so a presenter reading the log after the talk knows which slide broke;
-the index is left as \"unknown\" rather than signalling when nothing has
-built a slide deck yet, which happens in tests that call
+running session's slide number, read fresh via `orgacle--session-ensure',
+so a presenter reading the log after the talk knows which slide broke --
+the 1-based number every other presenter-facing surface uses, the same
+as `orgacle-page-number' and what `orgacle-jump-to-page' takes, not the
+0-based index slot itself; a log that instead read \"slide 1\" for the
+second slide would disagree with everything else the presenter saw
+on screen.  Left as \"unknown\" rather than signalling or guessing when
+nothing has built a slide deck yet, which happens in tests that call
 `orgacle--run-page-hook' without first calling `orgacle--start-slides'.
 
 No true backtrace: by the time this function runs, the `condition-case'
@@ -658,19 +662,20 @@ hook member to intercept the error before it unwinds, which is
 session-wide state to mutate on every single slide change for a
 backtrace that `error-message-string' already mostly conveys.  Neither
 is worth risking the one guarantee this mechanism exists for, so this
-logs the function, the slide index and the error text only.
+logs the function, the slide number and the error text only.
 
 Deliberately has no `condition-case' of its own: `orgacle--run-page-hook'
 wraps its call to this function in `ignore-errors', which is what keeps
 a problem here -- an unwritable `orgacle--log-buffer-name', a disk
 error, anything -- from turning a failing hook member into a failing
 presentation; see that call site."
-  (let ((index (orgacle--session-index (orgacle--session-ensure))))
+  (let* ((index (orgacle--session-index (orgacle--session-ensure)))
+         (slide (if index (1+ index) "unknown")))
     (with-current-buffer (get-buffer-create orgacle--log-buffer-name)
       (goto-char (point-max))
-      (insert (format "[%s] slide index %s: %s failed: %s\n"
+      (insert (format "[%s] slide %s: %s failed: %s\n"
                        (format-time-string "%Y-%m-%d %H:%M:%S")
-                       (if index index "unknown")
+                       slide
                        (if (symbolp fn) fn "anonymous function")
                        (error-message-string err))))))
 

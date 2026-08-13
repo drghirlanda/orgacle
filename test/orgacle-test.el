@@ -713,12 +713,12 @@ migrated, leaving EPRESENT_ names on disk outside the narrowed region."
   (error "Deliberate failure"))
 
 (ert-deftest orgacle-test-page-hook-logs-a-failing-member ()
-  "A failing member leaves a log entry naming the function, the slide
-index, and the error, in `orgacle--log-buffer-name', and the remaining
-members still run."
+  "A failing member leaves a log entry naming the function, the
+1-based slide number shown on screen, and the error, in
+`orgacle--log-buffer-name', and the remaining members still run."
   (orgacle-test-with-fixture "slides.org"
     (orgacle--start-slides)
-    (orgacle-next-page) ; index 1, "Second slide"
+    (orgacle-next-page) ; index 1, page number 2, "Second slide"
     (let* ((ran nil)
            (orgacle-page-hook
             (list #'orgacle-test--signal-deliberate-failure
@@ -733,8 +733,33 @@ members still run."
               (let ((contents (buffer-string)))
                 (should (string-match-p
                          "orgacle-test--signal-deliberate-failure" contents))
-                (should (string-match-p "\\bslide index 1\\b" contents))
+                (should (= 2 orgacle-page-number))
+                (should (string-match-p "\\bslide 2\\b" contents))
                 (should (string-match-p "Deliberate failure" contents)))))
+        (when (get-buffer orgacle--log-buffer-name)
+          (kill-buffer orgacle--log-buffer-name))))))
+
+(ert-deftest orgacle-test-page-hook-logs-unknown-slide-with-no-deck ()
+  "The log says \"slide unknown\", rather than guessing a number or
+signalling, when a failing member runs before any slide deck has been
+built -- `orgacle--session-index' is nil then, the same state a fresh
+session starts in before `orgacle--start-slides' has ever run."
+  (orgacle-test-with-fixture "plain.org"
+    (let* ((session (orgacle--session-ensure))
+           (saved-index (orgacle--session-index session))
+           (orgacle-page-hook
+            (list (lambda () (error "Deliberate failure")))))
+      (setf (orgacle--session-index session) nil)
+      (when (get-buffer orgacle--log-buffer-name)
+        (kill-buffer orgacle--log-buffer-name))
+      (unwind-protect
+          (progn
+            (goto-char (point-min))
+            (re-search-forward "^\\* First slide")
+            (orgacle-current-page)
+            (with-current-buffer (get-buffer orgacle--log-buffer-name)
+              (should (string-match-p "\\bslide unknown\\b" (buffer-string)))))
+        (setf (orgacle--session-index session) saved-index)
         (when (get-buffer orgacle--log-buffer-name)
           (kill-buffer orgacle--log-buffer-name))))))
 
