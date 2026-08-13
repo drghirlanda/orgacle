@@ -68,30 +68,19 @@
 ;; This declaration only quiets the byte-compiler.
 (declare-function flyspell-mode-off "flyspell" ())
 
-;; `x-pointer-shape' and `x-sensitive-text-pointer-shape' exist only on
-;; X11 builds, where term/x-win.el defines them; see orgacle-core.el,
-;; which declares them for its own use.  A value-less `defvar' only
-;; informs the byte-compiler within the file it appears in -- it is not
-;; a real, session-wide declaration the way a `defvar' with a value is
-;; -- so `orgacle-quit', which sets both, needs its own copy here too.
-;; The `boundp' guard at the call site is what decides anything at
-;; runtime.
-(defvar x-pointer-shape)
-(defvar x-sensitive-text-pointer-shape)
-
 ;; functions
 
 (defun orgacle-quit ()
   "Quit the current presentation.
 Safe to call when no presentation is running, and safe to call twice:
 every step is guarded on the thing it acts on actually existing, and
-the user's Org-mode variables, display-table slot and `tooltip-mode'
-setting are restored in an `unwind-protect' cleanup so a failure
-earlier in this function still restores them.  That same cleanup
-discards `orgacle--session' unconditionally, so a failure partway
-through this function still leaves no session behind for the next
-`orgacle-run' to inherit stale state from -- for example a narrowed
-`org-restriction' slot."
+the user's Org-mode variables, display-table slot, `tooltip-mode'
+setting and X pointer state are restored in an `unwind-protect' cleanup
+so a failure earlier in this function still restores them.  That same
+cleanup discards `orgacle--session' unconditionally, so a failure
+partway through this function still leaves no session behind for the
+next `orgacle-run' to inherit stale state from -- for example a
+narrowed `org-restriction' slot."
   (interactive)
   (let ((session orgacle--session))
     (unwind-protect
@@ -117,20 +106,15 @@ through this function still leaves no session behind for the next
           ;; delete all orgacle overlays
           (orgacle-clean-overlays)
           (orgacle-clean-fringe-overlays)
-          ;; reset mouse pointer shape and colour
-          (when (boundp 'x-pointer-shape)
-            (setq x-pointer-shape orgacle-user-x-pointer-shape)
-            (setq x-sensitive-text-pointer-shape
-                  orgacle-user-x-sensitive-text-pointer-shape)
-            (setq void-text-area-pointer 'arrow)
-            (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
           ;; kill notes buffer and associated frame, if present
           (when (and session (bufferp (orgacle--session-notes-buffer session)))
             (let ((win (get-buffer-window (orgacle--session-notes-buffer session))))
               (when win (delete-frame (window-frame win))))
             (kill-buffer (orgacle--session-notes-buffer session))))
-      ;; restore the user's Org-mode variables, tooltip setting and
-      ;; display-table slot, even if something above failed
+      ;; restore the user's Org-mode variables, tooltip setting,
+      ;; display-table slot and X pointer state, even if something above
+      ;; failed; see `orgacle--restore-user-state', which only touches the
+      ;; pointer when `orgacle--save-user-state' actually captured it
       (orgacle--restore-user-state)
       (setq orgacle--session nil))))
 
@@ -292,6 +276,13 @@ the display."
     (setq orgacle-frame-level (orgacle-get-frame-level))
     ;; build the slide vector navigation is index arithmetic over
     (orgacle--start-slides)
+    ;; save the user's state before `orgacle--get-frame' sets the mouse
+    ;; pointer to the presentation's own shape: `orgacle--save-user-state'
+    ;; is a no-op once a save is already pending, so `orgacle-mode's own
+    ;; call below stays harmless, but the pointer capture inside this one
+    ;; has to happen before that mutation, not after it, to see the
+    ;; user's real prior setting rather than the presentation's own
+    (orgacle--save-user-state)
     (orgacle--get-frame)
     (orgacle-mode)
     (set-buffer-modified-p nil)

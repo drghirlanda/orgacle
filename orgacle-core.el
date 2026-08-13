@@ -36,10 +36,10 @@
 ;; value-less `defvar' only quiets the byte-compiler within the file it
 ;; appears in -- unlike a `defvar' with a value, it has no effect at
 ;; load time and does not carry to a file that merely requires this
-;; one -- so any other file that sets one of these needs its own copy
-;; of the relevant line (see orgacle.el, which sets two of the four).
-;; The `boundp' guards at each use site are what decide anything at
-;; runtime.
+;; one -- so any other file that sets one of these would need its own
+;; copy of the relevant line; every use site of all four is confined to
+;; this file as of this writing.  The `boundp' guards at each use site
+;; are what decide anything at runtime.
 (defvar x-pointer-dot)
 (defvar x-pointer-shape)
 (defvar x-pointer-invisible)
@@ -180,8 +180,10 @@ builds, so this is nil elsewhere."
 
 (defcustom orgacle-internal-border-width 50
   "Border width, in pixels, around the presented material.
-NOT WORKING: nothing in this file currently reads this variable, so
-changing it has no effect."
+Passed straight through to `make-frame' as the presentation frame's
+own `internal-border-width' parameter, so it takes effect once, when
+the frame is created; changing it while a presentation is already
+running has no effect on that frame."
   :type 'integer
   :group 'orgacle)
 
@@ -272,19 +274,50 @@ of forcing it off.  `tooltip-mode' is a global minor mode, not a plain
 variable -- restoring it means calling the mode function again, so its
 own setup and teardown run, rather than just `setq'ing the variable
 back -- which is why it cannot join `orgacle-saved-variables' itself,
-the same way `orgacle-user-x-pointer-shape' (defined further down,
-alongside the rest of the pointer-shape state) cannot.")
+the same way `orgacle-user-x-pointer-shape', defined next, cannot: that
+one is guarded by `(boundp \\='x-pointer-shape)' instead, since the X11
+pointer constants this package touches do not exist on every build, and
+capturing one with `symbol-value' the way `orgacle-saved-variables' does
+would signal `void-variable' there.")
+
+(defvar orgacle-user-x-pointer-shape nil
+  "The `x-pointer-shape' value before the presentation started.
+Saved by `orgacle--save-user-state' and put back by
+`orgacle--restore-user-state', under the same re-entrancy guard as
+`orgacle-user-tooltip-mode' -- see its docstring for why this cannot
+join `orgacle-saved-variables' -- so that a stray `orgacle-quit' with
+nothing running leaves the pointer alone instead of overwriting it with
+this variable's default of nil, which used to be exactly the bug the
+`tooltip-mode' and outline-ellipsis guards were already added to fix
+elsewhere.  Read or written only when `(boundp \\='x-pointer-shape)' is
+non-nil: those constants exist only on X11 builds.")
+
+(defvar orgacle-user-x-sensitive-text-pointer-shape nil
+  "The `x-sensitive-text-pointer-shape' value before the presentation started.
+Companion to `orgacle-user-x-pointer-shape'; see that variable's
+docstring for the guard and re-entrancy behaviour both share.")
+
+(defvar orgacle-user-void-text-area-pointer nil
+  "The `void-text-area-pointer' value before the presentation started.
+Saved and restored alongside `orgacle-user-x-pointer-shape', under the
+same guard and for the same reason.  Unlike the X pointer-shape
+variables, `void-text-area-pointer' is an ordinary variable on every
+build, not an X11-only one, but this package only ever changes it
+inside the same `(boundp \\='x-pointer-shape)' block that changes the
+pointer shapes, so it is captured and restored there too, under that
+same condition, rather than unconditionally.")
 
 (defun orgacle--save-user-state ()
   "Record the user's state, once, until it is restored.
 Captures the current value of every variable in
 `orgacle-saved-variables', plus the outline-ellipsis display-table
-slot into `orgacle-outline-ellipsis' and whether tooltips were on into
-`orgacle-user-tooltip-mode' -- neither of the latter two can join that
-list, the first because it is a display-table slot and the second
-because `tooltip-mode' is a global minor mode rather than a plain
-variable, but both need the same protection, so this function owns all
-three.
+slot into `orgacle-outline-ellipsis', whether tooltips were on into
+`orgacle-user-tooltip-mode', and -- only when `(boundp \\='x-pointer-shape)'
+-- the prior X pointer shapes and `void-text-area-pointer' into
+`orgacle-user-x-pointer-shape', `orgacle-user-x-sensitive-text-pointer-shape'
+and `orgacle-user-void-text-area-pointer'.  None of these four can join
+that list; see `orgacle-user-tooltip-mode's docstring for why, in each
+case.
 
 A no-op when a save is already pending: `orgacle-mode' calls this
 unconditionally on every entry, and entering it a second time with no
@@ -298,7 +331,10 @@ The first save wins; `orgacle--restore-user-state' is what clears
 next genuine entry.  Since `orgacle-run' toggles `tooltip-mode' to
 `orgacle-tooltip-mode' only after calling `orgacle-mode', capturing
 `tooltip-mode' here, under the same guard, always sees the user's true
-prior setting rather than a presentation's own.
+prior setting rather than a presentation's own; likewise, `orgacle-run'
+calls this function before `orgacle--get-frame' sets the pointer to the
+presentation's own shape, so the X pointer capture here always sees the
+user's true prior setting too, not the presentation's.
 
 `standard-display-table' is nil until something creates it, which the
 autoloaded `disp-table.el' normally does as a side effect of its own
@@ -313,7 +349,12 @@ yet, so this vivifies it directly first, using the same idiom
       (setq standard-display-table (make-display-table)))
     (setq orgacle-outline-ellipsis
           (display-table-slot standard-display-table 'selective-display))
-    (setq orgacle-user-tooltip-mode tooltip-mode)))
+    (setq orgacle-user-tooltip-mode tooltip-mode)
+    (when (boundp 'x-pointer-shape)
+      (setq orgacle-user-x-pointer-shape x-pointer-shape)
+      (setq orgacle-user-x-sensitive-text-pointer-shape
+            x-sensitive-text-pointer-shape)
+      (setq orgacle-user-void-text-area-pointer void-text-area-pointer))))
 
 (defun orgacle--restore-user-state ()
   "Put back everything saved by `orgacle--save-user-state'.
@@ -324,14 +365,24 @@ been saved and is safe to call even when no presentation is running,
 including twice in a row -- also puts `tooltip-mode' back by calling
 the mode function again, since restoring a global minor mode correctly
 means running its own setup or teardown, not just `setq'ing the
-variable, and puts the outline-ellipsis display-table slot back.
+variable; puts the outline-ellipsis display-table slot back; and, only
+when `(boundp \\='x-pointer-shape)', puts the X pointer shapes and
+`void-text-area-pointer' back too, then applies the restored shapes by
+setting the mouse colour to its own current value, the same trick
+`orgacle--get-frame' and `orgacle-toggle-mouse' use.
 Without that guard, calling this with nothing saved would
 unconditionally turn tooltips off, because `orgacle-user-tooltip-mode'
-defaults to nil, and would unconditionally overwrite the
-`selective-display' slot of `standard-display-table' with
-`orgacle-outline-ellipsis' -- nil by default -- whenever that table
-happens to already exist, clobbering a slot some other package or the
-user set, even though no Orgacle save ever ran to justify touching it.
+defaults to nil; would unconditionally overwrite the `selective-display'
+slot of `standard-display-table' with `orgacle-outline-ellipsis' -- nil
+by default -- whenever that table happens to already exist, clobbering
+a slot some other package or the user set; and would unconditionally
+overwrite the X pointer shapes and `void-text-area-pointer' with these
+variables' nil defaults -- discarding a `void-text-area-pointer'
+customization silently -- and apply that to the mouse pointer on the
+*selected* frame, even though no Orgacle save ever ran to justify
+touching any of it.  This was the last instance of exactly that bug
+class in the package, after the `tooltip-mode' and outline-ellipsis
+fixes above.
 
 The `char-table-p' check on `standard-display-table' guards a
 byte-compilation-only hazard, not the same-shape problem above:
@@ -347,7 +398,14 @@ evaluates a nil DISPLAY-TABLE argument before the autoloaded
     (tooltip-mode (if orgacle-user-tooltip-mode 1 -1))
     (when (char-table-p standard-display-table)
       (set-display-table-slot standard-display-table
-                              'selective-display orgacle-outline-ellipsis)))
+                              'selective-display orgacle-outline-ellipsis))
+    (when (boundp 'x-pointer-shape)
+      (setq x-pointer-shape orgacle-user-x-pointer-shape)
+      (setq x-sensitive-text-pointer-shape
+            orgacle-user-x-sensitive-text-pointer-shape)
+      (setq void-text-area-pointer orgacle-user-void-text-area-pointer)
+      ;; setting the mouse colour to its current value applies the shapes
+      (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))))
   (dolist (entry orgacle--saved-state)
     (set (car entry) (cdr entry)))
   (setq orgacle--saved-state nil))
@@ -361,15 +419,16 @@ Always kept equal to the running session's index slot plus one; the
 mode line reads this variable, and a user may too, which is why it
 stays a variable of its own instead of being computed on every read.
 `orgacle--goto-slide' is the only place that sets it.")
-(defvar orgacle-user-x-pointer-shape nil)
-(defvar orgacle-user-x-sensitive-text-pointer-shape nil)
 
 (defvar orgacle-mouse-visible t
-  "Whether the mouse pointer is currently visible.
-`orgacle-toggle-mouse' reads this, but nothing in this file ever sets
-it back to nil, so the toggle is currently one-way: it only ever hides
-the pointer.  P3 owns making this variable track the pointer's actual
-state.")
+  "Whether the mouse pointer is currently requested visible.
+`orgacle-toggle-mouse' flips this on every call, before it looks at the
+old value to decide which pointer shape to apply, so the two directions
+alternate correctly instead of the toggle only ever hiding the pointer.
+This is updated unconditionally, even on a build without X11 pointer
+support, since it records what was *requested* rather than the X
+pointer state itself; only applying that request to the actual pointer
+needs `x-pointer-shape' to be bound.")
 
 (defvar orgacle-frame-level 1)
 
@@ -481,7 +540,7 @@ to remember the empty-deck special case itself."
   (let ((session (orgacle--session-ensure)))
     (unless (frame-live-p (orgacle--session-frame session))
       (setf (orgacle--session-frame session)
-            (make-frame '((minibuffer . nil)
+            (make-frame `((minibuffer . nil)
                           (title . "Orgacle")
                           (fullscreen . fullboth)
                           (menu-bar-lines . 0)
@@ -491,7 +550,7 @@ to remember the empty-deck special case itself."
                           (right-fringe . 40)
                           (right-divider-width . 0)
                           (cursor-type . nil)
-                          (internal-border-width . 75)))))
+                          (internal-border-width . ,orgacle-internal-border-width)))))
     (raise-frame (orgacle--session-frame session))
     (select-frame-set-input-focus (orgacle--session-frame session))
     ;; set fringe background to same as frame background, on this frame
@@ -499,11 +558,10 @@ to remember the empty-deck special case itself."
     ;; every frame, including ones no presentation ever touched
     (set-face-background 'fringe (cdr (assoc 'background-color (frame-parameters)))
                          (orgacle--session-frame session))
-    ;; set mouse pointer shape, saving the user's setting first
+    ;; set mouse pointer shape for the presentation; `orgacle--save-user-state',
+    ;; called by `orgacle-run' before this function, has already captured
+    ;; the user's prior setting to restore on `orgacle-quit'
     (when (boundp 'x-pointer-shape)
-      (setq orgacle-user-x-pointer-shape x-pointer-shape)
-      (setq orgacle-user-x-sensitive-text-pointer-shape
-            x-sensitive-text-pointer-shape)
       (setq x-pointer-shape orgacle-x-pointer-shape)
       (setq x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
       (setq void-text-area-pointer 'text)
@@ -513,14 +571,21 @@ to remember the empty-deck special case itself."
 
 (defun orgacle-toggle-mouse ()
   "Show or hide the mouse pointer.
-Does nothing on a build without X11 pointer support."
+Flips `orgacle-mouse-visible' first, then applies the new request to
+the actual pointer shape when `x-pointer-shape' is bound -- flipping
+before applying, rather than after, is what makes repeated calls
+actually alternate between hiding and showing instead of always taking
+the same branch.  On a build without X11 pointer support, the request
+is still recorded in `orgacle-mouse-visible', there is just nothing
+further to apply it to."
   (interactive)
+  (setq orgacle-mouse-visible (not orgacle-mouse-visible))
   (when (boundp 'x-pointer-shape)
     (if orgacle-mouse-visible
-        (setq x-pointer-shape x-pointer-invisible
-              x-sensitive-text-pointer-shape x-pointer-invisible)
-      (setq x-pointer-shape orgacle-x-pointer-shape
-            x-sensitive-text-pointer-shape orgacle-x-pointer-shape))
+        (setq x-pointer-shape orgacle-x-pointer-shape
+              x-sensitive-text-pointer-shape orgacle-x-pointer-shape)
+      (setq x-pointer-shape x-pointer-invisible
+            x-sensitive-text-pointer-shape x-pointer-invisible))
     (setq void-text-area-pointer 'text)
     ;; setting the mouse colour to its current value applies the shapes
     (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters))))))

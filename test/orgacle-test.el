@@ -1131,6 +1131,22 @@ budges when `orgacle--get-frame' passes no FRAME of its own to
         (setq x-pointer-shape orig-x-pointer-shape)
         (setq x-sensitive-text-pointer-shape orig-x-sensitive)))))
 
+(ert-deftest orgacle-test-toggle-mouse-flips-visibility-state-both-ways ()
+  "`orgacle-toggle-mouse' actually alternates, instead of only ever hiding.
+Before this fix, `orgacle-mouse-visible' was initialised to t and never
+reassigned, so every call took the \"hide\" branch: the pointer only ever
+went invisible, never back.  Asserts `orgacle-mouse-visible' itself,
+not the X pointer variables it drives, because the latter exist only on
+X11 builds and this test has to pass on any build; see the P3 task 7
+brief for that call.  Two calls starting from t must land on nil then
+back on t, proving both directions, not just that the value changed
+once."
+  (let ((orgacle-mouse-visible t))
+    (orgacle-toggle-mouse)
+    (should-not orgacle-mouse-visible)
+    (orgacle-toggle-mouse)
+    (should orgacle-mouse-visible)))
+
 (ert-deftest orgacle-test-quit-restores-tooltip-mode ()
   "A presentation's `tooltip-mode' setting does not outlive it.
 `orgacle-run' sets `tooltip-mode' to `orgacle-tooltip-mode' for the
@@ -1228,6 +1244,58 @@ answer by accident instead of proving anything."
                          (display-table-slot standard-display-table
                                              'selective-display))))
       (set-display-table-slot standard-display-table 'selective-display original))))
+
+(ert-deftest orgacle-test-quit-with-no-session-does-not-touch-pointer-state ()
+  "Quitting with nothing running leaves the pointer state exactly as it was.
+The same shape as the tooltip-mode and display-table variants above,
+for the third and last piece of state `orgacle--restore-user-state'
+puts back -- the Task 5 review called this the final instance of the
+same bug class those two fixes had already closed twice.  `orgacle-quit'
+used to overwrite `x-pointer-shape' and `x-sensitive-text-pointer-shape'
+with nil and `void-text-area-pointer' with \\='arrow -- discarding any
+customization of it silently -- and then apply that to the mouse
+pointer on the *selected* frame via `set-mouse-color', regardless of
+whether `orgacle--save-user-state' had ever actually captured them.
+
+Sets sentinel values with `setq' and restores the originals by hand in
+the cleanup form, the same idiom
+`orgacle-test-get-frame-sets-fringe-only-on-its-own-frame' uses for
+these same three variables, rather than `let': all three are guarded
+throughout the package by `(boundp \\='x-pointer-shape)', so wrapping the
+whole test in that same guard, rather than `let'-binding variables that
+might not exist, is what lets it run -- as a no-op -- on a build where
+they are genuinely unbound too.
+
+`orgacle-user-x-pointer-shape', `orgacle-user-x-sensitive-text-pointer-shape',
+`orgacle-user-void-text-area-pointer' and `orgacle--saved-state' are
+dynamically let-bound to their true \"nothing saved yet\" defaults, for
+the same test-order-independence reason as the tooltip and
+display-table variants: an earlier test that legitimately saved and
+restored the pointer state would otherwise leave these holding a real
+leftover value instead of the nil that lets a missing guard land on the
+right answer by accident, hiding the exact regression this test exists
+to catch."
+  (when (boundp 'x-pointer-shape)
+    (let ((orig-shape x-pointer-shape)
+          (orig-sensitive x-sensitive-text-pointer-shape)
+          (orig-void void-text-area-pointer)
+          (orgacle-user-x-pointer-shape nil)
+          (orgacle-user-x-sensitive-text-pointer-shape nil)
+          (orgacle-user-void-text-area-pointer nil)
+          (orgacle--saved-state nil))
+      (unwind-protect
+          (progn
+            (setq x-pointer-shape 'orgacle-test-sentinel-shape
+                  x-sensitive-text-pointer-shape 'orgacle-test-sentinel-sensitive
+                  void-text-area-pointer 'orgacle-test-sentinel-void)
+            (orgacle-quit)
+            (orgacle-quit)
+            (should (eq x-pointer-shape 'orgacle-test-sentinel-shape))
+            (should (eq x-sensitive-text-pointer-shape 'orgacle-test-sentinel-sensitive))
+            (should (eq void-text-area-pointer 'orgacle-test-sentinel-void)))
+        (setq x-pointer-shape orig-shape
+              x-sensitive-text-pointer-shape orig-sensitive
+              void-text-area-pointer orig-void)))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
