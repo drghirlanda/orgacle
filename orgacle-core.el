@@ -431,7 +431,8 @@ evaluates a nil DISPLAY-TABLE argument before the autoloaded
 Always kept equal to the running session's index slot plus one; the
 mode line reads this variable, and a user may too, which is why it
 stays a variable of its own instead of being computed on every read.
-`orgacle--goto-slide' is the only place that sets it.")
+`orgacle--sync-page-number' is the sole place that sets it, called from
+`orgacle--start-slides', `orgacle--goto-slide' and `orgacle-refresh'.")
 
 (defvar orgacle-mouse-visible t
   "Whether the mouse pointer is currently requested visible.

@@ -1462,5 +1462,22 @@ to catch."
               x-sensitive-text-pointer-shape orig-sensitive
               void-text-area-pointer orig-void)))))
 
+(ert-deftest orgacle-test-quit-with-no-session-does-not-clear-latex-previews ()
+  "Quitting with nothing running leaves another buffer's LaTeX previews alone.
+
+The fourth instance of the same \"restores something that was never
+saved\" bug class the tooltip-mode, display-table and pointer-state
+tests above already cover: `orgacle-quit' used to call
+`org-clear-latex-preview' unconditionally, before any session check, so
+`M-x orgacle-quit' in an ordinary Org buffer -- one that was never being
+presented -- deleted that buffer's own LaTeX preview overlays."
+  (with-temp-buffer
+    (let ((org-mode-hook nil)) (org-mode))
+    (let ((ov (make-overlay (point-min) (point-min))))
+      (overlay-put ov 'org-overlay-type 'org-latex-overlay)
+      (let ((orgacle--session nil))
+        (orgacle-quit))
+      (should (overlay-buffer ov)))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

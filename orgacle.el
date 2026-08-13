@@ -86,9 +86,13 @@ narrowed `org-restriction' slot."
     (unwind-protect
         (progn
           (run-hooks 'orgacle-stop-presentation-hook)
-          (org-clear-latex-preview)
+          ;; guarded on SESSION like every other step here: with no
+          ;; presentation running, `M-x orgacle-quit' must not clear the
+          ;; LaTeX preview overlays of whatever ordinary Org buffer
+          ;; happens to be current
+          (when session (org-clear-latex-preview))
           (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
-          (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh)
+          (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh t)
           (when (and session (frame-live-p (orgacle--session-frame session)))
             (delete-frame (orgacle--session-frame session)))
           (when (and session (orgacle--session-org-file session))
@@ -192,7 +196,16 @@ Each frame-level heading becomes a slide.  Navigate with
   (set-display-table-slot standard-display-table 'selective-display [32])
   (setq org-pretty-entities t)
   (setq mode-line-format (orgacle-get-mode-line))
-  (add-hook 'org-babel-after-execute-hook 'orgacle-refresh)
+  ;; buffer-local (the final, non-nil LOCAL argument): `org-babel-after-execute-hook'
+  ;; is a global hook, and adding to it globally meant running a source
+  ;; block in any Org buffer whatsoever -- not just the one being
+  ;; presented -- rebuilt this session's slide vector out of that
+  ;; unrelated buffer, leaving markers pointing into the wrong buffer.
+  ;; A buffer-local addition also cannot outlive the buffer it was made
+  ;; in, so an abandoned presentation -- its frame killed without
+  ;; `orgacle-quit' -- does not leave `orgacle-refresh' wired into every
+  ;; future source-block execution for the rest of the Emacs session.
+  (add-hook 'org-babel-after-execute-hook 'orgacle-refresh nil t)
   (condition-case ex
       (let ((org-format-latex-options
              (plist-put (copy-tree org-format-latex-options)
