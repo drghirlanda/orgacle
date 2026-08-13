@@ -67,7 +67,7 @@ so bind it yourself if you want it back:
 - Use =N= and =P= to reveal subheadings one at a time (see [[The basics]])
 - Press =E= to edit the slide text in place, =C-c C-c= to stop editing
 - Press =+= and =-= to grow and shrink the font
-- Press =m= to hide the mouse pointer
+- Press =m= to toggle the mouse pointer's visibility
 - Press =r= or =g= to re-render the slide, =R= to force a full redisplay
 - Quit with =q=
 
@@ -311,9 +311,9 @@ pointer when you are pointing at something on a projector. Choose a different
 shape with =orgacle-x-pointer-shape=, which takes any of Emacs's =x-pointer-=
 constants.
 
-=m= hides the pointer when it is in the way. Note that in this version =m= only
-hides it — pressing =m= again does not bring it back, and moving the mouse
-does not either. Quitting the presentation restores your normal pointer.
+=m= toggles the pointer's visibility: press it to hide the pointer when it is
+in the way, press it again to bring it back. Moving the mouse does not bring
+it back by itself. Quitting the presentation restores your normal pointer.
 
 This is an X11 feature. On a Wayland, macOS or Windows build, and in a terminal,
 the pointer is left alone and =m= does nothing. Orgacle detects this and stays
@@ -321,6 +321,11 @@ quiet rather than failing.
 
 Tooltips are suppressed during a presentation so a stray hover cannot pop
 something up on the projector; set =orgacle-tooltip-mode= to t if you want them.
+
+The 75-pixel border around the presented material comes from
+=orgacle-internal-border-width=; change it to taste. It is passed straight
+through to the presentation frame when that frame is created, so a change
+takes effect on the next presentation, not the one already running.
 
 ** Extending Orgacle: orgacle-page-hook
 

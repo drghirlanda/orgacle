@@ -111,10 +111,11 @@ file.  The file's buffer is refreshed every time it is shown."
   (if size (setq size (- size)))
   ;; clean fringe, otherwise indicators show up mid-screen
   (orgacle-clean-fringe-overlays)
-  (if below
-      (setq orgacle-aux-window (split-window-below size))
-    (setq orgacle-aux-window (split-window-right size)))
-  (select-window orgacle-aux-window)
+  (let ((session (orgacle--session-ensure)))
+    (if below
+        (setf (orgacle--session-aux-window session) (split-window-below size))
+      (setf (orgacle--session-aux-window session) (split-window-right size)))
+    (select-window (orgacle--session-aux-window session)))
   (find-file filename)
   (setq mode-line-format (orgacle-get-mode-line))
   (revert-buffer t t t)
@@ -139,24 +140,24 @@ file.  The file's buffer is refreshed every time it is shown."
 	(image-transform-fit-to-height)
       (image-transform-fit-to-width)))
   ;; go back to presentation window:
-  (select-window orgacle-presentation-window))
+  (select-window (orgacle--session-presentation-window (orgacle--session-ensure))))
 
 (defun orgacle-advance-file ()
   "Advance the file showed by orgacle-show-file to the next page."
   (interactive)
-  (when (windowp orgacle-aux-window)
-    (select-window orgacle-aux-window)
+  (when (windowp (orgacle--session-aux-window (orgacle--session-ensure)))
+    (select-window (orgacle--session-aux-window (orgacle--session-ensure)))
     (when (eq major-mode 'pdf-view-mode)
       (pdf-view-next-page)
       (orgacle-update-aux-fringe-overlay))
-    (select-window orgacle-presentation-window)))
+    (select-window (orgacle--session-presentation-window (orgacle--session-ensure)))))
 
 (defun orgacle-show-file-or-advance ()
   "Show a file with `orgacle-show-file', or advance within it.
 If a file is already shown, advance within it using
 `orgacle-advance-file' instead of showing it again."
   (interactive)
-  (if (windowp orgacle-aux-window)
+  (if (windowp (orgacle--session-aux-window (orgacle--session-ensure)))
       (orgacle-advance-file)
     (orgacle-show-file)))
 

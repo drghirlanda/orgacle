@@ -68,78 +68,59 @@
 ;; This declaration only quiets the byte-compiler.
 (declare-function flyspell-mode-off "flyspell" ())
 
-;; `x-pointer-shape' and `x-sensitive-text-pointer-shape' exist only on
-;; X11 builds, where term/x-win.el defines them; see orgacle-core.el,
-;; which declares them for its own use.  A value-less `defvar' only
-;; informs the byte-compiler within the file it appears in -- it is not
-;; a real, session-wide declaration the way a `defvar' with a value is
-;; -- so `orgacle-quit', which sets both, needs its own copy here too.
-;; The `boundp' guard at the call site is what decides anything at
-;; runtime.
-(defvar x-pointer-shape)
-(defvar x-sensitive-text-pointer-shape)
-
 ;; functions
 
 (defun orgacle-quit ()
   "Quit the current presentation.
 Safe to call when no presentation is running, and safe to call twice:
 every step is guarded on the thing it acts on actually existing, and
-the user's Org-mode variables and display-table slot are restored in
-an `unwind-protect' cleanup so a failure earlier in this function
-still restores them."
+the user's Org-mode variables, display-table slot, `tooltip-mode'
+setting and X pointer state are restored in an `unwind-protect' cleanup
+so a failure earlier in this function still restores them.  That same
+cleanup discards `orgacle--session' unconditionally, so a failure
+partway through this function still leaves no session behind for the
+next `orgacle-run' to inherit stale state from -- for example a
+narrowed `org-restriction' slot."
   (interactive)
-  (unwind-protect
-      (progn
-        (run-hooks 'orgacle-stop-presentation-hook)
-        (org-clear-latex-preview)
-        (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
-        (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh)
-        (when (string= "Orgacle" (frame-parameter nil 'title))
-          (delete-frame (selected-frame)))
-        (when orgacle--org-file
-          (let ((buf (get-file-buffer orgacle--org-file)))
-            (when buf (kill-buffer buf)))
-          (when (file-exists-p orgacle--org-file)
-            (delete-file orgacle--org-file))
-          (setq orgacle--org-file nil))
-        (when orgacle--org-buffer
-          (set-buffer orgacle--org-buffer)
-          (org-mode)
-          (if orgacle--org-restriction
-              (apply #'narrow-to-region orgacle--org-restriction)
-            (widen))
-          (hack-local-variables)
-          (setq orgacle--org-buffer nil
-                orgacle--org-restriction nil))
-        ;; delete all orgacle overlays
-        (orgacle-clean-overlays)
-        (orgacle-clean-fringe-overlays)
-        ;; reset mouse pointer shape and colour
-        (when (boundp 'x-pointer-shape)
-          (setq x-pointer-shape orgacle-user-x-pointer-shape)
-          (setq x-sensitive-text-pointer-shape
-                orgacle-user-x-sensitive-text-pointer-shape)
-          (setq void-text-area-pointer 'arrow)
-          (set-mouse-color (cdr (assoc 'mouse-color (frame-parameters)))))
-        ;; kill notes buffer and associated frame, if present
-        (when (bufferp orgacle-notes-buffer)
-          (let ((win (get-buffer-window orgacle-notes-buffer)))
-            (when win (delete-frame (window-frame win))))
-          (kill-buffer orgacle-notes-buffer)
-          (setq orgacle-notes-buffer nil)))
-    ;; restore the user's Org-mode variables, even if something above failed
-    (orgacle--restore-user-state)
-    ;; `standard-display-table' only exists once something has created
-    ;; it -- `orgacle-mode' does, when a presentation actually starts.
-    ;; Guard on that instead of unconditionally calling
-    ;; `set-display-table-slot': under byte-compilation, its first-ever
-    ;; call in a process evaluates a nil DISPLAY-TABLE argument before
-    ;; the autoloaded `disp-table.el' has a chance to auto-vivify the
-    ;; table, and signals `wrong-type-argument' instead.
-    (when (char-table-p standard-display-table)
-      (set-display-table-slot standard-display-table
-                              'selective-display orgacle-outline-ellipsis))))
+  (let ((session orgacle--session))
+    (unwind-protect
+        (progn
+          (run-hooks 'orgacle-stop-presentation-hook)
+          ;; guarded on SESSION like every other step here: with no
+          ;; presentation running, `M-x orgacle-quit' must not clear the
+          ;; LaTeX preview overlays of whatever ordinary Org buffer
+          ;; happens to be current
+          (when session (org-clear-latex-preview))
+          (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
+          (remove-hook 'org-babel-after-execute-hook 'orgacle-refresh t)
+          (when (and session (frame-live-p (orgacle--session-frame session)))
+            (delete-frame (orgacle--session-frame session)))
+          (when (and session (orgacle--session-org-file session))
+            (let ((buf (get-file-buffer (orgacle--session-org-file session))))
+              (when buf (kill-buffer buf)))
+            (when (file-exists-p (orgacle--session-org-file session))
+              (delete-file (orgacle--session-org-file session))))
+          (when (and session (orgacle--session-org-buffer session))
+            (set-buffer (orgacle--session-org-buffer session))
+            (org-mode)
+            (if (orgacle--session-org-restriction session)
+                (apply #'narrow-to-region (orgacle--session-org-restriction session))
+              (widen))
+            (hack-local-variables))
+          ;; delete all orgacle overlays
+          (orgacle-clean-overlays)
+          (orgacle-clean-fringe-overlays)
+          ;; kill notes buffer and associated frame, if present
+          (when (and session (bufferp (orgacle--session-notes-buffer session)))
+            (let ((win (get-buffer-window (orgacle--session-notes-buffer session))))
+              (when win (delete-frame (window-frame win))))
+            (kill-buffer (orgacle--session-notes-buffer session))))
+      ;; restore the user's Org-mode variables, tooltip setting,
+      ;; display-table slot and X pointer state, even if something above
+      ;; failed; see `orgacle--restore-user-state', which only touches the
+      ;; pointer when `orgacle--save-user-state' actually captured it
+      (orgacle--restore-user-state)
+      (setq orgacle--session nil))))
 
 (defvar orgacle-mode-map
   (let ((map (make-keymap)))
@@ -199,14 +180,15 @@ Each frame-level heading becomes a slide.  Navigate with
 \\{orgacle-mode-map}"
   ;; make Org-mode be as pretty as possible
   (add-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
-  ;; `orgacle--save-user-state' captures both the tracked variables and
-  ;; the outline-ellipsis display-table slot, and is a no-op when a save
-  ;; is already pending -- see its docstring -- which is what makes
-  ;; re-entering this mode without an intervening `orgacle-quit' safe.
-  ;; It also vivifies `standard-display-table' when necessary, so by the
-  ;; time control reaches the `set-display-table-slot' call below, the
-  ;; table is guaranteed to be a real char-table; this mirrors the
-  ;; `char-table-p' guard `orgacle-quit' uses on the way back.
+  ;; `orgacle--save-user-state' captures the tracked variables, the
+  ;; outline-ellipsis display-table slot and the tooltip-mode setting,
+  ;; and is a no-op when a save is already pending -- see its docstring
+  ;; -- which is what makes re-entering this mode without an
+  ;; intervening `orgacle-quit' safe.  It also vivifies
+  ;; `standard-display-table' when necessary, so by the time control
+  ;; reaches the `set-display-table-slot' call below, the table is
+  ;; guaranteed to be a real char-table; this mirrors the `char-table-p'
+  ;; guard `orgacle--restore-user-state' uses on the way back.
   (orgacle--save-user-state)
   (setq org-src-fontify-natively t)
   (setq org-fontify-quote-and-verse-blocks t)
@@ -214,7 +196,16 @@ Each frame-level heading becomes a slide.  Navigate with
   (set-display-table-slot standard-display-table 'selective-display [32])
   (setq org-pretty-entities t)
   (setq mode-line-format (orgacle-get-mode-line))
-  (add-hook 'org-babel-after-execute-hook 'orgacle-refresh)
+  ;; buffer-local (the final, non-nil LOCAL argument): `org-babel-after-execute-hook'
+  ;; is a global hook, and adding to it globally meant running a source
+  ;; block in any Org buffer whatsoever -- not just the one being
+  ;; presented -- rebuilt this session's slide vector out of that
+  ;; unrelated buffer, leaving markers pointing into the wrong buffer.
+  ;; A buffer-local addition also cannot outlive the buffer it was made
+  ;; in, so an abandoned presentation -- its frame killed without
+  ;; `orgacle-quit' -- does not leave `orgacle-refresh' wired into every
+  ;; future source-block execution for the rest of the Emacs session.
+  (add-hook 'org-babel-after-execute-hook 'orgacle-refresh nil t)
   (condition-case ex
       (let ((org-format-latex-options
              (plist-put (copy-tree org-format-latex-options)
@@ -222,7 +213,8 @@ Each frame-level heading becomes a slide.  Navigate with
         (org-latex-preview '(16)))
     (error
      (message "Unable to imagify latex [%s]" (error-message-string ex))))
-  (set-face-attribute 'default orgacle--frame :height orgacle-text-scale)
+  (set-face-attribute 'default (orgacle--session-frame (orgacle--session-ensure))
+                       :height orgacle-text-scale)
   ;; fontify the buffer
   (add-to-invisibility-spec '(orgacle-hide))
   ;; remove flyspell overlays
@@ -245,7 +237,7 @@ Each frame-level heading becomes a slide.  Navigate with
 				    'orgacle-hide)
 		       (deactivate-mark))))
   ;; reset the auxiliary window object
-  (setq orgacle-aux-window nil))
+  (setf (orgacle--session-aux-window (orgacle--session-ensure)) nil))
 
 (defvar orgacle-edit-map (let ((map (copy-keymap org-mode-map)))
                             (define-key map (kbd "C-c C-c") 'orgacle-refresh)
@@ -274,7 +266,11 @@ the display."
   (unless (eq major-mode 'orgacle-mode)
     (unless (eq major-mode 'org-mode)
       (error "Orgacle can only be used from Org Mode"))
-    (setq orgacle--org-buffer (current-buffer))
+    ;; a fresh session, not a mutated leftover one: a presentation whose
+    ;; frame was killed without going through `orgacle-quit' must not be
+    ;; able to leave this one inheriting its state
+    (setq orgacle--session (orgacle--session-create))
+    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
     ;; regenerate image previews
     (orgacle--link-preview-refresh)
     ;; To present narrowed region use temporary buffer
@@ -282,21 +278,44 @@ the display."
                    (< (point-max) (save-restriction (widen) (point-max))))
                (save-excursion (goto-char (point-min)) (org-at-heading-p)))
       (let ((title (nth 4 (org-heading-components))))
-        (setq orgacle--org-restriction (list (point-min) (point-max)))
+        (setf (orgacle--session-org-restriction orgacle--session)
+              (list (point-min) (point-max)))
         (require 'ox-org)
-        (setq orgacle--org-file (org-org-export-to-org nil 'subtree))
-        (find-file orgacle--org-file)
+        (setf (orgacle--session-org-file orgacle--session)
+              (org-org-export-to-org nil 'subtree))
+        (find-file (orgacle--session-org-file orgacle--session))
         (goto-char (point-min))
         (insert (format "#+Title: %s\n\n" title))))
     (setq orgacle-frame-level (orgacle-get-frame-level))
+    ;; build the slide vector navigation is index arithmetic over
+    (orgacle--start-slides)
+    ;; save the user's state before `orgacle--get-frame' sets the mouse
+    ;; pointer to the presentation's own shape: `orgacle--save-user-state'
+    ;; is a no-op once a save is already pending, so `orgacle-mode's own
+    ;; call below stays harmless, but the pointer capture inside this one
+    ;; has to happen before that mutation, not after it, to see the
+    ;; user's real prior setting rather than the presentation's own
+    (orgacle--save-user-state)
     (orgacle--get-frame)
     (orgacle-mode)
     (set-buffer-modified-p nil)
-    (setq orgacle-presentation-window (selected-window))
-    ;; set/unset tooltips
+    (setf (orgacle--session-presentation-window orgacle--session) (selected-window))
+    ;; set/unset tooltips; `orgacle-mode', called above, has already
+    ;; saved the user's prior setting via `orgacle--save-user-state'
     (tooltip-mode (if orgacle-tooltip-mode 1 -1))
     ;; create speaker notes
     (when orgacle-speaker-notes (orgacle-make-notes-buffer))
+    ;; display the first slide: `orgacle--start-slides' only builds the
+    ;; slide vector and resets the index and page number, it does not
+    ;; narrow the buffer or run the page hook, so without this call the
+    ;; buffer would stay unnarrowed with `orgacle-page-number' at 1 but
+    ;; nothing actually on display, and the first `orgacle-next-page'
+    ;; would compute (1+ 0) and jump straight to slide 2 -- slide 1
+    ;; would then be reachable only via `orgacle-top', `t' or `1'.
+    ;; Called after `orgacle-make-notes-buffer' so the page hook's
+    ;; `orgacle-position-notes' has a notes buffer to position when it
+    ;; fires as part of showing this first slide.
+    (orgacle-top)
     (run-hooks 'orgacle-start-presentation-hook)))
 
 ;;; Migration

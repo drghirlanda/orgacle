@@ -490,6 +490,93 @@ section 5.3.
 *Exit:* navigation tests cover nested, hidden, title-page and speaker-notes
 fixtures forwards and backwards; no unguarded X11 call remains.
 
+*Status: COMPLETE* (2026-08-13). =make clean && make all= exits 0, and CI is
+green on Emacs 29.4, 30.2 and snapshot
+(https://github.com/drghirlanda/orgacle/actions/runs/31687297731). The suite
+grew from 51 tests (the P2 baseline on this branch) to 83.
+
+The section 6 vector shipped as designed: =orgacle--session-slides=, a vector
+of markers built once by =orgacle--build-slides= and walked by index
+(=orgacle--session-index=), with =orgacle--goto-slide= as the one shared,
+clamping entry point behind =orgacle-top=, =orgacle-next-page=,
+=orgacle-previous-page= and =orgacle-jump-to-page=. This retired three real
+bug classes the old code carried, confirmed by reading it before deletion:
+=orgacle-jump-to-page= was =(orgacle-top)= followed by =(orgacle-next-page)=
+called =(1- num)= times, re-rendering and re-animating every intervening
+slide instead of just the one requested, an O(N) walk
+=orgacle-test-jump-is-direct= now pins at O(1) by counting page-hook
+invocations; the title-page skip was mutual recursion
+between =orgacle-current-page=, =orgacle-next-page= and =orgacle-previous-page=
+threading a =backward= or =skip= flag through each other (section 6: "four
+commits fought this"); and =orgacle-page-number= was a counter separately
+=cl-incf='d and =cl-decf='d alongside the actual outline position, free to
+drift out of sync with it, rather than a value derived from the index the way
+=orgacle--sync-page-number= derives it now. The speaker-notes buffer is
+repositioned by =orgacle--session-notes-markers=, a parallel vector recorded
+at construction time (Task 3), replacing a regexp search for the current
+heading's text that matched the *first* heading of that title in the buffer,
+silently showing the wrong slide's notes whenever two slides shared a title.
+
+=orgacle--session=, a =cl-defstruct= (=orgacle-core.el=), now holds the
+running presentation's entire lifetime state in ten slots -- =frame=,
+=org-buffer=, =org-restriction=, =org-file=, =slides=, =index=,
+=notes-buffer=, =notes-markers=, =aux-window=, =presentation-window= --
+replacing the loose =defvar= forms P2 still had. =orgacle-quit= finds its own
+presentation frame from the session's =frame= slot, checked with
+=frame-live-p=, rather than comparing the =title= parameter of whatever frame
+happened to be selected when =q= was pressed against the literal string
+"Orgacle", which is what P2's =orgacle-quit= still did. It now restores only
+what it actually saved -- X pointer shape,
+=x-sensitive-text-pointer-shape=, =void-text-area-pointer=, =tooltip-mode=, and
+the display-table's =selective-display= slot -- each guarded by the same
+=orgacle--saved-state= re-entrancy flag, rather than unconditionally
+overwriting them with the mode's own defaults when =orgacle-quit= is called
+with no presentation running. =*Orgacle Log*= records a timestamp, the
+presenter-facing (one-based) slide number, the failing page-hook member and
+the error, is wrapped in =ignore-errors= so the logger itself cannot abort the
+hook it is logging for, and is never displayed -- confirmed in a real frame
+this task: a deliberately failing hook member logged correctly while the
+slide stayed on screen and no window ever showed the log buffer. The mouse
+toggle (=m=) now actually alternates instead of only ever hiding, and
+=orgacle-internal-border-width= is wired into =make-frame='s initial parameter
+alist in place of the old hardcoded =75=, applied once at frame-creation time
+rather than via a later =set-frame-parameter= on an already-live frame -- a
+deliberate departure from this section's original proposal, chosen because
+applying it post-creation is exactly what commit =f9bc35e= did before it
+disturbed the fringe indicators and got reverted; baking it into frame
+creation avoids that failure mode entirely, at the cost of the value only
+taking effect on the next =orgacle-run=, which the docstring now says
+explicitly. Every X pointer-shape read or write in the package is guarded by
+=(boundp 'x-pointer-shape)=, confirmed both by a dedicated test that unbinds
+the X pointer constants and reloads the package (=orgacle-test-loads-without-x11=)
+and, this task, by CI itself: the first push of this branch failed identically
+on all three Emacs versions because =orgacle--get-frame= reset
+=orgacle-mouse-visible= to =t= *inside* that guard, so on GitHub Actions'
+headless runners -- where =x-pointer-shape= is genuinely unbound, unlike every
+local run in this phase -- the reset never ran; moved outside the guard,
+confirmed both ways locally, and CI went green on the next run.
+
+Verified in a real, rendered frame (Xvfb plus a window manager, driven with
+real key events, not =--batch=) rather than only in ERT, since batch Emacs
+cannot open a window and every phase before this one had only ever been
+checked that way: navigation forwards and backwards, the mode line, the mouse
+toggle (pointer shape variables checked directly, not just the bookkeeping
+variable), showing a file with =i=, the pointer/tooltip-mode/display-table
+restore on quit against sentinel values distinct from every default in the
+system, and the border width visibly taking effect. One outstanding gap
+surfaced this way that batch testing could not have shown: =orgacle-run= still
+never calls =orgacle-top= (or any equivalent), so immediately after running it
+the buffer is fully widened, not narrowed to the first slide -- on
+=present.org= this is masked by coincidence, since the file's front matter and
+first heading happen to render as a plausible-looking first screen, but
+scrolling from there reveals the rest of the outline underneath, and a second
+=orgacle-run= in the same buffer (after a =q= then re-run) shows it plainly,
+since point is left wherever the previous session's last navigation put it
+rather than being reset. Flagged by Task 2's review as pre-existing and out of
+scope for that task; still true, still out of scope for this one, and now
+confirmed with real-frame evidence rather than only inferred from reading the
+function.
+
 ** P4 — New capabilities
 
 The four features of section 8, each with tests for its state machine.

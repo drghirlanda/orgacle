@@ -1,0 +1,19 @@
+#+TITLE: Notes with TODO and tagged headings
+
+* First slide
+
+Visible text.
+
+** TODO Speaker notes
+
+TODO notes body.
+
+* Second slide
+
+** Speaker notes :notes:
+
+Tagged notes body.
+
+* Third slide
+
+No notes on this one.

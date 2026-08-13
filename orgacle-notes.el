@@ -15,57 +15,158 @@
 (require 'orgacle-core)
 
 (defun orgacle-position-notes ()
-  "Scroll the notes buffer to the notes for the current slide."
+  "Scroll the notes buffer to the notes for the current slide.
+Jumps straight to the marker at the session's index slot in its
+notes-markers slot -- the notes buffer's counterpart to the slides
+slot, built in the same order by `orgacle--build-notes-buffer' --
+instead of searching the notes buffer for the current heading's text,
+so two slides sharing a title each keep their own notes, and a title
+containing regexp syntax cannot send the search astray.  Does nothing,
+rather than signalling, when there is no notes buffer, or when the
+index slot is at or past the end of the notes-markers slot: the former
+covers a deck with no speaker notes at all, and the latter a marker
+vector left stale by `orgacle-refresh' rebuilding the slides slot
+without rebuilding the notes buffer."
   (interactive)
-  (when orgacle-notes-buffer
-    (let* ((current-heading (org-entry-get nil "ITEM"))
-           (find-me (concat "^\\*[ \t]+" (regexp-quote current-heading))))
-      (with-selected-window (get-buffer-window orgacle-notes-buffer t)
+  (let* ((session (orgacle--session-ensure))
+         (index (orgacle--session-index session))
+         (notes-buffer (orgacle--session-notes-buffer session))
+         (notes-markers (orgacle--session-notes-markers session)))
+    (when (and notes-buffer
+               (< index (length notes-markers)))
+      (let ((marker (aref notes-markers index)))
+        (with-selected-window (get-buffer-window notes-buffer t)
+          (widen)
+          (goto-char marker)
+          (org-narrow-to-subtree)
+          (recenter 0))))))
+
+(defun orgacle--collect-notes-segments ()
+  "Return this buffer's speaker notes as a list of per-slide strings.
+One element per slide in the session's slides slot, in order --
+already built by `orgacle--start-slides' by the time
+`orgacle--build-notes-buffer' calls this.  Each element is that
+slide's first-level heading line,
+followed by the body of its \"Speaker notes\" subtree when it has one.
+Iterating the fixed-length slide vector, rather than the whole buffer
+heading by heading, is also what keeps the last slide from being
+emitted twice: there is no off-by-one loop condition left to get
+wrong.  Returning one string per slide, rather than one string for the
+whole deck, is what lets `orgacle--build-notes-buffer' record each
+slide's marker at the moment its segment is inserted, instead of
+inferring slide boundaries from the assembled text afterwards.
+
+A candidate heading is confirmed with the same
+\\='(downcase (org-entry-get nil \"ITEM\"))\\=' test that
+`orgacle--slide-p', `orgacle-mode's hiding loop and
+`orgacle--speaker-word-count' all use, rather than a regexp matched
+against the raw heading line.  `org-entry-get's ITEM value has already
+had any TODO keyword, priority cookie and tags stripped, so a heading
+such as \"** TODO Speaker notes\" or \"** Speaker notes :notes:\" still
+matches here exactly like a plain \"** Speaker notes\" does; a raw-line
+regexp match would silently miss both, dropping their contents from the
+notes buffer entirely."
+  (let (segments (slides (orgacle--session-slides (orgacle--session-ensure))))
+    (save-excursion
+      (save-restriction
         (widen)
-        (goto-char (point-min))
-        (re-search-forward find-me)
-        (org-narrow-to-subtree)
-        (recenter 0)))))
+        (dotimes (i (length slides))
+          (goto-char (aref slides i))
+          (let* ((heading (org-entry-get nil "ITEM"))
+                 (subtree-end (save-excursion (org-end-of-subtree t t) (point)))
+                 (segment (concat "* " heading "\n"))
+                 (notes-pos nil))
+            (let ((case-fold-search nil))
+              (save-excursion
+                (while (and (not notes-pos)
+                            (re-search-forward "^\\*+[ \t]+" subtree-end t))
+                  (when (string= (downcase (or (org-entry-get nil "ITEM") ""))
+                                 "speaker notes")
+                    (setq notes-pos (point)))
+                  (end-of-line))))
+            (when notes-pos
+              (goto-char notes-pos)
+              (org-back-to-heading t)
+              (org-mark-subtree)
+              (setq segment
+                    (concat segment
+                            (buffer-substring (point) (mark))
+                            "\n"))
+              (deactivate-mark))
+            (push segment segments)))))
+    (nreverse segments)))
 
 (defun orgacle--collect-notes ()
   "Return this buffer's speaker notes as Org text.
-Each frame-level heading contributes a first-level heading, followed by
-the body of its \"Speaker notes\" subtree when it has one."
-  (let ((speaker-notes ""))
-    (save-excursion
+The concatenation of `orgacle--collect-notes-segments', which see for
+how each slide contributes its heading and \"Speaker notes\" body."
+  (apply #'concat (orgacle--collect-notes-segments)))
+
+(defun orgacle--build-notes-buffer ()
+  "Build the session's notes-buffer and notes-markers slots; return the buffer.
+Inserts each of `orgacle--collect-notes-segments' into a fresh buffer
+one at a time, recording that segment's marker in the notes-markers
+slot at the moment it is inserted -- so the marker sequence is never
+separately inferred by re-scanning the assembled text for lines that
+look like headings, which a stray line starting with a literal star
+and a space inside a speaker note's own body could otherwise miscount
+as an extra slide and misalign every marker after it.  Strips the
+\"Speaker notes\" heading lines themselves afterwards, keeping their
+bodies.  Reuses the window already showing the previous notes buffer,
+if any, so a live presentation's notes frame follows an
+`orgacle-refresh' rebuild instead of going blank.  Kills the previous
+notes buffer first.  Does not create a frame; see
+`orgacle-make-notes-buffer' for that.
+
+Narrows to the marker for the session's current index slot rather than
+unconditionally to `point-min' -- always the first slide's segment --
+so a rebuild triggered without an intervening navigation, such as
+`orgacle-refresh' (bound to r and g, run on exiting `orgacle-edit-text',
+and added to `org-babel-after-execute-hook', so it also fires on every
+`x' that runs a source block) leaves the notes screen on the slide the
+presenter is actually looking at instead of rewinding it to slide 1.
+This is a no-op for the initial build, where the index slot is 0: the
+first segment always starts at `point-min' anyway.  Falls back to
+`point-min' when the index slot is nil or past the end of the
+notes-markers slot, the same cases `orgacle-position-notes' guards
+against -- a fresh session before `orgacle--start-slides' has run, or a
+deck with no speaker notes segments at all."
+  (let* ((session (orgacle--session-ensure))
+         (segments (orgacle--collect-notes-segments))
+         (win (and (bufferp (orgacle--session-notes-buffer session))
+                   (get-buffer-window (orgacle--session-notes-buffer session) t))))
+    (if (bufferp (orgacle--session-notes-buffer session))
+        (kill-buffer (orgacle--session-notes-buffer session)))
+    (setf (orgacle--session-notes-buffer session)
+          (generate-new-buffer "*Orgacle Notes*"))
+    (with-current-buffer (orgacle--session-notes-buffer session)
+      (erase-buffer)
+      (org-mode)
+      (setf (orgacle--session-notes-markers session)
+            (vconcat
+             (mapcar (lambda (segment)
+                       (let ((start (point)))
+                         (insert segment)
+                         (copy-marker start t)))
+                     segments)))
       (goto-char (point-min))
-      (while (< (point) (point-max))
-        (org-next-visible-heading 1)
-        (let ((current-heading (org-entry-get nil "ITEM")))
-          (when (= (org-current-level) 1)
-            (setq speaker-notes
-                  (concat speaker-notes "* " current-heading "\n")))
-          (when (string= current-heading "Speaker notes")
-            (org-mark-subtree)
-            (setq speaker-notes
-                  (concat speaker-notes
-                          (buffer-substring (point) (mark))
-                          "\n"))))))
-    (deactivate-mark)
-    speaker-notes))
+      (while (re-search-forward "\\*\\* ?.* Speaker [nN]otes[ \t]*\n" nil t)
+        (replace-match ""))
+      (let ((index (orgacle--session-index session))
+            (markers (orgacle--session-notes-markers session)))
+        (goto-char (if (and index (< index (length markers)))
+                       (aref markers index)
+                     (point-min))))
+      (org-narrow-to-subtree))
+    (when win (set-window-buffer win (orgacle--session-notes-buffer session)))
+    (orgacle--session-notes-buffer session)))
 
 (defun orgacle-make-notes-buffer ()
   "Collect speaker notes into a buffer and show it in a new frame."
   (interactive)
-  (let ((notes (orgacle--collect-notes)))
-    (if (bufferp orgacle-notes-buffer)
-        (kill-buffer orgacle-notes-buffer))
-    (setq orgacle-notes-buffer (generate-new-buffer "*Orgacle Notes*"))
-    (with-current-buffer orgacle-notes-buffer
-      (erase-buffer)
-      (org-mode)
-      (insert notes)
-      (goto-char (point-min))
-      (while (re-search-forward "\\*\\* ?.* Speaker [nN]otes[ \t]*\n" nil t)
-        (replace-match ""))
-      (goto-char (point-min))
-      (org-narrow-to-subtree))
-    (switch-to-buffer-other-frame orgacle-notes-buffer)))
+  (orgacle--build-notes-buffer)
+  (switch-to-buffer-other-frame
+   (orgacle--session-notes-buffer (orgacle--session-ensure))))
 
 (defun orgacle--speaker-word-count ()
   "Return the number of words in this buffer's speaker-notes subtrees."

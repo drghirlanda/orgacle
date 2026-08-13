@@ -1,0 +1,17 @@
+#+TITLE: Notes with a heading-like line in an example block
+
+* One
+
+** Speaker notes
+
+#+begin_example
+* not a heading
+#+end_example
+
+One's real notes.
+
+* Two
+
+** Speaker notes
+
+Two's real notes.
