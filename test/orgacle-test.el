@@ -170,6 +170,31 @@ is correct here."
       (should (string-match-p "\\* Third slide" notes))
       (should-not (string-match-p "\\* Third slide\n\\* Third slide" notes)))))
 
+(ert-deftest orgacle-test-collect-notes-includes-a-todo-marked-heading ()
+  "A TODO-marked \"Speaker notes\" heading still reaches the notes buffer.
+
+`org-entry-get's ITEM value strips the TODO keyword, so
+\"** TODO Speaker notes\" is exactly what `orgacle--slide-p',
+`orgacle-mode's hiding loop and `orgacle--speaker-word-count' already
+treat as a speaker-notes heading; before this fix
+`orgacle--collect-notes-segments' instead matched the raw heading line
+against a literal regexp, which \"** TODO Speaker notes\" never
+matches, so its body was silently dropped from the notes buffer."
+  (orgacle-test-with-fixture "notes-todo-tag.org"
+    (orgacle--start-slides)
+    (should (string-match-p "TODO notes body" (orgacle--collect-notes)))))
+
+(ert-deftest orgacle-test-collect-notes-includes-a-tagged-heading ()
+  "A tagged \"Speaker notes\" heading still reaches the notes buffer.
+
+Same defect as the TODO-marked case, for a heading of the form
+\"** Speaker notes :notes:\": `org-entry-get's ITEM value strips the
+tags too, so the fixed regexp-free scan matches it, where the old
+raw-line regexp did not."
+  (orgacle-test-with-fixture "notes-todo-tag.org"
+    (orgacle--start-slides)
+    (should (string-match-p "Tagged notes body" (orgacle--collect-notes)))))
+
 ;;; Notes by index
 
 (defmacro orgacle-test-with-notes-buffer (&rest body)
@@ -336,6 +361,39 @@ stale vector is still long enough for the guard in
       ;; what re-triggers `orgacle-position-notes' via the page hook
       (orgacle-jump-to-page (1+ (orgacle--session-index (orgacle--session-ensure))))
       (should (equal "Beta" (org-entry-get nil "ITEM")))
+      (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
+        (should (string-match-p "Beta notes" (buffer-string)))
+        (should-not (string-match-p "Alpha notes\\|Gamma notes"
+                                     (buffer-string)))))))
+
+(ert-deftest orgacle-test-refresh-without-navigating-keeps-the-current-slides-notes ()
+  "Refreshing alone, with no navigation afterwards, does not rewind the
+notes screen to slide 1.
+
+`orgacle--build-notes-buffer' used to always narrow the rebuilt notes
+buffer to `point-min' -- the first slide's segment -- regardless of
+which slide was actually current, and `orgacle-refresh' does not run
+the page hook itself, so nothing put the notes screen back.  This fires
+on r, on g, on exiting `orgacle-edit-text', and -- through the global
+`org-babel-after-execute-hook' -- on every `x' that runs a source
+block, which is routine mid-talk: the presenter is left looking at
+\"Beta\" while their second screen silently shows \"Alpha\" again.
+`orgacle-test-refresh-rebuilds-the-notes-buffer' above misses this
+because it calls `orgacle-jump-to-page' after refreshing, which
+re-triggers `orgacle-position-notes' via the page hook and papers over
+exactly this bug; this test refreshes and stops there."
+  (orgacle-test-with-fixture "notes-refresh.org"
+    (orgacle--start-slides)
+    (orgacle-test-with-notes-buffer
+      (orgacle-top)
+      (orgacle-next-page)                ; "Beta", the second slide
+      (should (equal "Beta" (org-entry-get nil "ITEM")))
+      (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
+        (should (string-match-p "Beta notes" (buffer-string))))
+      (orgacle-refresh)
+      ;; no navigation after refresh -- still on "Beta"
+      (should (equal "Beta" (org-entry-get nil "ITEM")))
+      (should (= 1 (orgacle--session-index (orgacle--session-ensure))))
       (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
         (should (string-match-p "Beta notes" (buffer-string)))
         (should-not (string-match-p "Alpha notes\\|Gamma notes"
