@@ -925,6 +925,28 @@ slide to show."
     (should (progn (orgacle-jump-to-page 5) t))
     (should (= 0 orgacle-page-number))))
 
+(ert-deftest orgacle-test-nav-commands-tolerate-a-fresh-sessions-nil-arithmetic ()
+  "`orgacle-next-page', `orgacle-previous-page' and `orgacle-jump-to-page'
+all survive a session whose index slot was never set by
+`orgacle--start-slides'.  Reachable via `M-x orgacle-next-page' with no
+presentation running -- `orgacle--session-ensure' auto-vivifies a fresh
+session on demand -- or after `orgacle-quit' has set `orgacle--session'
+back to nil.  Before the struct gave the index slot a default of 0,
+`(1+ (orgacle--session-index ...))' and its `1-' counterpart were
+`(1+ nil)' and `(1- nil)', both `wrong-type-argument' signals;
+`orgacle-jump-to-page' was already immune because it computes from its
+own argument, not the index slot, which is why it is included here
+only to confirm it stays that way."
+  (unwind-protect
+      (progn
+        (setq orgacle--session nil)
+        (should (progn (orgacle-next-page) t))
+        (setq orgacle--session nil)
+        (should (progn (orgacle-previous-page) t))
+        (setq orgacle--session nil)
+        (should (progn (orgacle-jump-to-page 1) t)))
+    (setq orgacle--session nil)))
+
 (ert-deftest orgacle-test-refresh-rebuilds-the-slide-vector ()
   "Editing the outline during a presentation and refreshing keeps
 navigation honest: no ORGACLE_HIDE heading is ever the current

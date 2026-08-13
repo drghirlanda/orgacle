@@ -216,9 +216,19 @@ temporary file used for a narrowed presentation, the slide vector and
 the index into it, the speaker-notes buffer and its marker vector, and
 the auxiliary and presentation windows.  `orgacle--session-ensure' is
 almost always the right way to reach a slot; see its docstring for
-why."
+why.
+
+The index slot defaults to 0, not nil: `orgacle-next-page' and
+`orgacle-previous-page' do arithmetic directly on this slot -- (1+
+...) and (1- ...) -- before `orgacle--start-slides' has necessarily
+run, for example when a fresh session is auto-vivified by
+`orgacle--session-ensure' on `M-x orgacle-next-page' with nothing
+running, or after `orgacle-quit' set `orgacle--session' back to nil.
+Leaving the slot without a default made that arithmetic (1+ nil),
+which signals `wrong-type-argument'; `orgacle-jump-to-page' was immune
+only because it computes from its own argument instead of this slot."
   frame org-buffer org-restriction org-file
-  slides index notes-buffer notes-markers
+  slides (index 0) notes-buffer notes-markers
   aux-window presentation-window)
 
 (defvar orgacle--session nil
