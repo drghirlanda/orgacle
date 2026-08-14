@@ -743,51 +743,121 @@ just because `org-src-mode-hook' fires the same way either way."
       (setq orgacle--session nil)
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
-(ert-deftest orgacle-test-refresh-keeps-trailing-speaker-notes-hidden ()
-  "Not part of P4 Task 6's brief; found while verifying Step 4 live
-under Xvfb (the fix above made it visible on screen: after editing a
-source block inside a slide's own \"Speaker notes\" subtree and
-exiting, that subtree stayed on screen for the audience instead of
-going back into hiding) and confirmed to be pre-existing, not
-introduced by that fix: plain `r'/`g' \(bound directly to
-`orgacle-refresh', with no source-block editing involved at all\)
-reproduce it identically, and so, already, does `x'
-\(`org-babel-execute-src-block', wired to the same function via
-`org-babel-after-execute-hook'\).
+(ert-deftest orgacle-test-src-edit-abort-does-not-move-point ()
+  "\"Also fix\" (fix round 1): `org-edit-src-abort' -- discards the
+edit, does not write it back -- is itself just `(let (org-src--allow-write-back)
+(org-edit-src-exit))', so the advice below fires on an aborted edit
+too, not only a real one; confirmed directly by tracing
+`org-edit-src-abort''s own definition in org-src.el.  Not fixed
+further, and not a problem after the C1/C2 fix in `orgacle-refresh'
+\(orgacle-fontify.el\): an aborted edit changes nothing in the buffer,
+so `(point-min)' and the just-recomputed current slide's own marker
+still coincide exactly the way they did before the abort, taking the
+\"same slide\" branch -- no `widen', no `goto-char', no page hook,
+same as any other no-op refresh.  Pinned directly: aborting an edit
+that inserted new text leaves that text discarded \(ordinary
+`org-edit-src-abort' behaviour, not this fix's own concern\) *and*
+point exactly where it was before entering the edit buffer at all."
+  (let ((buf (generate-new-buffer "orgacle-test-src-edit-abort")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "#+TITLE: Test\n\n* Slide One\n"
+                  "#+begin_src emacs-lisp\n(+ 1 1)\n#+end_src\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (re-search-forward "(\\+ 1 1)")
+          (beginning-of-line)
+          (let ((before (point)))
+            (org-edit-src-code)
+            (insert "should be discarded")
+            (org-edit-src-abort)
+            (should (= before (point)))
+            (save-restriction (widen)
+              (should-not (string-match-p "should be discarded" (buffer-string))))))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
 
-Narrower than first suspected, and corrected here after reproducing
-both sides directly rather than trusting the first, broader read: this
-does *not* happen for every slide with speaker notes.  It needs the
-\"Speaker notes\" heading to be the very last heading in the whole
-presentation buffer -- see the companion test just below, which pins
-the ordinary case \(another heading anywhere after it, even just a
-sibling subheading on the same slide\) as unaffected.  Root cause,
-traced by comparing the two cases' overlay bounds directly: the hiding
-loop in `orgacle-mode's entry builds this overlay as `(make-overlay
-(point) (- (mark) 1))', trimming one character to leave a separating
-newline visible before whatever comes next -- but when nothing does,
-that trim lands the overlay's end one character short of the current
-slide's own narrowed `(point-max)', rather than exactly matching it
-the way it does when a following heading is what bounded the subtree
-in the first place.  `orgacle-clean-overlays', which `orgacle-refresh'
-calls on every source-block execution, on `r' and `g', and now also on
-exiting `e' editing, keeps an overlay only when it starts at or before
-the narrowed region's `point-min' or ends at or after its `point-max';
-an overlay one character short of that fails the test and is deleted,
-with nothing to rebuild it afterward, since the hiding loop that
-created it runs only once, at `orgacle-mode' entry.
+;; P4 Task 6 fix round 1, Critical 3: the boundary claimed below and in
+;; the two tests after it was wrong, in the direction that under-warns
+;; users about a private-notes leak -- corrected here after the review
+;; reproduced all four cases directly and found a case this file's own
+;; first draft had wrongly called safe.  The true predicate, re-derived
+;; from comparing overlay bounds against the current slide's own
+;; `point-max' in all four cases side by side (not merely reasoned
+;; about): the hiding loop's overlay for a \"Speaker notes\" \(or
+;; ORGACLE_HIDE, or \"Title page\"\) subtree survives `orgacle-refresh's
+;; sweep only when that heading is truly the *last* heading anywhere
+;; within its own top-level slide -- no sibling subheading after it,
+;; not even one with nothing in it -- *and* another top-level slide
+;; heading immediately follows with nothing else between them.  Any
+;; sibling subheading after \"Speaker notes\", within the same slide,
+;; breaks the coincidence that keeps the overlay alive even when a
+;; following slide exists (case D below), and having nothing follow at
+;; all -- the deck's actual last slide -- also fails it (case A).  The
+;; four tests below pin all four cells of this directly: A and C were
+;; already known to leak; D is the one this file's own first version
+;; wrongly called safe; B is the one genuine exception.  The README's
+;; "add a trailing heading" workaround from that first version is
+;; wrong for the same reason D leaks: a trailing *subheading* does not
+;; help, only a trailing top-level slide heading with nothing else
+;; after "Speaker notes" does -- corrected there too.
 
-Marked as an expected failure rather than fixed here: the fix belongs
-with whichever future task actually owns `orgacle-refresh'\='s overlay
-bookkeeping, and needs either tagging this overlay so
-`orgacle-clean-overlays' can skip it, extending the trim to also cover
-the append-with-nothing-following case, or extracting `orgacle-mode's
-hiding loop into something `orgacle-refresh' can also call -- either
-way, more than this task's Step 4 was scoped to touch.  Should this
-test ever start passing, that is itself the signal the underlying
-defect has been fixed; the marker should come off then, not before."
-  :expected-result :failed
-  (let ((buf (generate-new-buffer "orgacle-test-refresh-notes-visibility")))
+(define-error 'orgacle-test-known-notes-leak
+  "known pre-existing speaker-notes leak (P4 Task 6 fix round 1, C3)")
+
+(defun orgacle-test--known-notes-leak-p (result)
+  "Non-nil when RESULT is exactly `orgacle-test-known-notes-leak',
+signalled deliberately below, rather than some other, unrelated
+failure -- I5 (fix round 1).  Used as an `:expected-result' predicate
+on the three cases below expected to leak, so `make test' still
+reports an unrelated regression in one of them as a genuine unexpected
+failure instead of silently absorbing it the way a bare `:expected-result
+:failed' does.  Confirmed directly, by mutation, before adopting this:
+injecting `(error \"unrelated\")' as a test's very first form used to
+leave `make test' reporting \"1 expected failure\" and exiting 0 for
+that test regardless -- the exact gap the review found in this file's
+first version of these three tests, and the reason C3's own wrong
+boundary went unnoticed here in the first place.  With this predicate
+in place, the same injected error instead reports as unexpected and
+`make test' exits non-zero; confirmed directly that the genuine
+symptom -- patched, via a scratch check with the overlay's own trim
+extended by one -- still reports as the expected pass it always did."
+  (and (ert-test-failed-p result)
+       (eq (car (ert-test-result-with-condition-condition result))
+           'orgacle-test-known-notes-leak)))
+
+(defun orgacle-test--assert-speaker-notes-hidden-or-signal-leak ()
+  "Signal `orgacle-test-known-notes-leak' if \"Speaker notes\" is
+exposed at point-min's own search, otherwise return normally.  Shared
+by the three cases below expected to leak, so each test's own body
+stays a plain reproduction script, not a copy of this check three
+times over."
+  (let ((invisible (save-excursion
+                      (goto-char (point-min))
+                      (re-search-forward "Speaker notes")
+                      (get-char-property (match-beginning 0) 'invisible))))
+    (unless (eq 'orgacle-hide invisible)
+      (signal 'orgacle-test-known-notes-leak
+              (list (format "Speaker notes exposed after refresh (invisible=%S)"
+                             invisible))))))
+
+(ert-deftest orgacle-test-refresh-exposes-speaker-notes-as-the-decks-last-heading ()
+  "Case A: \"Speaker notes\" is the last heading in the whole buffer.
+Not part of P4 Task 6's brief; found while verifying Step 4 live under
+Xvfb, confirmed pre-existing (plain `r'/`g', with no source-block
+editing at all, reproduce it identically, and so does `x' via
+`org-babel-after-execute-hook'), and not fixed here -- see the
+`;;;' comment above this test for the general predicate, re-derived
+after the review caught this file's first version calling the
+predicate narrower than it actually is.  Marked as an expected
+failure: the fix belongs with whichever future task owns
+`orgacle-refresh's overlay bookkeeping; should this test start
+passing on its own, that is the signal the defect is fixed, and the
+marker should come off then, not before."
+  :expected-result '(satisfies orgacle-test--known-notes-leak-p)
+  (let ((buf (generate-new-buffer "orgacle-test-refresh-notes-visibility-a")))
     (unwind-protect
         (with-current-buffer buf
           (insert "#+TITLE: Test\n\n* Slide One\nVisible body.\n"
@@ -797,26 +867,23 @@ defect has been fixed; the marker should come off then, not before."
           (orgacle--start-slides)
           (orgacle-top)
           (orgacle-refresh)
-          (should (eq 'orgacle-hide
-                      (save-excursion
-                        (goto-char (point-min))
-                        (re-search-forward "Speaker notes")
-                        (get-char-property (match-beginning 0) 'invisible)))))
+          (orgacle-test--assert-speaker-notes-hidden-or-signal-leak))
       (orgacle-quit)
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
-(ert-deftest orgacle-test-refresh-keeps-speaker-notes-hidden-when-something-follows ()
-  "The companion case to the expected failure just above, pinned as a
-genuine pass rather than asserted in that test's docstring alone:
-when the \"Speaker notes\" heading is *not* the last heading in the
-buffer -- here, a second top-level slide follows it -- its hiding
-overlay's end already coincides with the current slide's own narrowed
-`point-max' without needing the docstring's \"-1\" trim to make up the
-difference, so `orgacle-clean-overlays' keeps it and `orgacle-refresh'
-does not expose it.  This is what makes the previous test's failure a
-boundary case rather than the general rule; both were reproduced
-together, side by side, before either was written up."
-  (let ((buf (generate-new-buffer "orgacle-test-refresh-notes-visibility-2")))
+(ert-deftest orgacle-test-refresh-keeps-speaker-notes-hidden-when-nothing-else-intervenes ()
+  "Case B, the one genuine exception: \"Speaker notes\" is the last
+heading in its slide, and another top-level slide heading immediately
+follows with nothing else between them.  Here the hiding overlay's end
+already coincides with the current slide's own narrowed `point-max'
+without needing the hiding loop's own \"-1\" trim \(meant to leave a
+separating newline visible\) to make up any difference, so
+`orgacle-clean-overlays' keeps it and `orgacle-refresh' does not
+expose it.  Pinned as a genuine pass, not merely asserted in prose,
+precisely because case D below looks superficially similar --
+\"another slide follows\" -- and does not stay hidden; the only
+difference is the sibling subheading after \"Speaker notes\" in D."
+  (let ((buf (generate-new-buffer "orgacle-test-refresh-notes-visibility-b")))
     (unwind-protect
         (with-current-buffer buf
           (insert "#+TITLE: Test\n\n* Slide One\nVisible body.\n"
@@ -831,6 +898,223 @@ together, side by side, before either was written up."
                         (goto-char (point-min))
                         (re-search-forward "Speaker notes")
                         (get-char-property (match-beginning 0) 'invisible)))))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest orgacle-test-refresh-exposes-speaker-notes-followed-by-a-sibling-subheading ()
+  "Case C: \"Speaker notes\" is followed by another subheading within
+the same slide, and that slide is the deck's last.  Expected to leak
+for the same underlying reason as case A -- nothing bounds the hiding
+loop's own `(- (mark) 1)' trim at exactly the current slide's
+`point-max' -- confirmed directly, not merely inferred from A, before
+writing this test: the overlay's own end is identical to case A's,
+one character short of `point-min' 's own subtree end in both, only
+`point-max' itself differs \(much larger here, since the slide now
+also contains \"Another sub\"\)."
+  :expected-result '(satisfies orgacle-test--known-notes-leak-p)
+  (let ((buf (generate-new-buffer "orgacle-test-refresh-notes-visibility-c")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "#+TITLE: Test\n\n* Slide One\nVisible body.\n"
+                  "** Speaker notes\nSecret notes.\n** Another sub\nMore.\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (orgacle-refresh)
+          (orgacle-test--assert-speaker-notes-hidden-or-signal-leak))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest orgacle-test-refresh-exposes-speaker-notes-followed-by-a-sibling-then-another-slide ()
+  "Case D: \"Speaker notes\" is followed by a sibling subheading, and
+*that* slide is followed by another one.  This file's own first
+version wrongly asserted this case was safe, reasoning by analogy from
+case B \(\"another slide follows\"\) without reproducing it directly --
+caught by review, not by this file's own earlier testing.
+
+Reproduced directly before writing this corrected version, comparing
+raw overlay bounds against case C: the hiding loop's `org-mark-subtree'
+call for \"Speaker notes\" stops at its own next sibling, \"** Another
+sub\" -- not at the far-away \"* Slide Two\" -- so the trim lands
+exactly where it does in case C, one character short of `point-max';
+whether a slide follows the *current* one has no bearing on where
+\"Speaker notes\"' own subtree boundary falls.  Confirmed both the
+overlay's end and `point-max' itself are numerically identical between
+C and D \(`point-max' is Slide One's own narrowed boundary in both
+cases, unaffected by whatever comes after Slide One ends\) -- this is
+what makes it a shared root cause with case C, not merely a similar
+symptom."
+  :expected-result '(satisfies orgacle-test--known-notes-leak-p)
+  (let ((buf (generate-new-buffer "orgacle-test-refresh-notes-visibility-d")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "#+TITLE: Test\n\n* Slide One\nVisible body.\n"
+                  "** Speaker notes\nSecret notes.\n** Another sub\nMore.\n\n"
+                  "* Slide Two\nOther body.\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (orgacle-refresh)
+          (orgacle-test--assert-speaker-notes-hidden-or-signal-leak))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+;;; Fix round 1 (Task 6 review): orgacle-refresh only transitions when
+;;; the slide actually changed
+
+(ert-deftest orgacle-test-refresh-does-not-move-point-when-the-slide-is-unchanged ()
+  "C1 (Critical, fix round 1).  Running a source block via `x' fires
+`orgacle-refresh' through `org-babel-after-execute-hook', and the
+unconditional `(widen) (goto-char ...) (org-narrow-to-subtree)' added
+for Step 2 snapped point back to the *heading* every time, even though
+the block's own execution never changes which slide is current.
+Reproduced directly against the unfixed code with exactly this
+sequence -- `c' to block 1, `x', `c' -- before deciding on a fix:
+point after `x' landed on \"* Slide One\" instead of staying on block
+1, and the second `c' then moved to block 1 again instead of block 2,
+because `orgacle-next-src-block' starts searching from wherever point
+now is.  On a real slide this also means `x' snaps `window-start' back
+to the heading, destroying the presenter's scroll position.
+
+Pins the fix directly: `c', `x' \(twice\), asserting each `c' lands on
+the *other* block's body text, not merely that point differs from the
+heading."
+  (let ((buf (generate-new-buffer "orgacle-test-cxcx")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "#+TITLE: T\n\n* Slide One\n"
+                  "#+begin_src emacs-lisp\n(+ 1 1)\n#+end_src\n\n"
+                  "#+begin_src emacs-lisp\n(+ 4 5)\n#+end_src\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (orgacle-next-src-block)
+          (should (equal "(+ 1 1)"
+                          (save-excursion (forward-line 1)
+                                           (buffer-substring (line-beginning-position)
+                                                              (line-end-position)))))
+          (let ((org-confirm-babel-evaluate nil)) (org-babel-execute-src-block))
+          (orgacle-next-src-block)
+          (should (equal "(+ 4 5)"
+                          (save-excursion (forward-line 1)
+                                           (buffer-substring (line-beginning-position)
+                                                              (line-end-position)))))
+          (let ((org-confirm-babel-evaluate nil)) (org-babel-execute-src-block))
+          (save-restriction (widen)
+            (should (string-match-p "^: 2$" (buffer-string)))
+            (should (string-match-p "^: 9$" (buffer-string)))))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest orgacle-test-refresh-resets-appearance-when-the-slide-changes ()
+  "C2 (Critical, fix round 1).  When `orgacle-refresh' *does* land on a
+different slide -- the heading it was narrowed to got deleted, exactly
+Step 2's own scenario -- the transition must be a real one: the
+outgoing slide's per-slide appearance must not survive onto the
+incoming slide.  Reproduced directly against the fix-round-0 code
+\(re-narrow only, no page hook\) before deciding a fix was needed: after
+deleting slide A and refreshing, the view was slide B but
+`face-remapping-alist' still carried slide A's `ORGACLE_TEXT_SCALE'
+remapping, because `orgacle--apply-appearance' -- a `orgacle-page-hook'
+member -- never ran."
+  (let ((buf (generate-new-buffer "orgacle-test-refresh-appearance")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "#+TITLE: T\n\n* Slide A\n:PROPERTIES:\n:ORGACLE_TEXT_SCALE: 2.0\n:END:\n"
+                  "Body A.\n\n* Slide B\nBody B.\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (should (alist-get 'default face-remapping-alist))
+          (widen)
+          (goto-char (point-min))
+          (re-search-forward "^\\* Slide A")
+          (org-back-to-heading)
+          (let ((beg (point))) (org-end-of-subtree t t) (delete-region beg (point)))
+          (goto-char (point-min))
+          (re-search-forward "^\\* Slide B")
+          (orgacle-refresh)
+          (should (equal "Slide B" (org-entry-get nil "ITEM")))
+          (should-not (alist-get 'default face-remapping-alist)))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest orgacle-test-refresh-clears-the-aux-window-when-the-slide-changes ()
+  "C2's aux-window claim, pinned directly.  `orgacle-current-page' --
+which the fix now calls when, and only when, the slide actually
+changes -- clears the aux-window slot as its own first act; before the
+fix, a refresh that changed slides never called it at all, leaving a
+stale aux-window slot (and, live, its split window) on screen for a
+slide that never asked for one.  `delete-window' stubbed to record its
+argument rather than actually deleting the buffer's sole real window."
+  (let ((buf (generate-new-buffer "orgacle-test-refresh-aux-window"))
+        (deleted 'not-called))
+    (unwind-protect
+        (cl-letf (((symbol-function 'delete-window) (lambda (&optional w) (setq deleted w))))
+          (with-current-buffer buf
+            (insert "#+TITLE: T\n\n* Slide A\nBody A.\n\n* Slide B\nBody B.\n")
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-mode)
+            (orgacle--start-slides)
+            (orgacle-top)
+            (setf (orgacle--session-aux-window (orgacle--session-ensure)) (selected-window))
+            (widen)
+            (goto-char (point-min))
+            (re-search-forward "^\\* Slide A")
+            (org-back-to-heading)
+            (let ((beg (point))) (org-end-of-subtree t t) (delete-region beg (point)))
+            (goto-char (point-min))
+            (re-search-forward "^\\* Slide B")
+            (orgacle-refresh)
+            (should (eq deleted (selected-window)))
+            (should-not (orgacle--session-aux-window (orgacle--session-ensure)))))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest orgacle-test-refresh-repositions-notes-when-the-slide-changes ()
+  "C2's notes claim, checked directly -- and found not to reproduce as
+its own, separate defect, unlike the appearance and aux-window claims
+next to it in the same review comment.  This test passes against both
+the fix-round-0 code (unconditional re-narrow, no page hook) and the
+code before that (no re-narrow at all): `orgacle--build-notes-buffer',
+which `orgacle-refresh' already called unconditionally before this fix
+round, always rebuilds the notes buffer from scratch and narrows it to
+whichever segment the session's just-recomputed index slot names --
+independent of whether `orgacle-position-notes' \(a `orgacle-page-hook'
+member, reachable only through `orgacle-current-page') runs at all.
+Kept as a regression guard for the same user-visible behaviour the
+review's notes claim describes, since the fix now does make
+`orgacle-position-notes' run whenever the slide actually changes, but
+its own docstring should not claim to pin a defect this test could not
+have caught."
+  (let ((buf (generate-new-buffer "orgacle-test-refresh-notes-reposition")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "#+TITLE: T\n\n* Slide A\nBody A.\n** Speaker notes\nNotes for A.\n\n"
+                  "* Slide B\nBody B.\n** Speaker notes\nNotes for B.\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (orgacle--build-notes-buffer)
+          (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
+            (should (string-match-p "Notes for A" (buffer-string))))
+          (widen)
+          (goto-char (point-min))
+          (re-search-forward "^\\* Slide A")
+          (org-back-to-heading)
+          (let ((beg (point))) (org-end-of-subtree t t) (delete-region beg (point)))
+          (goto-char (point-min))
+          (re-search-forward "^\\* Slide B")
+          (orgacle-refresh)
+          (should (equal "Slide B" (org-entry-get nil "ITEM")))
+          (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
+            (should (string-match-p "Notes for B" (buffer-string)))
+            (should-not (string-match-p "Notes for A" (buffer-string)))))
       (orgacle-quit)
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
@@ -3245,23 +3529,57 @@ abandoned the same way, unreachable the moment `orgacle--session'
 points at the fresh struct.  This test pins the frame; the three below
 pin buffer mode, notes buffer and temp file.
 
-Simulates a live frame the same way
-`orgacle-test-get-frame-sets-fringe-only-on-its-own-frame' does:
-`orgacle--get-frame' fully stubbed to seed the session's frame slot
-with batch's one real, live frame rather than calling `make-frame'
-\(which fails in batch\), and `delete-frame' stubbed to record its
-argument rather than actually deleting the sole frame batch Emacs runs
-in.  `yes-or-no-p' stubbed to confirm: with the frame genuinely live,
-the new confirmation gate would otherwise block on stdin -- see
-`orgacle-test-run-declining-confirmation-leaves-the-previous-session-untouched'
-for the decline path, pinned separately."
+Seeds the session's frame slot with `(selected-frame)' during setup,
+the same way `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
+does, so `orgacle-mode''s own `set-face-attribute' call has a real
+frame to work with -- then, once session A's own setup has completed
+and before session B ever runs, swaps that slot for a unique,
+uninterned sentinel symbol instead.  I5 (fix round 1): a version of
+this test that leaves `(selected-frame)' in the slot throughout cannot
+tell \"`orgacle-quit' deleted the session's own frame\" apart from
+\"`orgacle-quit' deleted whatever frame happened to be selected\",
+since in batch, with exactly one real frame, those are the same
+object -- confirmed directly, by mutation, that a version of
+`orgacle-quit' rewritten to call `(delete-frame (selected-frame))'
+instead of `(delete-frame (orgacle--session-frame session))' still
+passed a `(selected-frame)'-throughout version of this test.  The
+sentinel is swapped in only *after* A's own `orgacle-mode' has already
+run, so nothing else in this test's own setup ever hands it to a real
+frame-consuming call the way `set-face-attribute' would if the
+sentinel were there from the start; `frame-live-p' is stubbed to
+recognize it specifically and delegate to the real function for
+anything else, since `orgacle-quit''s own guard on `frame-live-p' still
+has to see it as live to proceed to `delete-frame' at all.  With the
+sentinel in place, the same mutation now fails this test: `deleted'
+ends up `eq' to `(selected-frame)', a real frame object, not the
+sentinel.
+
+`(orgacle-run)' is called directly here, not via a real keypress, so
+the Ruling (fix round 1: non-interactive callers are never asked, see
+`orgacle-run''s own `called-interactively-p' gate) means the
+confirmation prompt this test used to also exercise is not reached at
+all any more, regardless of the live frame -- teardown happens
+silently instead.  That is a feature, not a gap this test papers over:
+this test's own purpose, proving `delete-frame' gets the *session's*
+frame rather than whatever is selected, holds exactly the same either
+way, since ASK only ever gates whether to *ask*, never whether to tear
+down.  The confirm and decline paths themselves, which do need ASK
+true to run at all, are pinned directly on
+`orgacle--quit-previous-session-if-any' by
+`orgacle-test-quit-previous-session-confirms-tears-down' and
+`orgacle-test-quit-previous-session-declines-leaves-everything-untouched',
+in the Ruling's own section further down this file."
   (let ((buffer-a (generate-new-buffer "orgacle-test-run-frame-a"))
         (buffer-b (generate-new-buffer "orgacle-test-run-frame-b"))
+        (fake-frame (make-symbol "fake-frame-a"))
+        (real-frame-live-p (symbol-function 'frame-live-p))
         (deleted 'not-called))
     (unwind-protect
         (cl-letf (((symbol-function 'orgacle--get-frame)
                    (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
                                      (selected-frame))))
+                  ((symbol-function 'frame-live-p)
+                   (lambda (f) (if (eq f fake-frame) t (funcall real-frame-live-p f))))
                   ((symbol-function 'delete-frame)
                    (lambda (&optional frame _force) (setq deleted frame)))
                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
@@ -3271,19 +3589,24 @@ for the decline path, pinned separately."
              (expand-file-name "slides.org" orgacle-test-fixture-directory))
             (let ((org-mode-hook nil)) (org-mode))
             (orgacle-run))
+          ;; session A's own setup is done; swap in the sentinel now,
+          ;; purely so the assertion below can tell A's frame apart
+          ;; from whatever is selected when B tears it down
+          (setf (orgacle--session-frame orgacle--session) fake-frame)
           (with-current-buffer buffer-b
             (insert-file-contents
              (expand-file-name "slides.org" orgacle-test-fixture-directory))
             (let ((org-mode-hook nil)) (org-mode))
             (orgacle-run))
-          (should (eq deleted (selected-frame))))
-      ;; the fixture's own frame stub leaves the *new* session (B)
-      ;; pointing at batch's sole real frame too, by the same
-      ;; construction as A; stub `delete-frame' again here so tearing
-      ;; that down for real does not hit "Attempt to delete the sole
-      ;; visible or iconified frame"
-      (cl-letf (((symbol-function 'delete-frame) #'ignore))
-        (orgacle-quit))
+          (should (eq deleted fake-frame)))
+      ;; the sentinel is not `frame-live-p' outside this test's own
+      ;; `cl-letf', and the real, unstubbed `frame-live-p' signals
+      ;; `wrong-type-argument' on a non-frame object rather than
+      ;; returning nil for it -- clear it before this cleanup's own
+      ;; `orgacle-quit' can call `frame-live-p' on whatever the current
+      ;; session's frame slot holds
+      (when orgacle--session (setf (orgacle--session-frame orgacle--session) nil))
+      (orgacle-quit)
       (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
       (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
 
@@ -3430,42 +3753,22 @@ the test, independent of that guarantee."
       (when (file-exists-p tmp) (delete-file tmp))
       (when (and temp-file (file-exists-p temp-file)) (delete-file temp-file)))))
 
-(ert-deftest orgacle-test-run-declining-confirmation-leaves-the-previous-session-untouched ()
-  "Declining the confirmation prompt raises `user-error' and leaves the
-first, still-live presentation completely alone -- refusing, not a
-half-quit: its frame is not deleted and its buffer stays in
-`orgacle-mode', exactly as if the second `orgacle-run' had never been
-called at all."
-  (let ((buffer-a (generate-new-buffer "orgacle-test-run-decline-a"))
-        (buffer-b (generate-new-buffer "orgacle-test-run-decline-b"))
-        (deleted 'not-called))
-    (unwind-protect
-        (cl-letf (((symbol-function 'orgacle--get-frame)
-                   (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
-                                     (selected-frame))))
-                  ((symbol-function 'delete-frame)
-                   (lambda (&optional frame _force) (setq deleted frame)))
-                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))
-                  (orgacle-speaker-notes nil))
-          (with-current-buffer buffer-a
-            (insert-file-contents
-             (expand-file-name "slides.org" orgacle-test-fixture-directory))
-            (let ((org-mode-hook nil)) (org-mode))
-            (orgacle-run))
-          (with-current-buffer buffer-b
-            (insert-file-contents
-             (expand-file-name "slides.org" orgacle-test-fixture-directory))
-            (let ((org-mode-hook nil)) (org-mode))
-            (should-error (orgacle-run) :type 'user-error))
-          (should (eq deleted 'not-called))
-          (with-current-buffer buffer-a
-            (should (eq major-mode 'orgacle-mode))))
-      ;; tear down for real, bypassing the confirmation gate this test
-      ;; exists to pin, so cleanup itself does not block on stdin
-      (cl-letf (((symbol-function 'delete-frame) #'ignore))
-        (orgacle-quit))
-      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
-      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
+;; `orgacle-test-run-declining-confirmation-leaves-the-previous-session-untouched'
+;; used to live here, calling `(orgacle-run)' directly and expecting
+;; the confirmation prompt to fire and be declined.  Removed in fix
+;; round 1, not merely fixed: its own premise is gone under the Ruling
+;; \(non-interactive callers, which a plain Lisp call in batch always
+;; is, never reach the prompt at all\), so `(should-error (orgacle-run)
+;; :type 'user-error)' no longer holds regardless of what `yes-or-no-p'
+;; is stubbed to return -- confirmed directly, this is exactly the
+;; test `make test' caught failing when the Ruling was implemented.
+;; Its coverage of the decline path itself continues, unchanged in
+;; substance, as
+;; `orgacle-test-quit-previous-session-declines-leaves-everything-untouched',
+;; which tests `orgacle--quit-previous-session-if-any' directly instead
+;; of routing through `orgacle-run''s now-`called-interactively-p'-gated
+;; dispatch; see that test, in the Ruling's own section further down
+;; this file, for why.
 
 (ert-deftest orgacle-test-run-does-not-prompt-when-the-previous-frames-already-dead ()
   "A previous session whose frame is already gone -- killed by the
@@ -3525,6 +3828,307 @@ pinning that the gate is skipped entirely here, not merely answered."
               (should (progn (orgacle-run) t))))
         (orgacle-quit)
         (when (buffer-live-p buffer-b) (kill-buffer buffer-b))))))
+
+;;; P4 Task 6 fix round 1: Important findings (I1, I2, I4)
+
+(ert-deftest orgacle-test-quit-deletes-the-temp-file-when-called-from-the-presented-buffer ()
+  "I1 (fix round 1).  `orgacle-quit' kills the narrowed-subtree temp
+buffer, which is the buffer actually current when `orgacle-quit' runs
+in the realistic case -- the presenter is looking at it, and presses
+`q' -- so `current-buffer' switches to whatever Emacs picks next
+\(here, the buffer the temp buffer was originally visited from\)
+*before* the following `file-exists-p'/`delete-file' calls, which use
+the org-file slot's own string as-is.  That string is relative to
+`default-directory' as it stood at export time \(see the Step 3
+temp-file test's own docstring\), and once `current-buffer' has
+switched away, it is checked against a *different* `default-directory'
+-- so `file-exists-p' returns nil, `delete-file' never runs, and the
+temp file is silently left on disk.  Reproduced with the decks in a
+directory that is not wherever the batch process happens to start,
+specifically to catch the same bug Step 3's own temp-file test missed
+by calling `orgacle-quit' from a *different* buffer than the one being
+torn down -- not the realistic case."
+  (let* ((dir (make-temp-file "orgacle-test-i1-" t))
+         (deck (expand-file-name "deck.org" dir))
+         (buf nil)
+         (temp-file nil))
+    (with-temp-file deck (insert "#+TITLE: Deck\n\n* Slide One\nBody.\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (setq buf (find-file-noselect deck))
+          ;; `set-buffer', not `with-current-buffer': the latter
+          ;; restores whatever buffer was current before this form,
+          ;; discarding `orgacle-run''s own `find-file' switch to the
+          ;; temp buffer the moment the form exits -- confirmed
+          ;; directly to be a bug in an earlier version of this very
+          ;; test, which asserted `current-buffer' against a value
+          ;; `with-current-buffer' had already thrown away, passing or
+          ;; failing for the wrong reason either way.  Real usage never
+          ;; restores a previous buffer like this; `M-x orgacle-run'
+          ;; leaves whatever it switched to current, permanently.
+          (set-buffer buf)
+          (goto-char (point-min))
+          (re-search-forward "^\\* Slide One")
+          (org-back-to-heading)
+          (org-narrow-to-subtree)
+          (orgacle-run)
+          (setq temp-file (expand-file-name (orgacle--session-org-file orgacle--session) dir))
+          (should (file-exists-p temp-file))
+          ;; realistic usage: quit from the presented (temp) buffer,
+          ;; which is current after `orgacle-run'
+          (should (equal (current-buffer) (get-file-buffer temp-file)))
+          (orgacle-quit)
+          (should-not (file-exists-p temp-file))
+          (should-not (get-file-buffer temp-file)))
+      (orgacle-quit)
+      (when (and buf (buffer-live-p buf)) (kill-buffer buf))
+      (when (and temp-file (file-exists-p temp-file)) (delete-file temp-file))
+      (when (file-exists-p deck) (delete-file deck))
+      (when (file-directory-p dir) (delete-directory dir)))))
+
+(ert-deftest orgacle-test-run-does-not-hard-error-when-the-old-org-buffer-was-killed-independently ()
+  "I2 (fix round 1).  Killing the buffer `orgacle-run' is presenting,
+by hand, without going through `orgacle-quit', then running again used
+to hard-error: `orgacle-quit''s buffer-restore step guarded `set-buffer'
+on the org-buffer slot being non-nil, not on it being `buffer-live-p',
+and a slot can hold a dead buffer object \(non-nil, since the object
+itself is not garbage until unreferenced\) just as easily as a live
+one.  `set-buffer' on a dead buffer signals `error', which -- since
+nothing in `orgacle-quit' catches it mid-function -- skipped the rest
+of that function's own cleanup entirely \(notably the notes-buffer/frame
+teardown, which comes *after* this step\), left `orgacle--session' at
+whatever it was \(the `unwind-protect' cleanup still ran, nil-ing it,
+but only after every other step already aborted\), and left `orgacle-run'
+for the second buffer never actually starting a presentation at all.
+Not orthogonal to Step 3, as fix round 0's report claimed: before Step
+3, `orgacle-run' never called `orgacle-quit' on a previous session at
+all, so this path was unreachable from `orgacle-run' itself; Step 3
+made it reachable by calling `orgacle-quit' on the old session as part
+of its own teardown, and the guard fix belongs there because of it."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-i2-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-i2-b")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          ;; kill the presented buffer directly, bypassing `orgacle-quit'
+          (kill-buffer buffer-a)
+          (with-current-buffer buffer-b
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (should (progn (orgacle-run) t))
+            (should (eq major-mode 'orgacle-mode))
+            (should (eq (orgacle--session-org-buffer orgacle--session) buffer-b))))
+      (orgacle-quit)
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
+
+(ert-deftest orgacle-test-unload-orgacle-src-removes-the-org-edit-src-exit-advice ()
+  "I3 (fix round 1).  `unload-feature' only unbinds symbols a file
+itself defines; `org-edit-src-exit' is Org's own function, merely
+advised here, so unloading `orgacle-src' used to leave the advice
+installed while making `orgacle--refresh-after-src-edit', the function
+it calls, void -- confirmed directly, before writing
+`orgacle-src-unload-function', that a real edit/exit round trip
+\(`org-edit-src-code' then `org-edit-src-exit', not merely calling
+`org-edit-src-exit' with nothing to exit\) then signals `void-function'
+from `org-edit-src-exit' itself, breaking ordinary Org source-block
+editing package-wide, not just within Orgacle, for the rest of the
+session.
+
+Re-requires `orgacle-src' at the end, in the `unwind-protect' cleanup,
+regardless of how the test body exits: this test runs inside the same
+batch process as the rest of this suite, and every other test in it
+that touches a source block \(`orgacle-toggle-hide-src-blocks' and
+friends\) depends on this file's own definitions still existing
+afterward.  Confirmed the reload alone -- `(require 'orgacle-src)'
+after `(unload-feature 'orgacle-src t)' -- restores both the advice
+and every ordinary function this file defines, since `unload-feature'
+also removes `orgacle-src' from `features', making the next `require'
+a real reload rather than a no-op."
+  (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
+  (unwind-protect
+      (progn
+        (unload-feature 'orgacle-src t)
+        (should-not (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
+        (should-not (fboundp 'orgacle--refresh-after-src-edit))
+        (with-temp-buffer
+          (insert "#+begin_src emacs-lisp\n(+ 1 1)\n#+end_src\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (goto-char (point-min))
+          (org-edit-src-code)
+          (should (progn (org-edit-src-exit) t))))
+    (require 'orgacle-src)
+    (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
+    (should (fboundp 'orgacle-toggle-hide-src-blocks))))
+
+(ert-deftest orgacle-test-run-second-time-actually-checks-the-start-time-gate ()
+  "I4 (fix round 1).  `orgacle-test-run-does-not-act-on-a-session-that-never-presented'
+\(above\) could not have caught the start-time conjunct being removed
+from `orgacle-run': it stubs `orgacle--get-frame' to nil, so
+`frame-live-p' is always nil regardless of the gate, and its only
+assertion, `(should (progn (orgacle-run) t))', holds either way -- with
+the gate correctly skipping the untouched session, or with the gate
+removed and the dead-frame branch of the `if' silently absorbing it,
+both produce a completed `orgacle-run' with no error.  Confirmed
+directly: temporarily removing `(orgacle--session-start-time
+orgacle--session)' from `orgacle.el' left all tests passing, that one
+included.
+
+This test closes the gap the same way the review's own \"also fix\"
+note suggests: seed a session with a *live* frame slot -- so
+`frame-live-p' is genuinely true -- but no start-time, and stub
+`yes-or-no-p' to signal if called at all.  With the gate in place, the
+whole `when' block is skipped before `frame-live-p' is ever consulted,
+so `yes-or-no-p' is never reached and `orgacle-run' completes normally.
+With the gate removed, `frame-live-p' is now true, and the `if''s own
+`yes-or-no-p' call fires, signalling the stub's error and failing this
+test -- confirmed directly by removing the conjunct and re-running
+this test alone, which fails with exactly that error, before restoring
+it and reconfirming this test passes again."
+  (let ((session (orgacle--session-ensure)))
+    (setf (orgacle--session-frame session) (selected-frame)))
+  (should-not (orgacle--session-start-time (orgacle--session-ensure)))
+  (let ((buffer-b (generate-new-buffer "orgacle-test-i4-b")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  ((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _)
+                     (error "must not prompt: this session never presented")))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-b
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (should (progn (orgacle-run) t))))
+      (setf (orgacle--session-frame (orgacle--session-ensure)) nil)
+      (orgacle-quit)
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
+
+;;; P4 Task 6 fix round 1: the Ruling -- non-interactive callers never prompt
+
+(ert-deftest orgacle-test-run-does-not-prompt-when-called-non-interactively ()
+  "The review's own ruling: `orgacle-run' is autoloaded, and users do
+call it from init files and hooks, where a `yes-or-no-p' prompt would
+block with nothing to answer it.  A non-interactive caller must get
+the teardown without being asked, not an indefinite block.
+
+`called-interactively-p' is the correct, idiomatic signal for this --
+confirmed directly, under a real Xvfb display with a genuine X
+keypress bound to a throwaway command, that it returns t there and nil
+for the identical command called as a plain Lisp form, `call-interactively',
+`funcall-interactively', or `command-execute', all four of which
+returned nil in that same real, non-batch Emacs.  Batch Emacs, which
+this test runs in, has no live command loop for any of them to attach
+to at all, so this specific test -- calling `orgacle-run' the ordinary
+way any test in this suite calls it, as a plain Lisp form -- is
+already exactly the case the ruling is about: non-interactive.  The
+confirm/decline logic itself, gated on this signal only when it *is*
+true, is pinned separately, directly on
+`orgacle--quit-previous-session-if-any', in the next section; this
+test is what stays representative of real batch/script/hook usage."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-run-noninteractive-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-run-noninteractive-b")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame)
+                   (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
+                                     (selected-frame))))
+                  ((symbol-function 'delete-frame) #'ignore)
+                  ((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _)
+                     (error "must not prompt: orgacle-run was not called interactively")))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (with-current-buffer buffer-b
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            ;; a live frame *and* no prompt: this is the whole point --
+            ;; teardown still happens, silently, rather than either
+            ;; blocking or refusing
+            (should (progn (orgacle-run) t))
+            (should (eq major-mode 'orgacle-mode)))
+          (with-current-buffer buffer-a
+            (should (eq major-mode 'org-mode))))
+      ;; by this point `orgacle--session' is B's own, whose frame slot
+      ;; is also `(selected-frame)' by the same stub construction as
+      ;; A's; stub `delete-frame' here too so tearing that down for
+      ;; real does not hit "Attempt to delete the sole visible or
+      ;; iconified frame"
+      (cl-letf (((symbol-function 'delete-frame) #'ignore))
+        (orgacle-quit))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
+
+;;; P4 Task 6 fix round 1: confirm/decline logic, pinned directly on the
+;;; extracted helper rather than through `orgacle-run''s own
+;;; `called-interactively-p' gate, which batch can never make true
+
+(ert-deftest orgacle-test-quit-previous-session-declines-leaves-everything-untouched ()
+  "The decline path, pinned directly on
+`orgacle--quit-previous-session-if-any' with ASK explicitly t, since
+routing this through `orgacle-run' itself is no longer possible in
+batch after the Ruling above: `called-interactively-p' is nil for
+every plain-Lisp-form call in batch, so `orgacle-run' would now always
+take the non-interactive, no-prompt path regardless of any
+`yes-or-no-p' stub, and this scenario -- a real interactive invocation
+that gets declined -- is only actually reachable live, under Xvfb, the
+same way the confirmation prompt's own text was verified in Task 6's
+original report.  Testing the helper directly keeps this scenario
+falsifiable in batch anyway, on the actual decision logic, without
+needing `orgacle-run''s own interactive dispatch to cooperate."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-decline-helper-a")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame)
+                   (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
+                                     (selected-frame))))
+                  ((symbol-function 'delete-frame) #'ignore)
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (should-error (orgacle--quit-previous-session-if-any t) :type 'user-error)
+          (with-current-buffer buffer-a
+            (should (eq major-mode 'orgacle-mode))))
+      (cl-letf (((symbol-function 'delete-frame) #'ignore))
+        (orgacle-quit))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a)))))
+
+(ert-deftest orgacle-test-quit-previous-session-confirms-tears-down ()
+  "The confirm path's counterpart to the decline test above, same
+reason for testing the helper directly rather than through
+`orgacle-run''s own dispatch."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-confirm-helper-a")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame)
+                   (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
+                                     (selected-frame))))
+                  ((symbol-function 'delete-frame) #'ignore)
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (should (progn (orgacle--quit-previous-session-if-any t) t))
+          (with-current-buffer buffer-a
+            (should (eq major-mode 'org-mode))))
+      (orgacle-quit)
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a)))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

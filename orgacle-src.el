@@ -52,31 +52,64 @@ directly, not only the presentation's own `e' key.  ARGS is unused;
 `org-edit-src-exit' itself takes none, but `:after' advice always
 receives whatever the advised function was called with.  Guarded on
 `major-mode', checked only once `org-edit-src-exit' has already
-returned: that function's own last act before returning is switching
-back to the source buffer \(`org-src-switch-to-buffer', called before
-the edited text is written back\), so `current-buffer' here already
-and correctly names the presentation buffer the edited block belongs
-to, not the just-killed edit buffer.  Ordinary Org editing outside a
-presentation, or editing in a buffer whose presentation has since
-ended, leaves `major-mode' something other than `orgacle-mode' here,
-so this stays a no-op for both.
+returned: that function switches back to the source buffer
+\(`org-src-switch-to-buffer', immediately followed by killing the edit
+buffer\) *before* writing the edited text back, restoring point, and
+restoring the window configuration -- corrected in this fix round from
+this docstring's own earlier, wrong claim that the buffer switch was
+`org-edit-src-exit''s last act before returning; it is not, only the
+first of several, several of which \(the write-back itself among them\)
+this function's own caller relies on having already happened by the
+time this runs.  What actually makes `current-buffer' reliable here is
+that none of those later steps switches to any *other* buffer --
+confirmed by reading `org-edit-src-exit' end to end, not merely its
+own first step -- so `current-buffer' here still correctly names the
+presentation buffer the edited block belongs to, not the already-killed
+edit buffer, by the time this advice runs after all of them.  Ordinary
+Org editing outside a presentation, or editing in a buffer whose
+presentation has since ended, leaves `major-mode' something other than
+`orgacle-mode' here, so this stays a no-op for both.
 
 Calling `orgacle-refresh' here can surface a separate, pre-existing
 defect this fix does not cause but does make somewhat more reachable:
-editing a source block inside a slide's own \"Speaker notes\" subtree,
-when that subtree is the very last heading in the whole presentation
-buffer, and exiting, un-hides it on screen -- exactly as plain `r'/`g'
-already do in that same situation, with no source-block editing
-involved at all.  See
-`orgacle-test-refresh-keeps-trailing-speaker-notes-hidden'
-in test/orgacle-test.el for the reproduction and root cause; out of
-scope for this fix, which is only about rebuilding a live notes buffer
-on this exit path the way every other content-editing path already
-does."
+editing a source block inside a slide's own \"Speaker notes\" subtree
+and exiting can un-hide it on screen -- exactly as plain `r'/`g'
+already do in the same situation, with no source-block editing
+involved at all.  Fix round 1 (Task 6 review) corrected this file's
+own first, too-narrow account of exactly when: not only when
+\"Speaker notes\" is the presentation's very last heading, but
+whenever any heading at all -- even a sibling subheading on the same
+slide -- comes after it without another top-level slide heading
+immediately following with nothing else in between.  See the four
+`orgacle-test-refresh-exposes-speaker-notes-...'/
+`orgacle-test-refresh-keeps-speaker-notes-hidden-when-nothing-else-intervenes'
+tests in test/orgacle-test.el for the full boundary, reproduced as
+four separate cases rather than asserted from one; out of scope for
+this fix, which is only about rebuilding a live notes buffer on this
+exit path the way every other content-editing path already does."
   (when (eq major-mode 'orgacle-mode)
     (orgacle-refresh)))
 
 (advice-add 'org-edit-src-exit :after #'orgacle--refresh-after-src-edit)
+
+(defun orgacle-src-unload-function ()
+  "Remove the `org-edit-src-exit' advice as this file is unloaded.
+`unload-feature' -- P4 Task 6 fix round 1, Important 3 -- only unbinds
+symbols *this file* defines, and `org-edit-src-exit' is not one of
+them; it is Org's own function, merely advised here.  Without this,
+`unload-feature' still makes `orgacle--refresh-after-src-edit' itself
+void, but leaves `org-edit-src-exit' still advised to call it -- so
+every `C-c \\'' anywhere in the running Emacs, on any Org buffer,
+presenting or not, signals `void-function' from then on, breaking
+ordinary Org source-block editing package-wide for the rest of the
+session, confirmed directly.  `unload-feature' calls a FEATURE-unload-function,
+when one exists, before its own default unbinding; returning nil here
+does not suppress that default, so every ordinary symbol this file
+defines is still unbound the usual way afterward -- only the advice
+needs this explicit removal, since it is the one piece of this file's
+own state that lives on a symbol this file does not own."
+  (advice-remove 'org-edit-src-exit #'orgacle--refresh-after-src-edit)
+  nil)
 
 (defun orgacle-flash-cursor ()
   "Briefly show a hollow cursor, then restore the default cursor."

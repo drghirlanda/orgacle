@@ -196,6 +196,19 @@ zero, so no sequence of calls can produce a non-positive height, which
 ;; describing text that no longer matches what is actually there.
 (declare-function orgacle-reveal-refresh "orgacle-reveal" ())
 
+;; Same idiom again, this time for a function in orgacle-nav.el, loaded
+;; *before* this file (see orgacle.el's `require' order) rather than
+;; after -- so unlike the two declarations above, `require'-ing it here
+;; directly would not even reorder anything page-hook-related.  Left as
+;; a `declare-function' anyway, for the same reason `orgacle-nav.el'
+;; itself declares `orgacle-toggle-hide-src-blocks' rather than
+;; requiring orgacle-src: no feature module requires a sibling, full
+;; stop, so each of these ten files still compiles standalone.
+;; P4 Task 6 fix round 1 (Critical 1/2): `orgacle-refresh' below now
+;; calls this directly, the same function ordinary navigation uses,
+;; when and only when the slide it lands on has actually changed.
+(declare-function orgacle-current-page "orgacle-nav" ())
+
 (defun orgacle-refresh ()
   "Rebuild the slide vector, then delete overlays and re-fontify.
 Bound to r, g, and to the key that exits `orgacle-edit-text', and
@@ -242,50 +255,111 @@ bottom in the same order as the rest of this function: rebuild the
 deck's own bookkeeping, clean up, then refresh the two things -- reveal
 and fontification -- that redraw the current slide's actual content.
 
-Also re-narrows to the just-recomputed current slide, before any of
-that.  P4 Task 6 Step 2: without this, deleting the heading the
-presentation is narrowed to -- for example by clearing it out entirely
-in `E' edit-text mode and pressing the key that exits it, bound to
-this function -- left the slides and index slots above correctly
-rebuilt, but the buffer's actual restriction untouched: narrowed to a
-region collapsed to zero width around wherever the deleted heading used
-to start, `(point-min)' equal to `(point-max)', showing nothing at all
-until the next navigation command re-narrowed for its own reason.
-Reproduced directly against the unfixed function before deciding on
-this fix; see
-`orgacle-test-refresh-renarrows-when-the-current-heading-is-deleted'.
-P3 left this out because a full re-narrow, through `orgacle-current-page',
-also runs `orgacle-page-hook' -- expensive to run on every source-block
-execution, which is where this function is also called from via
-`org-babel-after-execute-hook' -- and that hook has only grown heavier
-since, with reveal and per-slide appearance now both members.  This is
-not that: only `org-narrow-to-subtree' runs here, the single cheap
-operation actually needed to keep the view honest; `orgacle-current-page''s
-other work -- `outline-hide-body', child folding, and the page hook
-itself -- stays exactly as out of scope for this function as it was
-before this fix, so the cost this function now pays on every
-source-block execution and every `r'/`g' press is one subtree-narrow
-more than before, not a hook run.  `widen' first: `org-narrow-to-subtree'
-only ever extends an existing restriction (`(min (point-max) ...)' in
-its own implementation) and refuses to narrow at all when the target
-heading starts before the current `(point-min)' -- both false exactly
-in the stale-narrowing case this exists to fix, so without widening
-first this call would silently do nothing there, the same failure
-mode it is meant to close.  Guarded on a non-empty slides slot, the
-same guard `orgacle--goto-slide' applies to its own work: an edit that
-leaves no slides at all -- every heading deleted or ORGACLE_HIDE-tagged
--- has no subtree to narrow to."
+Transitions to the just-recomputed current slide, but only when it is
+actually a *different* slide from the one the buffer was narrowed to
+when this function was called -- P4 Task 6 Step 2 and its fix round 1
+\(Critical 1 and Critical 2\).  Step 2's own first version re-narrowed
+unconditionally, on every call: deleting the heading the presentation
+is narrowed to -- for example by clearing it out entirely in `E'
+edit-text mode and pressing the key that exits it, bound to this
+function -- left the slides and index slots above correctly rebuilt,
+but the buffer's actual restriction untouched, narrowed to a region
+collapsed to zero width, showing nothing at all; reproduced directly
+before that fix, and still fixed by this one.  But `orgacle-refresh'
+is also on `org-babel-after-execute-hook', which fires after *every*
+source-block execution, most of which do not change the current slide
+at all -- and an unconditional `(goto-char ...)' there moved point
+back to the slide's own heading on every single `x', breaking the
+live-demo sequence `c' \(to a block\), `x' \(run it\), `c' \(to the
+next block\): confirmed directly, reproducing the reviewer's own
+two-block scenario, that the second `c' landed back on the *first*
+block instead of the second, because `org-babel-next-src-block'
+searches forward from wherever point now is.  Live, this also snaps
+`window-start' back to the heading on every `x', destroying the
+presenter's scroll position mid-demo -- the same `E'/`e' exit paths
+that call this function share the defect for the same reason.
+
+The fix: capture `(point-min)' -- the buffer's own current
+restriction, whatever narrowed it there, before rebuilding anything --
+and compare it, by position, to the just-recomputed current slide's
+own marker.  Equal means the buffer is *already* narrowed to exactly
+the slide this refresh lands on, so nothing needs to change: point is
+left exactly where it was and nothing else in this branch runs, no
+`widen', no `goto-char', no `org-narrow-to-subtree', no page hook --
+what keeps `x' \(and an aborted or unchanged `e'/`E' edit\) cheap and
+point-preserving, restoring the cost argument that motivated the
+original Step 2 deferral, and now covering the `x' path too, not only
+`r'/`g'.
+
+A first version of this fix compared the session's index slot's own
+marker, captured before rebuilding, to the new one by position instead
+of comparing against `(point-min)' -- and passed every test written
+for it, including the `c'/`x' sequence above, but not one written
+directly against Critical 2's own appearance scenario: deleting a
+slide whose *next* sibling immediately follows, with nothing in
+between, collapses the deleted heading's own marker onto exactly the
+position the next slide's marker also lands on after rebuilding --
+confirmed directly, both markers ending up `eq' in position even
+though the slide genuinely changed -- so that version wrongly
+concluded \"unchanged\" and left the outgoing slide's appearance
+applied.  `(point-min)' does not have this failure mode for any of
+this function's real call sites, none of which ever widen the buffer
+mid-edit \(`E' never widens at all; `org-edit-src-exit' restores
+whatever restriction was already there before it returns, via
+`org-with-wide-buffer''s own `save-restriction''; `x' does not touch
+the restriction either\): the currently narrowed heading's own start
+position does not move just because content *inside* the narrowing
+changes, and does not coincide with a different slide's position
+merely because that slide happens to immediately follow the one that
+was deleted, the way a marker collapsed by the deletion itself can.
+
+When the two differ, this calls `orgacle-current-page' -- the same
+function ordinary navigation uses -- rather than repeating its work:
+that function clears a stale aux-window slot as its own first act,
+narrows to the new subtree, and runs `orgacle-page-hook' in full, so
+per-slide appearance, incremental reveal and the notes buffer's
+position are all torn down and rebuilt for the new slide the same way
+entering it via `n'/`p' already would.  Reproduced directly, with the
+`(point-min)'-based comparison in place, that deleting a slide with an
+`ORGACLE_TEXT_SCALE' property and refreshing while its very next
+sibling immediately follows no longer leaves that remapping in
+`face-remapping-alist' once the view has moved to the sibling.
+`widen' before `orgacle-current-page': that function's own
+`org-narrow-to-subtree' call assumes an already-widened buffer \(see
+`orgacle--goto-slide', the other caller, which widens first for the
+same reason\), and narrowed to the *previous* slide's subtree, it would
+do one of two wrong things to a *different* target slide instead:
+signal `outline-before-first-heading' outright, unhandled by any
+`condition-case' here, if the target starts before the old
+restriction's own `(point-min)' -- Org's own comment on this reads
+\"Preserve historical behavior throwing an error when current heading
+starts before active narrowing\" -- or, if the target extends past the
+old restriction's own `(point-max)', silently clamp the result short
+of it instead of erroring -- Org's own comment on this one reads
+\"Preserve historical behavior not extending the active narrowing\".
+Corrected in this fix round from this docstring's own earlier, doubly
+wrong claim that the function only ever *extends* a restriction and
+that omitting `widen' here \"would silently do nothing\": neither
+outcome is a silent no-op, and the first is not silent at all.
+
+Guarded on a non-empty slides slot: an edit that leaves no slides at
+all -- every heading deleted or ORGACLE_HIDE-tagged -- has no subtree
+to transition to, the same guard `orgacle--goto-slide' applies to its
+own work."
   (interactive)
-  (let ((session (orgacle--session-ensure)))
+  (let ((old-point-min (point-min))
+        (session (orgacle--session-ensure)))
     (setf (orgacle--session-slides session) (orgacle--build-slides))
     (setf (orgacle--session-index session) (orgacle--slide-index-at-point))
     (when (buffer-live-p (orgacle--session-notes-buffer session))
       (orgacle--build-notes-buffer))
-    (let ((slides (orgacle--session-slides session)))
-      (when (> (length slides) 0)
+    (let* ((slides (orgacle--session-slides session))
+           (new-index (orgacle--session-index session))
+           (new-marker (and (> (length slides) 0) (aref slides new-index))))
+      (when (and new-marker (/= old-point-min (marker-position new-marker)))
         (widen)
-        (goto-char (aref slides (orgacle--session-index session)))
-        (org-narrow-to-subtree))))
+        (goto-char new-marker)
+        (orgacle-current-page))))
   (orgacle--sync-page-number)
   (orgacle-clean-overlays (point-min) (point-max))
   (orgacle-reveal-refresh)

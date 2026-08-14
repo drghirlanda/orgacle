@@ -403,16 +403,19 @@ Two details worth knowing:
   Other capitalisations are still hidden from the slide, but their contents
   will not reach the notes buffer.
 - Set =orgacle-speaker-notes= to nil to skip the notes frame entirely.
-- *Known issue:* if a slide's =Speaker notes= subheading is the very last
-  heading in the whole presentation buffer — typically, the notes on your
-  final slide, with nothing else after them — then pressing =r=, =g=, or =x=
-  on that slide, or editing a source block inside those notes with =e= and
-  exiting it, un-hides them on the presentation screen itself, for the rest
-  of that slide's time on screen. Ordinary slides, where something (even
-  just another heading) follows the =Speaker notes= subheading, are not
-  affected. Until this is fixed, avoid running code or refreshing on your
-  last slide if it ends in speaker notes — or add a harmless trailing
-  heading after them to sidestep it.
+- *Known issue:* pressing =r=, =g=, or =x= on a slide with a =Speaker notes=
+  subheading, or editing a source block inside those notes with =e= and
+  exiting it, usually un-hides that subheading on the presentation screen
+  itself, for the rest of that slide's time on screen — a private-notes leak
+  to the audience. This affects most decks: it happens whenever anything at
+  all — even an empty subheading — comes after =Speaker notes= within the
+  same slide, and also happens when =Speaker notes= is your last slide's
+  last heading with nothing after it at all. The only shape confirmed safe
+  is =Speaker notes= as the very last heading of its slide, immediately
+  followed by another top-level slide heading with nothing else in between
+  — do not rely on a trailing subheading of any kind to fix this, it does
+  not. Until this is fixed, avoid pressing =r=, =g=, =x=, or editing code,
+  on any slide with speaker notes attached.
 
 =M-x orgacle-estimate-time= reports how long it would take to read all your
 speaker notes aloud, together with the word count, which is a reasonable proxy
