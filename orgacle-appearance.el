@@ -123,7 +123,16 @@ consequence on a value that visibly has a decimal point.  The digits
 after a dot are now required whenever a dot is present, so \"1.\" and
 \"5.\" are rejected outright, exactly like \"1,5\" or \"2x\"; a dot
 with nothing before it, such as \".5\", is still accepted, since that
-one is genuinely a complete, valid float literal."
+one is genuinely a complete, valid float literal.
+
+Exponent notation, such as \"1.5e2\", is not supported and is rejected
+like any other unrecognized shape, treated as absent -- this was
+stated only in a fix-round-2 report claim and nowhere a reader of the
+code would actually see it; corrected here, fix round 3, by saying it
+in the one place that matters.  `string-to-number' itself does
+understand exponents, but this regex does not admit the `e'/`E'
+letter at all, so a value using one never reaches `string-to-number'
+in the first place."
   (let ((value (org-entry-get nil "ORGACLE_TEXT_SCALE")))
     (when (and value
                (string-match-p "\\`[+-]?\\([0-9]+\\(\\.[0-9]+\\)?\\|\\.[0-9]+\\)\\'" value))

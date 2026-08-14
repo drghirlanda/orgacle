@@ -909,15 +909,22 @@ did nothing on the very first slide of a real presentation.
 
 Fixed at `orgacle--goto-slide' itself -- the one shared entry point
 every navigation command funnels through -- not by patching
-`orgacle-run''s call order: it now switches to the slide marker's own
-buffer before doing anything else, so the contract holds regardless of
-what was current when navigation was invoked.  Simulated here without
-a real second frame (batch cannot create one): a second, unrelated
-org-mode buffer standing in for the notes buffer is made current by
-hand before calling `orgacle-top', reproducing the reviewer's own
-diagnosis exactly -- confirmed directly, before this fix, that the
-presented buffer stayed unnarrowed and `orgacle--appearance-text-scale'
-found nothing, with `current-buffer' still the stand-in afterward."
+`orgacle-run''s call order.  This test pins the buffer half only, via
+plain `set-buffer', which is what fix round 2 shipped and what is
+still exercised here (this test never gives the session a live
+presentation-window, so `orgacle--goto-slide''s window-selecting
+branch, added in fix round 3, never fires, and the `set-buffer'
+fallback is what runs); see `orgacle-test-goto-slide-reselects-the-presentation-window'
+for the window half fix round 2 missed -- `set-buffer' changes no
+display, so `orgacle-show-file-auto', the fourth affected member,
+kept splitting windows in whatever was still selected even after this
+buffer fix alone.  Simulated here without a real second frame (batch
+cannot create one): a second, unrelated org-mode buffer standing in
+for the notes buffer is made current by hand before calling
+`orgacle-top', reproducing the reviewer's own diagnosis exactly --
+confirmed directly, before this fix, that the presented buffer stayed
+unnarrowed and `orgacle--appearance-text-scale' found nothing, with
+`current-buffer' still the stand-in afterward."
   (orgacle-test-with-fixture "appearance.org"
     (orgacle--start-slides)
     (let ((presented-buffer (current-buffer))
@@ -934,6 +941,79 @@ found nothing, with `current-buffer' still the stand-in afterward."
               (should (equal "Both slide" (org-entry-get nil "ITEM")))
               (should (car (alist-get 'default face-remapping-alist)))))
         (when (buffer-live-p notes-stand-in) (kill-buffer notes-stand-in))))))
+
+(ert-deftest orgacle-test-goto-slide-reselects-the-presentation-window ()
+  "Fix round 3 (Important, introduced by fix round 2): `set-buffer'
+changes no display, so fix round 2's own fix left a real bug behind
+for any page-hook member that also manages *windows*, not just point
+-- `orgacle-show-file-auto', via `orgacle-show-file', calls
+`delete-other-windows' then `split-window-right'/`split-window-below'
+on the *selected* window.  With speaker notes on (the default),
+`orgacle-make-notes-buffer''s `switch-to-buffer-other-frame' leaves
+the notes window selected; fix round 2's `set-buffer' fixed
+`current-buffer' but never re-selected the presentation window, so
+those splits landed in the *notes* frame instead.  Confirmed live
+under Xvfb, unstubbed, on a slide carrying ORGACLE_SHOW_AUTO: the
+auto-shown file split the notes frame in half, cutting the presenter's
+own notes down to make room for it, while the presentation frame
+showed only the bare deck -- worse for a live talk than fix round 2's
+own starting point (\"nothing appears anywhere\"), since the audience
+now sees nothing new either way and the presenter's console is
+degraded on top of it.
+
+Fixed by selecting the session's presentation-window slot, when live,
+before the page hook runs -- selecting a window always selects its
+frame and buffer too, so this also subsumes the buffer fix the
+previous test pins, just through the window instead of `set-buffer'
+directly.  Simulated here with two ordinary windows split within
+batch's own single frame, standing in for the presentation frame and
+the notes frame respectively (batch cannot create a second real
+frame, but splitting windows within the one it has needs no display
+and no window system): records the first window as
+presentation-window, selects the second, calls `orgacle-top', and
+asserts the first window is selected again afterward and still shows
+the presented buffer.  Confirmed by mutation: reverting the
+`select-window'/`window-live-p' branch back to fix round 2's plain
+`set-buffer' makes this test fail, with the notes stand-in window
+still selected after `orgacle-top' returns."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (let* ((session (orgacle--session-ensure))
+           (presented-buffer (current-buffer))
+           (presentation-window (selected-window))
+           (notes-stand-in-buffer (generate-new-buffer "orgacle-test-notes-window-stand-in"))
+           (notes-stand-in-window (split-window presentation-window)))
+      (unwind-protect
+          (progn
+            (set-window-buffer presentation-window presented-buffer)
+            (set-window-buffer notes-stand-in-window notes-stand-in-buffer)
+            (setf (orgacle--session-presentation-window session) presentation-window)
+            (select-window notes-stand-in-window)
+            (should-not (eq (selected-window) presentation-window))
+            (orgacle-top)
+            (should (eq (selected-window) presentation-window))
+            (should (eq (window-buffer presentation-window) presented-buffer)))
+        (when (window-live-p notes-stand-in-window) (delete-window notes-stand-in-window))
+        (when (buffer-live-p notes-stand-in-buffer) (kill-buffer notes-stand-in-buffer))
+        ;; this is the first test in the suite to give the session a
+        ;; presentation-window slot pointing at a real, live window --
+        ;; every other test that leaves `orgacle--session' non-nil
+        ;; afterward leaves that slot nil.  Caught directly, before
+        ;; `orgacle--goto-slide' also learned to correct a live window
+        ;; showing the wrong buffer: without this line, batch's own
+        ;; sole window kept pointing at this test's already-killed
+        ;; fixture buffer, and a later, unrelated test's `orgacle-top'
+        ;; silently selected and narrowed nothing.  Confirmed, after
+        ;; that correction was added to `orgacle--goto-slide' (which
+        ;; now also self-heals a stale presentation-window pointing at
+        ;; the wrong buffer), that removing this line no longer makes
+        ;; the suite fail -- the belt-and-braces fix there happens to
+        ;; cover this leak too.  Kept anyway, as correct test hygiene
+        ;; independent of that: nothing here should depend on one
+        ;; production function's defensive correction to stay clean,
+        ;; and a stale, dead-marker-filled session serves no test that
+        ;; runs after this one any purpose.
+        (setq orgacle--session nil)))))
 
 (ert-deftest orgacle-test-nav-starts-at-the-first-real-slide ()
   "A leading title page is skipped without recursion."
@@ -2486,7 +2566,7 @@ the real registration."
         (orgacle-top))
       (should (equal (car captured) '(:height 2.0))))))
 
-(ert-deftest orgacle-test-appearance-clean-text-scale-is-a-safe-no-op ()
+(ert-deftest orgacle-test-appearance-clean-text-scale-covers-both-branches ()
   "F8, fix round 1: strengthened from a bare `(should (progn ... t))'
 that asserted nothing about the slot or about leaving other
 remappings alone.
@@ -2503,16 +2583,39 @@ inside the `when entry' branch -- would not have been caught, since
 that branch never ran at all.  Fixed by giving the session a real
 \(BUFFER . COOKIE\) entry to clean, alongside the unrelated `italic'
 remapping: now the removal branch genuinely executes, removing only
-the recorded `default' cookie and nothing else.  Confirmed by
-mutation: replacing the `face-remap-remove-relative' call inside
-`orgacle-appearance-clean-text-scale''s `when entry' branch with
-`(setq-local face-remapping-alist nil)' now makes this test fail (the
-`italic' entry vanishes too), which it did not before this round."
+the recorded `default' cookie and nothing else.
+
+Finding 5, fix round 3: that fix itself then removed the *other*
+branch's only coverage -- nothing left called this function with
+genuinely nothing to clean, the exact no-entry path F8's own name
+promised (\"...-is-a-safe-no-op\") and the original point of the test.
+Confirmed: inserting `(unless entry (setq-local face-remapping-alist
+nil))' into `orgacle-appearance-clean-text-scale' left every test
+green, including the fix-round-2 version of this one, because nothing
+called the function with `entry' nil and an unrelated remapping
+present to catch it.  Renamed and rewritten to call the function
+twice, covering both branches in one test rather than narrowing
+coverage a second time to fix a first narrowing: once with nothing
+recorded (only the unrelated `italic' remapping present, asserting it
+survives untouched), then again with a real entry recorded (asserting
+both that the recorded cookie's own remapping is gone and that
+`italic' still survives).  Confirmed by mutation, both directions:
+the no-entry-branch mutation above now fails at the first `should' (the
+`italic' entry vanishes on the very first, nothing-to-clean call); the
+fix-round-2 over-removal mutation (`face-remap-remove-relative'
+replaced by a blanket `setq-local' inside `when entry') still fails
+the second block, exactly as it did before this round."
   (with-temp-buffer
     (let ((org-mode-hook nil)) (org-mode))
     (face-remap-add-relative 'italic '(:weight bold))
+    (let ((orgacle--session nil))
+      ;; nothing recorded: the no-entry branch itself
+      (orgacle-appearance-clean-text-scale)
+      (should-not (orgacle--session-appearance-text-scale (orgacle--session-ensure)))
+      (should (equal (car (alist-get 'italic face-remapping-alist)) '(:weight bold))))
     (let ((default-cookie (face-remap-add-relative 'default '(:height 2.0)))
           (orgacle--session nil))
+      ;; a real entry recorded: the removal branch
       (setf (orgacle--session-appearance-text-scale (orgacle--session-ensure))
             (cons (current-buffer) default-cookie))
       (orgacle-appearance-clean-text-scale)
@@ -2590,14 +2693,44 @@ itself real and live in batch -- which lets the *real* body of
 `orgacle--get-frame' run: its own `frame-live-p' check, its own
 `frame-parameter' read, and its own `setf' against a real frame,
 rather than asserting anything about a value this test manufactured
-itself the way the tests below it do."
+itself the way the tests below it do.
+
+Minor, fix round 3: this test's first version let `orgacle--get-frame'
+run its X-pointer-shape and `void-text-area-pointer' side effects
+unguarded, unlike `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
+and `orgacle-test-get-frame-resyncs-mouse-visible-across-a-quit', its
+two neighbours, which both save and restore the X-pointer variables in
+an `unwind-protect' and let-bind `orgacle-mouse-visible'.  Measured
+before and after the unguarded first version ran: `x-pointer-shape'
+nil to 38, `x-sensitive-text-pointer-shape' nil to 38,
+`void-text-area-pointer' `arrow' to `text' -- latent only because
+every test elsewhere that cares about these sets its own sentinel
+value rather than trusting whatever the previous test left behind, the
+same accidental-safety shape `orgacle-test-nav-commands-tolerate-a-fresh-sessions-nil-arithmetic'
+was called out for in Task 3.  Now follows the same save/restore
+convention as its two neighbours, plus `void-text-area-pointer', which
+neither of them happens to restore either but which
+`orgacle--get-frame' also sets unconditionally in the same guarded
+block."
   (orgacle-test-with-restored-frame-background
-    (let ((orgacle--session nil))
-      (cl-letf (((symbol-function 'make-frame) (lambda (&rest _) (selected-frame))))
-        (orgacle--get-frame))
-      (should (equal (frame-parameter (selected-frame) 'background-color)
-                     (orgacle--session-appearance-default-background
-                      (orgacle--session-ensure)))))))
+    (let ((orgacle--session nil)
+          (orgacle-mouse-visible orgacle-mouse-visible)
+          (orig-x-pointer-shape (and (boundp 'x-pointer-shape) x-pointer-shape))
+          (orig-x-sensitive (and (boundp 'x-sensitive-text-pointer-shape)
+                                  x-sensitive-text-pointer-shape))
+          (orig-void-text-area-pointer (and (boundp 'x-pointer-shape)
+                                             void-text-area-pointer)))
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'make-frame) (lambda (&rest _) (selected-frame))))
+              (orgacle--get-frame))
+            (should (equal (frame-parameter (selected-frame) 'background-color)
+                           (orgacle--session-appearance-default-background
+                            (orgacle--session-ensure)))))
+        (when (boundp 'x-pointer-shape)
+          (setq x-pointer-shape orig-x-pointer-shape)
+          (setq x-sensitive-text-pointer-shape orig-x-sensitive)
+          (setq void-text-area-pointer orig-void-text-area-pointer))))))
 
 (ert-deftest orgacle-test-appearance-background-applies-and-resets-with-a-real-frame ()
   "F2/F1, fix round 1: the live counterpart of

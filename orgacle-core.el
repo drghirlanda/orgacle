@@ -176,7 +176,14 @@ Has no effect when the `org-superstar' package is not installed."
   :group 'orgacle)
 
 (defcustom orgacle-start-presentation-hook nil
-  "Hook run after starting a presentation."
+  "Hook run after starting a presentation.
+Runs at the very end of `orgacle-run', after the first slide is
+already on screen.  The presented buffer is current when this runs --
+true since fix round 3 of the per-slide appearance task, an
+undocumented behaviour change and improvement over earlier versions,
+where `orgacle-run' calling `orgacle-make-notes-buffer' before the
+first slide's display could leave the *notes* buffer current here
+instead, with speaker notes on (the default)."
   :type 'hook
   :group 'orgacle)
 
