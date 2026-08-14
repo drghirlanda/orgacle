@@ -302,16 +302,34 @@ position the next slide's marker also lands on after rebuilding --
 confirmed directly, both markers ending up `eq' in position even
 though the slide genuinely changed -- so that version wrongly
 concluded \"unchanged\" and left the outgoing slide's appearance
-applied.  `(point-min)' does not have this failure mode for any of
-this function's real call sites, none of which ever widen the buffer
-mid-edit \(`E' never widens at all; `org-edit-src-exit' restores
-whatever restriction was already there before it returns, via
-`org-with-wide-buffer''s own `save-restriction''; `x' does not touch
-the restriction either\): the currently narrowed heading's own start
-position does not move just because content *inside* the narrowing
-changes, and does not coincide with a different slide's position
-merely because that slide happens to immediately follow the one that
-was deleted, the way a marker collapsed by the deletion itself can.
+applied.  `(point-min)' does not have *that* failure mode: the
+currently narrowed heading's own start position does not move just
+because content *inside* the narrowing changes, and does not coincide
+with a different slide's position merely because that slide happens to
+immediately follow the one that was deleted, the way a marker
+collapsed by the deletion itself can.
+
+But `(point-min)' alone has a failure mode of its own, fix round 2's
+own Finding 1: on a deck with no preamble before its first heading --
+no #+TITLE, no blank line, the buffer's very first character is that
+heading's own leading star -- slide 1's own marker sits at position 1,
+which coincides with `(point-min)' of a *fully widened* buffer too.
+`x' does not always leave the restriction untouched the way this
+docstring used to claim outright: a source block is ordinary Lisp
+\(or whatever language\) and can call `(widen)' itself, nothing stops
+it, and confirmed directly that when one does, `orgacle-refresh'
+running afterward compared a genuinely widened `(point-min)' \(1\)
+against slide 1's own marker \(also 1, on such a deck\), found them
+equal, and concluded \"same slide, nothing to change\" -- leaving the
+*entire* deck on screen, every slide's speaker notes included, instead
+of re-narrowing to slide 1 alone.  `E' followed by `C-x n w' reaches
+the same state without a special source block at all, since
+`orgacle-edit-text' never narrows or widens on its own.  Fixed with a
+second, independent trigger: `(not (buffer-narrowed-p))' alongside the
+position comparison, either one enough on its own to force a
+re-narrow, so a widened buffer is always caught regardless of whether
+the recomputed slide's own position happens to coincide with what
+widening alone would also produce.
 
 When the two differ, this calls `orgacle-current-page' -- the same
 function ordinary navigation uses -- rather than repeating its work:
@@ -356,7 +374,9 @@ own work."
     (let* ((slides (orgacle--session-slides session))
            (new-index (orgacle--session-index session))
            (new-marker (and (> (length slides) 0) (aref slides new-index))))
-      (when (and new-marker (/= old-point-min (marker-position new-marker)))
+      (when (and new-marker
+                 (or (/= old-point-min (marker-position new-marker))
+                     (not (buffer-narrowed-p))))
         (widen)
         (goto-char new-marker)
         (orgacle-current-page))))

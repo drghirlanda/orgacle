@@ -1118,6 +1118,57 @@ have caught."
       (orgacle-quit)
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest orgacle-test-refresh-renarrows-when-a-preambleless-first-slide-was-widened ()
+  "Finding 1 (fix round 2).  The C1/C2 fix's own same-slide predicate
+compares `(point-min)', captured before rebuilding, against the
+just-recomputed current slide's marker position.  On a deck with no
+preamble before its first heading -- no #+TITLE, no blank line, the
+buffer's very first character is the first slide's own leading star --
+that slide's marker sits at position 1, which is *also* exactly what
+`(point-min)' reads once the buffer is fully widened.  A source block
+that itself calls `(widen)' -- a legitimate thing for one to do, not
+contrived -- leaves the buffer in exactly that state when `orgacle-refresh'
+runs afterward via `org-babel-after-execute-hook': `(point-min)' is 1,
+the recomputed slide-1 marker is also 1, the two compare equal, and
+the fix concludes \"same slide, nothing to do\" -- leaving the entire
+deck on screen, including every slide's speaker notes, instead of
+re-narrowing to slide 1 alone.  Reproduced directly, before fixing,
+with exactly this scenario: `buffer-narrowed-p' nil and a slide 2
+speaker-notes string found by searching from `point-min' after
+running a widening block on slide 1.
+
+`E' followed by `C-x n w' reaches the same state without a special
+source block at all, since `orgacle-edit-text' never narrows or
+widens on its own -- the presenter can simply widen by hand while
+editing in place.
+
+Fixed with a `(not (buffer-narrowed-p))' disjunct alongside the
+position comparison: either signal on its own is now enough to trigger
+a re-narrow, so a widened buffer always gets narrowed back even when
+the recomputed slide happens to start at the same position widening
+itself produces."
+  (let ((buf (generate-new-buffer "orgacle-test-f1-preambleless")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "* Slide One\n#+begin_src emacs-lisp\n(widen)\n#+end_src\n\n"
+                  "* Slide Two\nBody.\n** Speaker notes\nSecret notes for two.\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (should (equal "Slide One" (org-entry-get nil "ITEM")))
+          (goto-char (point-min))
+          (re-search-forward "(widen)")
+          (beginning-of-line)
+          (let ((org-confirm-babel-evaluate nil)) (org-babel-execute-src-block))
+          (should (buffer-narrowed-p))
+          (should (equal "Slide One" (org-entry-get nil "ITEM")))
+          (should-not (save-excursion
+                        (goto-char (point-min))
+                        (re-search-forward "Secret notes" nil t))))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 ;;; Migration
 
 (ert-deftest orgacle-test-migrate-renames-properties ()
@@ -3777,7 +3828,17 @@ asking: there is nothing live left to lose.  `yes-or-no-p' stubbed to
 signal if it is ever called at all, rather than merely stubbed to
 return a fixed answer, so this pins that the confirmation gate is
 genuinely skipped here, not merely that a `t' answer happens to be
-assumed."
+assumed.
+
+Fix round 2, Finding 2: called with an explicit ASK of t for the
+second `orgacle-run', not the bare `(orgacle-run)' fix round 1 used
+here.  With ASK defaulting to nil for a bare call, this test would
+pass regardless of whether `frame-live-p' gates anything at all --
+confirmed directly, before this fix, that removing the `frame-live-p'
+conjunct entirely left this test, and the rest of the suite, green.
+Passing ASK explicitly is what makes \"frame already dead\" the actual
+reason `yes-or-no-p' is never reached, not \"nobody asked to be
+asked\"."
   (let ((buffer-a (generate-new-buffer "orgacle-test-run-dead-frame-a"))
         (buffer-b (generate-new-buffer "orgacle-test-run-dead-frame-b")))
     (unwind-protect
@@ -3795,7 +3856,7 @@ assumed."
             (insert-file-contents
              (expand-file-name "slides.org" orgacle-test-fixture-directory))
             (let ((org-mode-hook nil)) (org-mode))
-            (orgacle-run))
+            (orgacle-run t))
           (with-current-buffer buffer-a
             (should (eq major-mode 'org-mode))))
       (orgacle-quit)
@@ -3809,7 +3870,10 @@ mistaken for a live presentation to tear down: a following
 `orgacle-run' proceeds normally, with no confirmation prompt and no
 `user-error'.  `yes-or-no-p' stubbed to signal if called, the same way
 as `orgacle-test-run-does-not-prompt-when-the-previous-frames-already-dead',
-pinning that the gate is skipped entirely here, not merely answered."
+pinning that the gate is skipped entirely here, not merely answered.
+Called with an explicit ASK of t, for the same reason as that test
+\(fix round 2, Finding 2\): the start-time check has to be what skips
+this, not merely ASK defaulting to nil."
   (orgacle-test-with-fixture "slides.org"
     (orgacle--start-slides)
     (orgacle-top)
@@ -3825,7 +3889,7 @@ pinning that the gate is skipped entirely here, not merely answered."
               (insert-file-contents
                (expand-file-name "slides.org" orgacle-test-fixture-directory))
               (let ((org-mode-hook nil)) (org-mode))
-              (should (progn (orgacle-run) t))))
+              (should (progn (orgacle-run t) t))))
         (orgacle-quit)
         (when (buffer-live-p buffer-b) (kill-buffer buffer-b))))))
 
@@ -3929,6 +3993,48 @@ of its own teardown, and the guard fix belongs there because of it."
       (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
       (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
 
+(ert-deftest orgacle-test-run-from-the-notes-buffer-does-not-hard-error ()
+  "Finding 4 (fix round 2), I2's un-generalized sibling.  Calling
+`orgacle-run' *from the notes buffer itself* -- plain `org-mode', on
+screen in its own frame, exactly what `orgacle-speaker-notes' \(the
+default\) documents as the presenter console, and a buffer a presenter
+can genuinely find themselves in and decide to start a new
+presentation from -- used to hard-error.
+
+`orgacle--quit-previous-session-if-any' captures `(current-buffer)' as
+REQUESTED before tearing down the old session, meaning to restore it
+afterward; when REQUESTED is the old session's own notes buffer,
+`orgacle-quit' -- called in between -- kills that exact buffer as part
+of its own, already-correct notes-buffer teardown, and the later
+`(set-buffer requested)' then hits a dead buffer object, guarded on
+non-nil only, the same gap I2 fixed one call up
+\(`orgacle--session-org-buffer', in `orgacle-quit' itself\) but did not
+generalize to this sibling call.  Reproduced directly before fixing:
+`(error \"Selecting deleted buffer\")'.
+
+Fixed with the same `buffer-live-p' guard I2 already established:
+skip restoring REQUESTED when it is no longer live, since there is
+nothing to restore to -- `orgacle-run' is about to `find-file'/`switch-to-buffer'
+its own way to a real buffer immediately afterward regardless."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-f4-a")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  ((symbol-function 'orgacle-make-notes-buffer)
+                   (lambda () (orgacle--build-notes-buffer))))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "notes.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (let ((notes-buf (orgacle--session-notes-buffer orgacle--session)))
+            (should (buffer-live-p notes-buf))
+            (with-current-buffer notes-buf
+              (should (eq major-mode 'org-mode))
+              (should (progn (orgacle-run t) t)))
+            (should-not (buffer-live-p notes-buf))))
+      (orgacle-quit)
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a)))))
+
 (ert-deftest orgacle-test-unload-orgacle-src-removes-the-org-edit-src-exit-advice ()
   "I3 (fix round 1).  `unload-feature' only unbinds symbols a file
 itself defines; `org-edit-src-exit' is Org's own function, merely
@@ -3969,29 +4075,29 @@ a real reload rather than a no-op."
     (should (fboundp 'orgacle-toggle-hide-src-blocks))))
 
 (ert-deftest orgacle-test-run-second-time-actually-checks-the-start-time-gate ()
-  "I4 (fix round 1).  `orgacle-test-run-does-not-act-on-a-session-that-never-presented'
+  "I4 (fix round 1), rewritten for fix round 2.  `orgacle-test-run-does-not-act-on-a-session-that-never-presented'
 \(above\) could not have caught the start-time conjunct being removed
-from `orgacle-run': it stubs `orgacle--get-frame' to nil, so
-`frame-live-p' is always nil regardless of the gate, and its only
-assertion, `(should (progn (orgacle-run) t))', holds either way -- with
-the gate correctly skipping the untouched session, or with the gate
-removed and the dead-frame branch of the `if' silently absorbing it,
-both produce a completed `orgacle-run' with no error.  Confirmed
-directly: temporarily removing `(orgacle--session-start-time
-orgacle--session)' from `orgacle.el' left all tests passing, that one
-included.
+from `orgacle-run': confirmed directly, temporarily removing
+`(orgacle--session-start-time orgacle--session)' from `orgacle.el' left
+all tests passing at the time, that one included -- it called
+`(orgacle-run)' with no argument, so ASK was nil regardless of the
+gate, and `(and ask ...)' was already false on its own.
 
-This test closes the gap the same way the review's own \"also fix\"
-note suggests: seed a session with a *live* frame slot -- so
-`frame-live-p' is genuinely true -- but no start-time, and stub
-`yes-or-no-p' to signal if called at all.  With the gate in place, the
-whole `when' block is skipped before `frame-live-p' is ever consulted,
-so `yes-or-no-p' is never reached and `orgacle-run' completes normally.
-With the gate removed, `frame-live-p' is now true, and the `if''s own
-`yes-or-no-p' call fires, signalling the stub's error and failing this
-test -- confirmed directly by removing the conjunct and re-running
-this test alone, which fails with exactly that error, before restoring
-it and reconfirming this test passes again."
+This test seeds a session with a *live* frame slot -- so `frame-live-p'
+is genuinely true -- but no start-time, and calls `(orgacle-run t)'
+explicitly so ASK really is t.  With the gate in place, the whole
+`when' block is skipped before `frame-live-p' or `yes-or-no-p' is ever
+consulted.  Fix round 1's version of this docstring claimed the
+mutation -- removing the start-time conjunct -- fails with the
+`yes-or-no-p' stub's own error; false, caught by the fix round 2
+review \(the false claim was itself about a version of this test that
+still called plain `(orgacle-run)', where ASK's own nil already masked
+the gate, so the mutation's *real* effect went untested\).  Re-verified
+here, with ASK now genuinely t: the mutation does signal exactly the
+`yes-or-no-p' stub's error, confirmed directly by removing the
+conjunct and re-running this test alone before restoring it -- the
+claim is accurate for what this corrected test actually exercises, not
+merely asserted."
   (let ((session (orgacle--session-ensure)))
     (setf (orgacle--session-frame session) (selected-frame)))
   (should-not (orgacle--session-start-time (orgacle--session-ensure)))
@@ -4006,35 +4112,46 @@ it and reconfirming this test passes again."
             (insert-file-contents
              (expand-file-name "slides.org" orgacle-test-fixture-directory))
             (let ((org-mode-hook nil)) (org-mode))
-            (should (progn (orgacle-run) t))))
+            (should (progn (orgacle-run t) t))))
       (setf (orgacle--session-frame (orgacle--session-ensure)) nil)
-      (orgacle-quit)
+      (cl-letf (((symbol-function 'delete-frame) #'ignore))
+        (orgacle-quit))
       (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
 
-;;; P4 Task 6 fix round 1: the Ruling -- non-interactive callers never prompt
+;;; P4 Task 6 fix round 2: the Ruling, corrected -- an explicit &optional
+;;; ASK argument with an `(interactive (list t))' spec, not
+;;; `called-interactively-p'
 
-(ert-deftest orgacle-test-run-does-not-prompt-when-called-non-interactively ()
-  "The review's own ruling: `orgacle-run' is autoloaded, and users do
-call it from init files and hooks, where a `yes-or-no-p' prompt would
-block with nothing to answer it.  A non-interactive caller must get
-the teardown without being asked, not an indefinite block.
+;; Fix round 1's `called-interactively-p'-based Ruling was itself wrong
+;; on both cases that matter (Finding 3, fix round 2), and untestable
+;; in the one way that would have caught it (Finding 2): mutating the
+;; conjunct away, or the `frame-live-p' conjunct away, left 193/193
+;; green, because every test in this file that exercised the
+;; confirmation gate did so by calling `(orgacle-run)' as a plain Lisp
+;; form -- always non-interactive in batch regardless of the mutation,
+;; so neither conjunct's removal changed any test's outcome.  Emacs's
+;; own docstring for `called-interactively-p' names this exact
+;; category of use as improper and recommends precisely the fix
+;; adopted here: an optional argument with its own `interactive' spec.
+;; `orgacle-run' now takes `&optional ASK', with `(interactive (list
+;; t))' supplying `t' automatically whenever it is invoked through the
+;; command loop -- a real key press, `M-x', or `(call-interactively
+;; 'orgacle-run)' -- and defaulting to nil, no prompt, for a plain
+;; Lisp call from a script, hook, or another command's own body.  This
+;; is no longer a claim that needs Xvfb to check: `call-interactively'
+;; and `command-execute' both evaluate an `interactive' spec correctly
+;; in batch, confirmed directly, unlike `called-interactively-p', which
+;; needs a live command loop and is `nil' for all of them there.
 
-`called-interactively-p' is the correct, idiomatic signal for this --
-confirmed directly, under a real Xvfb display with a genuine X
-keypress bound to a throwaway command, that it returns t there and nil
-for the identical command called as a plain Lisp form, `call-interactively',
-`funcall-interactively', or `command-execute', all four of which
-returned nil in that same real, non-batch Emacs.  Batch Emacs, which
-this test runs in, has no live command loop for any of them to attach
-to at all, so this specific test -- calling `orgacle-run' the ordinary
-way any test in this suite calls it, as a plain Lisp form -- is
-already exactly the case the ruling is about: non-interactive.  The
-confirm/decline logic itself, gated on this signal only when it *is*
-true, is pinned separately, directly on
-`orgacle--quit-previous-session-if-any', in the next section; this
-test is what stays representative of real batch/script/hook usage."
-  (let ((buffer-a (generate-new-buffer "orgacle-test-run-noninteractive-a"))
-        (buffer-b (generate-new-buffer "orgacle-test-run-noninteractive-b")))
+(ert-deftest orgacle-test-run-with-no-argument-does-not-prompt ()
+  "A plain `(orgacle-run)' call -- what every script, hook, or another
+command's own body would write -- defaults ASK to nil: no prompt, even
+with a live previous session, teardown happens silently.  `yes-or-no-p'
+stubbed to signal if called at all, not merely to return a fixed
+answer, so this pins that the gate is genuinely skipped, not merely
+answered."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-run-no-arg-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-run-no-arg-b")))
     (unwind-protect
         (cl-letf (((symbol-function 'orgacle--get-frame)
                    (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
@@ -4042,7 +4159,7 @@ test is what stays representative of real batch/script/hook usage."
                   ((symbol-function 'delete-frame) #'ignore)
                   ((symbol-function 'yes-or-no-p)
                    (lambda (&rest _)
-                     (error "must not prompt: orgacle-run was not called interactively")))
+                     (error "must not prompt: orgacle-run was called with no argument")))
                   (orgacle-speaker-notes nil))
           (with-current-buffer buffer-a
             (insert-file-contents
@@ -4060,33 +4177,125 @@ test is what stays representative of real batch/script/hook usage."
             (should (eq major-mode 'orgacle-mode)))
           (with-current-buffer buffer-a
             (should (eq major-mode 'org-mode))))
-      ;; by this point `orgacle--session' is B's own, whose frame slot
-      ;; is also `(selected-frame)' by the same stub construction as
-      ;; A's; stub `delete-frame' here too so tearing that down for
-      ;; real does not hit "Attempt to delete the sole visible or
-      ;; iconified frame"
       (cl-letf (((symbol-function 'delete-frame) #'ignore))
         (orgacle-quit))
       (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
       (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
 
-;;; P4 Task 6 fix round 1: confirm/decline logic, pinned directly on the
-;;; extracted helper rather than through `orgacle-run''s own
-;;; `called-interactively-p' gate, which batch can never make true
+(ert-deftest orgacle-test-run-called-interactively-forces-a-prompt ()
+  "The dispatch side of the Ruling, batch-testable and previously
+missing: `(call-interactively 'orgacle-run)' -- what a real key press
+or `M-x' both reduce to -- must evaluate `orgacle-run''s own
+`interactive' spec and pass ASK as t, triggering the confirmation gate
+even though the call site itself is, textually, still a plain Lisp
+form.  This is exactly the coverage fix round 1's
+`called-interactively-p' design could never have in batch, and exactly
+what Finding 2 showed was lost when the original decline test was
+removed as supposedly unrecoverable: `yes-or-no-p' stubbed to error if
+called proves the gate *is* reached here, unlike the no-argument case
+above."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-run-ci-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-run-ci-b"))
+        (prompted nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame)
+                   (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
+                                     (selected-frame))))
+                  ((symbol-function 'delete-frame) #'ignore)
+                  ((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _) (setq prompted t) t))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (with-current-buffer buffer-b
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (call-interactively #'orgacle-run))
+          (should prompted))
+      (cl-letf (((symbol-function 'delete-frame) #'ignore))
+        (orgacle-quit))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
+
+(ert-deftest orgacle-test-run-t-declining-confirmation-leaves-the-previous-session-untouched ()
+  "The decline path, restored -- Finding 2 -- now through `orgacle-run'
+itself, called with an explicit ASK of t \(matching what
+`call-interactively' would supply for a real key press or `M-x',
+pinned separately above\): raises `user-error' and leaves the first,
+still-live presentation completely alone -- its frame is not deleted
+and its buffer stays in `orgacle-mode', exactly as if the second
+`orgacle-run' had never been called at all."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-run-t-decline-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-run-t-decline-b"))
+        (deleted 'not-called))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame)
+                   (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
+                                     (selected-frame))))
+                  ((symbol-function 'delete-frame)
+                   (lambda (&optional frame _force) (setq deleted frame)))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (with-current-buffer buffer-b
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (should-error (orgacle-run t) :type 'user-error))
+          (should (eq deleted 'not-called))
+          (with-current-buffer buffer-a
+            (should (eq major-mode 'orgacle-mode))))
+      (cl-letf (((symbol-function 'delete-frame) #'ignore))
+        (orgacle-quit))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
+
+(ert-deftest orgacle-test-run-t-confirming-tears-down-the-previous-session ()
+  "The confirm path's counterpart to the decline test above, through
+`orgacle-run' itself with an explicit ASK of t."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-run-t-confirm-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-run-t-confirm-b")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame)
+                   (lambda () (setf (orgacle--session-frame (orgacle--session-ensure))
+                                     (selected-frame))))
+                  ((symbol-function 'delete-frame) #'ignore)
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (with-current-buffer buffer-b
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (should (progn (orgacle-run t) t)))
+          (with-current-buffer buffer-a
+            (should (eq major-mode 'org-mode))))
+      (cl-letf (((symbol-function 'delete-frame) #'ignore))
+        (orgacle-quit))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
+
+;;; P4 Task 6 fix round 1: confirm/decline logic, also pinned directly on
+;;; the extracted helper -- redundant with the `orgacle-run'-level tests
+;;; above now that ASK is a plain argument, but kept as a focused unit
+;;; test of the decision logic alone, independent of `orgacle-run''s own
+;;; dispatch
 
 (ert-deftest orgacle-test-quit-previous-session-declines-leaves-everything-untouched ()
   "The decline path, pinned directly on
-`orgacle--quit-previous-session-if-any' with ASK explicitly t, since
-routing this through `orgacle-run' itself is no longer possible in
-batch after the Ruling above: `called-interactively-p' is nil for
-every plain-Lisp-form call in batch, so `orgacle-run' would now always
-take the non-interactive, no-prompt path regardless of any
-`yes-or-no-p' stub, and this scenario -- a real interactive invocation
-that gets declined -- is only actually reachable live, under Xvfb, the
-same way the confirmation prompt's own text was verified in Task 6's
-original report.  Testing the helper directly keeps this scenario
-falsifiable in batch anyway, on the actual decision logic, without
-needing `orgacle-run''s own interactive dispatch to cooperate."
+`orgacle--quit-previous-session-if-any' with ASK explicitly t."
   (let ((buffer-a (generate-new-buffer "orgacle-test-decline-helper-a")))
     (unwind-protect
         (cl-letf (((symbol-function 'orgacle--get-frame)

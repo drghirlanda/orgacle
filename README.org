@@ -121,6 +121,21 @@ Three kinds of subtree are treated specially:
   the notes buffer instead. See [[Speaker notes]].
 - Any heading with an =ORGACLE_HIDE= property is hidden from the slide.
 
+*Known issue, affecting all three kinds equally:* pressing =r=, =g=, or =x=
+on a slide, or editing a source block on it with =e= and exiting, can
+un-hide one of these subtrees on the presentation screen itself, for the
+rest of that slide's time on screen — a private-notes leak to the audience
+for =Speaker notes= in particular. The exact rule: it stays hidden only when
+the hidden subtree, *including any children of its own*, is the last
+subtree of its slide, with another top-level slide heading immediately
+following. Plain trailing text still inside the hidden subtree's own body
+is fine, and so are the subtree's own children — what breaks it is a
+*sibling* heading after it on the same slide, or the hidden subtree being
+the deck's actual last heading with nothing following at all. Until this is
+fixed, avoid pressing =r=, =g=, =x=, or editing code, on any slide with a
+=Title page=, =Speaker notes=, or =ORGACLE_HIDE= subtree that is not
+immediately followed by another slide.
+
 *** Navigating
 
 Once presenting, =n=, =f=, =SPC=, =→= and =PageDown= go forward; =p=, =b=,
@@ -403,19 +418,10 @@ Two details worth knowing:
   Other capitalisations are still hidden from the slide, but their contents
   will not reach the notes buffer.
 - Set =orgacle-speaker-notes= to nil to skip the notes frame entirely.
-- *Known issue:* pressing =r=, =g=, or =x= on a slide with a =Speaker notes=
-  subheading, or editing a source block inside those notes with =e= and
-  exiting it, usually un-hides that subheading on the presentation screen
-  itself, for the rest of that slide's time on screen — a private-notes leak
-  to the audience. This affects most decks: it happens whenever anything at
-  all — even an empty subheading — comes after =Speaker notes= within the
-  same slide, and also happens when =Speaker notes= is your last slide's
-  last heading with nothing after it at all. The only shape confirmed safe
-  is =Speaker notes= as the very last heading of its slide, immediately
-  followed by another top-level slide heading with nothing else in between
-  — do not rely on a trailing subheading of any kind to fix this, it does
-  not. Until this is fixed, avoid pressing =r=, =g=, =x=, or editing code,
-  on any slide with speaker notes attached.
+- *Known issue:* see the private-notes leak warning under [[What becomes a
+  slide]] — =Speaker notes= is the subtree kind where this matters most,
+  since a leak here exposes your own notes to the audience, not just a
+  hidden property or the title page.
 
 =M-x orgacle-estimate-time= reports how long it would take to read all your
 speaker notes aloud, together with the word count, which is a reasonable proxy

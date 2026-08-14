@@ -154,10 +154,14 @@ narrowed `org-restriction' slot."
             ;; `error', which nothing between here and this whole
             ;; `unwind-protect''s outer boundary catches.  That used to
             ;; abort every step below this one, including the
-            ;; notes-buffer and frame cleanup a few lines down, and left
-            ;; a following `orgacle-run' unable to complete either: Step
-            ;; 3 made this function reachable from `orgacle-run' itself
-            ;; when tearing down a previous session, so an org-buffer
+            ;; notes-buffer and its own frame's cleanup further down --
+            ;; corrected here, fix round 2, Finding 6: the *presentation*
+            ;; frame is deleted above this guard, not below it; only the
+            ;; notes buffer and its frame are still ahead at this point
+            ;; -- and left a following `orgacle-run' unable to complete
+            ;; either: Step 3 made this function reachable from
+            ;; `orgacle-run' itself when tearing down a previous session,
+            ;; so an org-buffer
             ;; killed independently between two presentations now hard-
             ;; errors the *next* `orgacle-run' too, not merely a stray
             ;; `M-x orgacle-quit'.  Confirmed directly, both the error
@@ -355,9 +359,12 @@ the display."
   "Tear down a previous, real presentation session before a new one begins.
 P4 Task 6 Step 3, extracted into its own function in fix round 1 so
 the confirm/decline logic below stays testable in batch on its own
-terms; see `orgacle-run', the sole real caller, for why it cannot
-exercise this by calling `orgacle-run' itself once ASK depends on
-`called-interactively-p'.
+terms, and kept in fix round 2 even though `orgacle-run''s own ASK is
+now a plain argument rather than something only `called-interactively-p'
+could produce: a small, focused unit of the decision logic on its own,
+independent of `orgacle-run''s dispatch, is still worth having; see
+`orgacle-test-quit-previous-session-confirms-tears-down' and its
+sibling in test/orgacle-test.el.
 
 A no-op when there is no previous session, or one exists but never
 actually reached a real presentation -- gated on the start-time slot,
@@ -420,7 +427,23 @@ back afterwards matters just as much: without it, the `(current-buffer)'
 capture inside `orgacle-run', for the *new* session's own org-buffer
 slot, would record the old presentation's buffer -- wherever
 `orgacle-quit' left it -- instead of the buffer `orgacle-run' was
-actually just called from."
+actually just called from.
+
+The switch-back is guarded on `buffer-live-p', not merely REQUESTED
+being non-nil -- Finding 4, fix round 2, I2's un-generalized sibling:
+`orgacle-run' can itself be called *from* the old session's own notes
+buffer -- plain `org-mode', on screen, in its own frame, exactly what
+`orgacle-speaker-notes' \(the default\) documents as the presenter
+console, so a presenter genuinely can find themselves there and decide
+to start a new presentation from it.  When that happens, REQUESTED is
+the notes buffer itself, and `orgacle-quit', called in between, kills
+that exact buffer as part of its own \(already correct\) notes-buffer
+teardown -- so the switch-back used to hit a dead buffer object and
+signal `error', confirmed directly, *after* the old presentation was
+already torn down.  Skipping the switch-back when REQUESTED is no
+longer live leaves nothing to restore to, which is fine: `orgacle-run'
+is about to `find-file'/narrow/`switch-to-buffer' its own way to a
+real buffer immediately afterward regardless of what is current here."
   (when (and orgacle--session (orgacle--session-start-time orgacle--session))
     (if (and ask
              (frame-live-p (orgacle--session-frame orgacle--session))
@@ -434,33 +457,54 @@ actually just called from."
                             (orgacle--session-org-buffer old))))
         (when (buffer-live-p presented) (set-buffer presented))
         (orgacle-quit)
-        (set-buffer requested)))))
+        (when (buffer-live-p requested) (set-buffer requested))))))
 
 ;;;###autoload
-(defun orgacle-run ()
-  "Present an Org-mode buffer."
-  (interactive)
+(defun orgacle-run (&optional ask)
+  "Present an Org-mode buffer.
+With ASK non-nil, and a previous presentation's frame still genuinely
+live, confirm before ending it; called interactively -- a real key
+press or `M-x' -- ASK is always t, via this command's own `interactive'
+spec.  A plain Lisp call, `(orgacle-run)', from a script, an
+`after-init-hook', or another command's own body, defaults ASK to nil:
+no prompt, ever, regardless of what is still running.  A wrapper
+command that means to relay a real, live end-user action -- a small
+command that opens one particular deck and presents it, bound to a
+key, exactly how a presenter might set one up -- should call
+`(orgacle-run t)', or `(call-interactively #\\='orgacle-run)',
+explicitly, the same way any Emacs command that wants to relay \"this
+is happening for a real, present user\" to something it calls has to
+say so explicitly; nothing here can infer that safely on a caller's
+behalf.  See `orgacle--quit-previous-session-if-any' for what ASK
+actually gates."
+  (interactive (list t))
   (unless (eq major-mode 'orgacle-mode)
     (unless (eq major-mode 'org-mode)
       (error "Orgacle can only be used from Org Mode"))
-    ;; The Ruling, P4 Task 6 fix round 1: `orgacle-run' is autoloaded,
-    ;; and users do call it from init files and hooks, where a
-    ;; `yes-or-no-p' prompt -- `orgacle--quit-previous-session-if-any's
-    ;; own confirm/decline logic, immediately below -- would block with
-    ;; no one there to answer it.  `called-interactively-p' is the
-    ;; correct, idiomatic signal for \"was this a real key press or
-    ;; M-x, not a script calling the function\": confirmed directly,
-    ;; live under Xvfb, that a command bound to a real key returns t
-    ;; from it and an identical plain Lisp call to the same command
-    ;; returns nil, in the same real, non-batch Emacs process.  Batch
-    ;; Emacs -- what runs this file's own test suite -- has no live
-    ;; command loop at all, so this is always nil there regardless of
-    ;; calling convention, which is exactly why the confirm/decline
-    ;; logic itself is pinned directly on
-    ;; `orgacle--quit-previous-session-if-any', not through this
-    ;; dispatch; see that function's own docstring and the tests named
-    ;; for it in test/orgacle-test.el.
-    (orgacle--quit-previous-session-if-any (called-interactively-p 'interactive))
+    ;; The Ruling, P4 Task 6 fix round 2, replacing fix round 1's own
+    ;; `called-interactively-p'-based version: that signal turned out
+    ;; to be backwards on both cases that actually matter, and
+    ;; untestable in the specific way that would have caught it --
+    ;; Findings 2 and 3 of that round's review.  `called-interactively-p'
+    ;; asks whether *this* function's own immediate caller reached it
+    ;; through the command loop, which is the wrong question for a
+    ;; wrapper command like the one this docstring's own example
+    ;; describes: such a wrapper *is* a real key press from the
+    ;; presenter's own perspective, but its own call to `(orgacle-run)'
+    ;; is, textually, just an ordinary Lisp form, so
+    ;; `(called-interactively-p 'interactive)' evaluated *inside*
+    ;; `orgacle-run' returns nil there regardless -- the exact "torn
+    ;; down with no confirmation" failure mode this whole feature
+    ;; exists to prevent.  A plain ASK argument, with its own
+    ;; `interactive' spec supplying it automatically for a direct key
+    ;; press or `M-x', is the fix Emacs's own `called-interactively-p'
+    ;; docstring already names for exactly this situation.  It is also
+    ;; what makes both branches ordinary, direct batch tests:
+    ;; `(orgacle-run)' and `(orgacle-run t)' need no live command loop
+    ;; to differ, and `(call-interactively 'orgacle-run)' correctly
+    ;; evaluates this function's own `interactive' spec even in batch,
+    ;; confirmed directly, unlike `called-interactively-p' itself.
+    (orgacle--quit-previous-session-if-any ask)
     ;; delete the previous presentation's reveal overlays and
     ;; text-scale remapping before its session is replaced below.
     ;; Independent of the block just above, which only fires for a
