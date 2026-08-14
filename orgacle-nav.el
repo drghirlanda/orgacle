@@ -33,6 +33,18 @@
 ;; declaration stays for the same reason P2 added it.
 (declare-function orgacle-toggle-hide-src-blocks "orgacle-src" (&optional arg))
 
+;; `orgacle-next-page' and `orgacle-previous-page' consult reveal state
+;; before moving to another slide, when `orgacle-reveal-on-navigation'
+;; -- a plain variable, needing no declaration -- is non-nil.  Declared
+;; rather than required for the same reason `orgacle-toggle-hide-src-blocks'
+;; is above: no feature module may require a sibling, and orgacle.el's
+;; own require order guarantees both are defined before either is ever
+;; actually called.
+(declare-function orgacle-reveal-next "orgacle-reveal" ())
+(declare-function orgacle-reveal-previous "orgacle-reveal" ())
+(declare-function orgacle-reveal-clean-overlays "orgacle-reveal" ())
+(defvar orgacle--reveal-index)
+
 (defun orgacle-goto-top-level ()
   "Go to the current top level heading containing point."
   (interactive)
@@ -52,11 +64,26 @@ Called once per presentation -- by `orgacle-run', and directly by
 tests that exercise navigation without starting a full presentation --
 after which `orgacle-top', `orgacle-next-page', `orgacle-previous-page'
 and `orgacle-jump-to-page' are index arithmetic over the vector it
-builds."
+builds.
+
+Also clears any reveal overlays and resets the reveal index left over
+from whatever was on display before -- `orgacle--reveal-overlays' and
+`orgacle--reveal-index' are plain variables, not part of the session
+struct this function otherwise resets, so nothing else guarantees they
+describe *this* buffer's first slide rather than the last thing some
+earlier presentation (or, in the test suite, some earlier fixture)
+left revealed.  Without this, `orgacle-next-page', called here before
+`orgacle-current-page' has ever run for this buffer to rebuild reveal
+state honestly, could consult that leftover state and decide there was
+still something to reveal on a slide that has no reveal targets at
+all, silently swallowing the very first `n' of the new presentation
+instead of moving to the next slide."
   (let ((session (orgacle--session-ensure)))
     (setf (orgacle--session-slides session) (orgacle--build-slides))
     (setf (orgacle--session-index session) 0))
-  (orgacle--sync-page-number))
+  (orgacle--sync-page-number)
+  (orgacle-reveal-clean-overlays)
+  (setq orgacle--reveal-index 0))
 
 (defun orgacle--goto-slide (index)
   "Move to slide INDEX of the session's slides slot and present it.
@@ -125,18 +152,28 @@ the first slide, above the last slide goes to the last one."
   (orgacle--goto-slide 0))
 
 (defun orgacle-next-page ()
-  "Advance to the next slide and present it.
-Past the last slide, nothing moves and the last slide stays on
-display; `orgacle--goto-slide' is what clamps that."
+  "Advance an in-progress reveal, or advance to the next slide.
+With `orgacle-reveal-on-navigation' non-nil (the default) and the
+current slide's reveal not yet exhausted, calls `orgacle-reveal-next'
+and stops there -- the slide does not change.  Otherwise moves to the
+next slide exactly as before this option existed.  Past the last
+slide, nothing moves and the last slide stays on display;
+`orgacle--goto-slide' is what clamps that."
   (interactive)
-  (orgacle--goto-slide (1+ (orgacle--session-index (orgacle--session-ensure)))))
+  (unless (and orgacle-reveal-on-navigation (orgacle-reveal-next))
+    (orgacle--goto-slide (1+ (orgacle--session-index (orgacle--session-ensure))))))
 
 (defun orgacle-previous-page ()
-  "Present the previous slide.
-Before the first slide, nothing moves and the first slide stays on
-display; `orgacle--goto-slide' is what clamps that."
+  "Step an in-progress reveal back, or present the previous slide.
+With `orgacle-reveal-on-navigation' non-nil (the default) and the
+current slide's reveal index above 0, calls `orgacle-reveal-previous'
+and stops there -- the slide does not change.  Otherwise moves to the
+previous slide exactly as before this option existed.  Before the
+first slide, nothing moves and the first slide stays on display;
+`orgacle--goto-slide' is what clamps that."
   (interactive)
-  (orgacle--goto-slide (1- (orgacle--session-index (orgacle--session-ensure)))))
+  (unless (and orgacle-reveal-on-navigation (orgacle-reveal-previous))
+    (orgacle--goto-slide (1- (orgacle--session-index (orgacle--session-ensure))))))
 
 (defun orgacle-next-subheading ()
   "Advance to next subheading, unhiding it if hidden."

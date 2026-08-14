@@ -860,18 +860,24 @@ it."
         (when (get-buffer orgacle--log-buffer-name)
           (kill-buffer orgacle--log-buffer-name))))))
 
-(ert-deftest orgacle-test-page-hook-order-is-file-slide-in-indicators-notes ()
+(ert-deftest orgacle-test-page-hook-order-is-file-slide-in-indicators-notes-reveal ()
   "The real, global `orgacle-page-hook' runs file, slide-in, indicators,
-then notes, in that order -- not merely some order the four `add-hook'
-calls happen to produce.  File-before-indicators is the part that is
-not cosmetic: `orgacle-show-file' calls `orgacle-clean-fringe-overlays',
-so if indicators ran first, `orgacle-show-file' would wipe the fringe
-overlays `orgacle-show-indicators-maybe' had just drawn.  The other new
-tests in this section let-bind `orgacle-page-hook' away to isolate the
-runner, so this is the only test that looks at the real, default
+notes, then reveal, in that order -- not merely some order the five
+`add-hook' calls happen to produce.  File-before-indicators is the
+part that is not cosmetic: `orgacle-show-file' calls
+`orgacle-clean-fringe-overlays', so if indicators ran first,
+`orgacle-show-file' would wipe the fringe overlays
+`orgacle-show-indicators-maybe' had just drawn.  Reveal has no
+ordering dependency on the other four in either direction; it is last
+because `orgacle-reveal.el' is required last among the page-hook
+contributors, purely for lowest risk absent a reason to prefer
+another position -- see that file's own `add-hook' comment.  The other
+new tests in this section let-bind `orgacle-page-hook' away to isolate
+the runner, so this is the only test that looks at the real, default
 value."
   (should (equal '(orgacle-show-file-auto orgacle-slide-in-effect
-                    orgacle-show-indicators-maybe orgacle-position-notes)
+                    orgacle-show-indicators-maybe orgacle-position-notes
+                    orgacle-reveal-reset)
                  (default-value 'orgacle-page-hook))))
 
 ;;; Navigation
@@ -1782,6 +1788,250 @@ in step with navigation."
         (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
           (should (equal header-line-format
                          '(:eval (orgacle--presenter-header)))))))))
+
+;;; Incremental reveal
+
+(ert-deftest orgacle-test-reveal-starts-hidden ()
+  "The brief's Step 2 test, verified against the fixture actually written:
+`reveal.org's first slide (\"Items slide\") has three top-level list
+items, matching the brief's illustrative 3 -- confirmed independently
+with `org-element-map' before trusting it, not merely copied."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (= 0 orgacle--reveal-index))
+    (should (= 3 (length (orgacle--reveal-targets))))))
+
+(ert-deftest orgacle-test-reveal-is-symmetric ()
+  "Forward then back returns to the same state."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-reveal-next)
+    (orgacle-reveal-next)
+    (should (= 2 orgacle--reveal-index))
+    (orgacle-reveal-previous)
+    (should (= 1 orgacle--reveal-index))))
+
+(ert-deftest orgacle-test-reveal-stops-at-the-ends ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-reveal-previous)
+    (should (= 0 orgacle--reveal-index))
+    (dotimes (_ 10) (orgacle-reveal-next))
+    (should (orgacle--reveal-exhausted-p))))
+
+(ert-deftest orgacle-test-reveal-absent-property-has-no-targets ()
+  "A slide without the property reveals nothing and hides nothing."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 3)
+    (should (null (orgacle--reveal-targets)))))
+
+(ert-deftest orgacle-test-reveal-absent-property-creates-no-overlays ()
+  "The off-by-default requirement at the overlay level, not just targets:
+a slide with no ORGACLE_REVEAL property gets no reveal machinery at all."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 3)
+    (should (null orgacle--reveal-overlays))))
+
+(ert-deftest orgacle-test-reveal-targets-headings-kind ()
+  "The fixture's second slide, kind \"headings\", has two direct
+subheadings -- confirmed independently with `org-map-entries' before
+trusting it."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 2)
+    (should (= 2 (length (orgacle--reveal-targets))))))
+
+(ert-deftest orgacle-test-reveal-overlays-are-tagged ()
+  "Every reveal overlay carries the `orgacle-reveal' marker property, so
+they can be found and deleted wholesale, per the brief's Step 3."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (= 3 (length orgacle--reveal-overlays)))
+    (should (cl-every (lambda (ov) (overlay-get ov 'orgacle-reveal))
+                       orgacle--reveal-overlays))))
+
+(ert-deftest orgacle-test-reveal-hides-every-target-initially ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (cl-every (lambda (ov) (eq (overlay-get ov 'invisible) 'orgacle-hide))
+                       orgacle--reveal-overlays))))
+
+(ert-deftest orgacle-test-reveal-next-unhides-in-order ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-reveal-next)
+    (should-not (overlay-get (aref orgacle--reveal-overlays 0) 'invisible))
+    (should (eq (overlay-get (aref orgacle--reveal-overlays 1) 'invisible)
+                'orgacle-hide))))
+
+(ert-deftest orgacle-test-reveal-previous-rehides-the-same-target ()
+  "The overlay `orgacle-reveal-previous' re-hides is the very same
+object `orgacle-reveal-next' revealed, not a fresh one built from a
+remembered position -- the mechanism that makes symmetry hold by
+construction rather than by separately-tracked bounds."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-reveal-next)
+    (let ((ov (aref orgacle--reveal-overlays 0)))
+      (orgacle-reveal-previous)
+      (should (eq ov (aref orgacle--reveal-overlays 0)))
+      (should (eq (overlay-get ov 'invisible) 'orgacle-hide)))))
+
+(ert-deftest orgacle-test-reveal-next-returns-nil-once-exhausted ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (dotimes (_ 3) (orgacle-reveal-next))
+    (should-not (orgacle-reveal-next))))
+
+(ert-deftest orgacle-test-reveal-previous-returns-nil-at-the-start ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should-not (orgacle-reveal-previous))))
+
+(ert-deftest orgacle-test-reveal-exhausted-p-on-a-property-less-slide ()
+  "Vacuously exhausted: nothing to reveal is not a stuck-mid-reveal state."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 3)
+    (should (orgacle--reveal-exhausted-p))))
+
+;; Leak-proofing: leaving a slide must delete that slide's reveal
+;; overlays, whether the destination slide has reveal targets of its
+;; own or not.  These two tests capture the actual overlay objects
+;; before leaving and assert they are dead (`overlay-buffer' nil)
+;; afterwards -- proof the previous slide's overlays were deleted, not
+;; merely that a same-sized replacement set was built.
+
+(ert-deftest orgacle-test-reveal-does-not-leak-across-slides ()
+  "Navigating away from a half-revealed slide and back: the previous
+slide's overlays are gone and the index is reset."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-reveal-next)
+    (orgacle-reveal-next)
+    (should (= 2 orgacle--reveal-index))
+    (let ((stale (append orgacle--reveal-overlays nil)))
+      (orgacle-jump-to-page 2)
+      (should (cl-every (lambda (ov) (null (overlay-buffer ov))) stale))
+      (orgacle-jump-to-page 1)
+      (should (= 0 orgacle--reveal-index))
+      (should (= 3 (length orgacle--reveal-overlays)))
+      (should (cl-every (lambda (ov) (eq (overlay-get ov 'invisible) 'orgacle-hide))
+                         orgacle--reveal-overlays)))))
+
+(ert-deftest orgacle-test-reveal-overlays-cleared-entering-a-property-less-slide ()
+  "The trickiest leak case: the destination slide has no reveal targets
+of its own, so nothing rebuilds anything -- it would be easy to leave
+the source slide's overlays behind precisely because the new slide's
+own setup has no reason to touch them."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (let ((stale (append orgacle--reveal-overlays nil)))
+      (orgacle-jump-to-page 3)
+      (should (cl-every (lambda (ov) (null (overlay-buffer ov))) stale))
+      (should (null orgacle--reveal-overlays)))))
+
+;;; Incremental reveal: wiring to n/p
+
+(ert-deftest orgacle-test-keymap-n-and-p-are-reveal ()
+  "N and P, formerly the accordion-style subheading commands, are now
+reveal's own dedicated keys -- see the Step 5 STEPWISE resolution for
+why the old commands stay defined but unbound."
+  (should (eq (lookup-key orgacle-mode-map "N") 'orgacle-reveal-next))
+  (should (eq (lookup-key orgacle-mode-map "P") 'orgacle-reveal-previous)))
+
+(ert-deftest orgacle-test-next-page-advances-reveal-before-changing-slide ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (let ((orgacle-reveal-on-navigation t))
+      (orgacle-next-page)
+      (should (= 1 orgacle--reveal-index))
+      (should (= 0 (orgacle--session-index (orgacle--session-ensure)))))))
+
+(ert-deftest orgacle-test-next-page-changes-slide-once-reveal-is-exhausted ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (let ((orgacle-reveal-on-navigation t))
+      (dotimes (_ 3) (orgacle-next-page))
+      (should (= 0 (orgacle--session-index (orgacle--session-ensure))))
+      (orgacle-next-page)
+      (should (= 1 (orgacle--session-index (orgacle--session-ensure)))))))
+
+(ert-deftest orgacle-test-next-page-ignores-reveal-when-navigation-off ()
+  "`orgacle-reveal-on-navigation' nil: `n' changes slide immediately,
+ignoring unrevealed targets."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (let ((orgacle-reveal-on-navigation nil))
+      (orgacle-next-page)
+      (should (= 0 orgacle--reveal-index))
+      (should (= 1 (orgacle--session-index (orgacle--session-ensure)))))))
+
+(ert-deftest orgacle-test-previous-page-steps-reveal-back-before-changing-slide ()
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (let ((orgacle-reveal-on-navigation t))
+      (orgacle-reveal-next)
+      (orgacle-reveal-next)
+      (orgacle-previous-page)
+      (should (= 1 orgacle--reveal-index))
+      (should (= 0 (orgacle--session-index (orgacle--session-ensure))))
+      (orgacle-previous-page)
+      (should (= 0 orgacle--reveal-index))
+      (should (= 0 (orgacle--session-index (orgacle--session-ensure))))
+      (orgacle-previous-page)
+      (should (= 0 (orgacle--session-index (orgacle--session-ensure)))))))
+
+(ert-deftest orgacle-test-previous-page-ignores-reveal-when-navigation-off ()
+  "`orgacle-reveal-on-navigation' nil: `p' changes slide immediately,
+ignoring unrevealed targets."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 2)
+    (orgacle-reveal-next)
+    (let ((orgacle-reveal-on-navigation nil))
+      (orgacle-previous-page)
+      (should (= 0 (orgacle--session-index (orgacle--session-ensure)))))))
+
+;;; Incremental reveal: ORGACLE_STEPWISE
+
+(ert-deftest orgacle-test-stepwise-property-aliases-headings-reveal ()
+  "An existing ORGACLE_STEPWISE deck gets incremental reveal of its
+subheadings without setting ORGACLE_REVEAL explicitly."
+  (orgacle-test-with-fixture "stepwise.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (= 3 (length (orgacle--reveal-targets))))
+    (should (= 0 orgacle--reveal-index))))
+
+(ert-deftest orgacle-test-stepwise-reveal-is-cumulative-not-accordion ()
+  "Documents the deliberate behaviour change: revealing a second heading
+leaves the first one visible too, instead of hiding it again the way
+the old accordion-style `orgacle-next-subheading' did."
+  (orgacle-test-with-fixture "stepwise.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (orgacle-reveal-next)
+    (orgacle-reveal-next)
+    (should-not (overlay-get (aref orgacle--reveal-overlays 0) 'invisible))
+    (should-not (overlay-get (aref orgacle--reveal-overlays 1) 'invisible))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

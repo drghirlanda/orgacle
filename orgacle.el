@@ -62,6 +62,12 @@
 (require 'orgacle-src)
 (require 'orgacle-media)
 (require 'orgacle-notes)
+;; Required after every other page-hook contributor, so that
+;; orgacle-reveal.el's own APPEND-t `add-hook' call -- see its
+;; comment -- lands after file, slide-in, indicators and notes in the
+;; real, default `orgacle-page-hook', not merely after whichever of
+;; them happened to be registered before it.
+(require 'orgacle-reveal)
 (require 'ox-orgacle)
 
 ;; `flyspell' is optional; the call site below is guarded by `fboundp'.
@@ -110,6 +116,7 @@ narrowed `org-restriction' slot."
           ;; delete all orgacle overlays
           (orgacle-clean-overlays)
           (orgacle-clean-fringe-overlays)
+          (orgacle-reveal-clean-overlays)
           ;; kill notes buffer and associated frame, if present
           (when (and session (bufferp (orgacle--session-notes-buffer session)))
             (let ((win (get-buffer-window (orgacle--session-notes-buffer session))))
@@ -151,9 +158,14 @@ narrowed `org-restriction' slot."
     (define-key map "r" 'orgacle-refresh)
     (define-key map "R" 'redraw-display)
     (define-key map "g" 'orgacle-refresh)
-    ;; navigate folded subheadings
-    (define-key map "N" 'orgacle-next-subheading)
-    (define-key map "P" 'orgacle-previous-subheading)
+    ;; incremental reveal -- orgacle-reveal.el's own keys, working the
+    ;; same way regardless of `orgacle-reveal-on-navigation', which
+    ;; only governs n/p above; formerly the accordion-style subheading
+    ;; commands `orgacle-next-subheading' and `orgacle-previous-subheading'
+    ;; (still defined, just unbound by default -- see the README's
+    ;; "Revealing a slide piece by piece" section)
+    (define-key map "N" 'orgacle-reveal-next)
+    (define-key map "P" 'orgacle-reveal-previous)
     ;; show/hide images and videos
     (define-key map "i" 'orgacle-show-file-or-advance)
     (define-key map "I" 'orgacle-show-video)

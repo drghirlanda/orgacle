@@ -250,6 +250,22 @@ target -- set a generous one instead."
   :type '(choice (const :tag "No target duration" nil) integer)
   :group 'orgacle)
 
+(defcustom orgacle-reveal-on-navigation t
+  "Whether `n' and `p' also drive a slide's incremental reveal.
+Non-nil (the default): while the current slide has reveal targets left
+-- see `orgacle--reveal-targets' -- `orgacle-next-page' reveals the
+next one instead of moving to the next slide, and `orgacle-previous-page'
+hides the last-revealed one again instead of moving to the previous
+slide; once the slide's reveal is exhausted, or on a slide with no
+reveal targets at all, `n' and `p' change slide exactly as they always
+have.  With this nil, `n' and `p' always change slide immediately,
+regardless of any unrevealed targets, and reveal is only reachable on
+its own keys, `N' and `P' (`orgacle-reveal-next' and
+`orgacle-reveal-previous'), which work the same way whichever way this
+option is set."
+  :type 'boolean
+  :group 'orgacle)
+
 (defcustom orgacle-video-player "mplayer"
   "Program used to play videos; see `orgacle-show-video'.
 Supported players are \"mplayer\" and \"vlc\"."
