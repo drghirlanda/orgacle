@@ -74,29 +74,47 @@ honours correctly.
 Returns \"0/0\", with no following-slide segment and no timer, when the
 session's slides slot is empty -- a deck with no real slides at all,
 including before `orgacle--start-slides' has ever run -- since there is
-then no slide whose buffer to switch to."
+then no slide whose buffer to switch to.
+
+Returns the bare N/M position, again with no following-slide segment
+and no timer, when the current slide's marker buffer is no longer
+live: `marker-buffer' returns nil once a buffer is killed, which is
+reachable here even though the notes frame usually goes away together
+with the presented buffer, because nothing forces the two to close in
+lockstep -- most directly, killing the temporary exported file
+`orgacle-run' visits for a narrowed-subtree presentation while the
+notes frame is still up.  Since this function runs on every redisplay
+of the notes buffer rather than in response to a keypress, the usual
+`condition-case' a keystroke command could wrap around a stale-marker
+error is not available here: a live buffer to fail against is checked
+first instead, and only the always-computable position is shown, to
+avoid the alternative of an error spamming *Messages* on every
+redisplay for as long as the notes frame stays open."
   (let* ((session (orgacle--session-ensure))
          (slides (orgacle--session-slides session))
          (total (length slides))
          (index (orgacle--session-index session)))
     (if (zerop total)
         "0/0"
-      (with-current-buffer (marker-buffer (aref slides index))
-        (let* ((position (format "%d/%d" (1+ index) total))
-               (next-index (1+ index))
-               (next (and (< next-index total)
-                          (save-excursion
-                            (save-restriction
-                              (widen)
-                              (goto-char (aref slides next-index))
-                              (org-entry-get nil "ITEM")))))
-               (timer (orgacle--timer-string)))
-          (mapconcat #'identity
-                     (delq nil
-                           (list position
-                                 (and next (concat "Next: " next))
-                                 (and (not (string= timer "")) timer)))
-                     "  "))))))
+      (let* ((position (format "%d/%d" (1+ index) total))
+             (buffer (marker-buffer (aref slides index))))
+        (if (not (buffer-live-p buffer))
+            position
+          (with-current-buffer buffer
+            (let* ((next-index (1+ index))
+                   (next (and (< next-index total)
+                              (save-excursion
+                                (save-restriction
+                                  (widen)
+                                  (goto-char (aref slides next-index))
+                                  (org-entry-get nil "ITEM")))))
+                   (timer (orgacle--timer-string)))
+              (mapconcat #'identity
+                         (delq nil
+                               (list position
+                                     (and next (concat "Next: " next))
+                                     (and (not (string= timer "")) timer)))
+                         "  "))))))))
 
 (defun orgacle--collect-notes-segments ()
   "Return this buffer's speaker notes as a list of per-slide strings.

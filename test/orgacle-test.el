@@ -1715,6 +1715,23 @@ to no target at all."
         (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 65)))
           (should (string-match-p "1:05/20:00" (orgacle--presenter-header))))))))
 
+(ert-deftest orgacle-test-presenter-header-survives-a-killed-presented-buffer ()
+  "A killed presented buffer does not turn the header into a signal.
+Reachable when the notes frame outlives the buffer it was built from
+-- most directly the temporary exported file a narrowed-subtree
+presentation visits, which nothing forces to close in lockstep with
+the notes frame.  `orgacle-test-with-fixture' kills its buffer via
+`with-temp-buffer' on the way out, so by the time
+`orgacle--presenter-header' is called below, the session's slides slot
+still holds markers, but `marker-buffer' on any of them returns nil.
+The header falls back to the bare N/M position, with no \"Next\"
+segment and no timer, since neither can be read from a buffer that no
+longer exists."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top))
+  (should (equal "1/3" (orgacle--presenter-header))))
+
 (ert-deftest orgacle-test-presenter-view-off-leaves-notes-text-unchanged ()
   "With `orgacle-presenter-view' nil, the notes buffer's text is
 byte-for-byte identical to a build with the option on.  The header
