@@ -316,11 +316,34 @@ markers.  This closed a real defect: with `orgacle--session' nil and a
 killed presented buffer, `orgacle-next-page' used to consult
 leftover, no-longer-meaningful reveal overlays from before the reset,
 `overlay-put' a dead one -- a silent no-op -- and report that it had
-moved, swallowing the keypress instead of changing slide."
+moved, swallowing the keypress instead of changing slide.
+
+The two appearance-* slots hold `orgacle-appearance.el's per-presentation
+state, for the ORGACLE_TEXT_SCALE and ORGACLE_BACKGROUND slide
+properties.  appearance-text-scale is nil, or a (BUFFER . COOKIE) cons:
+COOKIE is what `face-remap-add-relative' returned for the current
+slide's buffer-local `default' face remapping, and BUFFER is the
+buffer that call was made in, kept alongside the cookie -- rather than
+relying on whatever buffer happens to be current when the cookie is
+later removed -- because the presented buffer during a narrowed
+presentation is a temporary export buffer, not the slot the ordinary
+`org-buffer' slot names; see `orgacle-appearance-clean-text-scale'.
+appearance-default-background is the session frame's own
+`background-color' frame parameter, captured once in
+`orgacle--get-frame' immediately after the frame is created and before
+anything -- including a slide's own ORGACLE_BACKGROUND property -- ever
+changes it, so a slide with no ORGACLE_BACKGROUND property, or a
+malformed one, can be restored to exactly what the frame started with
+rather than to some hardcoded colour that might disagree with the
+user's own theme; see `orgacle--apply-appearance'.  Both default to
+nil, meaning \"nothing applied, nothing to restore\" -- the same
+\"costs nothing unless a slide actually uses it\" shape the reveal-*
+slots above already follow."
   frame org-buffer org-restriction org-file
   slides (index 0) notes-buffer notes-markers
   aux-window presentation-window start-time
-  reveal-overlays (reveal-index 0) reveal-enter-revealed)
+  reveal-overlays (reveal-index 0) reveal-enter-revealed
+  appearance-text-scale appearance-default-background)
 
 (defvar orgacle--session nil
   "The running presentation, or nil when none is running.
@@ -753,7 +776,14 @@ new presentation silently apply a shape the pointer already has."
                           (right-fringe . 40)
                           (right-divider-width . 0)
                           (cursor-type . nil)
-                          (internal-border-width . ,orgacle-internal-border-width)))))
+                          (internal-border-width . ,orgacle-internal-border-width))))
+      ;; captured once, right here, before anything -- including a
+      ;; slide's own ORGACLE_BACKGROUND property -- ever changes this
+      ;; frame's background; see the appearance-default-background slot's
+      ;; own docstring on the struct above for why this is the one
+      ;; correct place to read it from
+      (setf (orgacle--session-appearance-default-background session)
+            (frame-parameter (orgacle--session-frame session) 'background-color)))
     (raise-frame (orgacle--session-frame session))
     (select-frame-set-input-focus (orgacle--session-frame session))
     ;; set fringe background to same as frame background, on this frame

@@ -860,24 +860,32 @@ it."
         (when (get-buffer orgacle--log-buffer-name)
           (kill-buffer orgacle--log-buffer-name))))))
 
-(ert-deftest orgacle-test-page-hook-order-is-reveal-file-slide-in-indicators-notes ()
-  "The real, global `orgacle-page-hook' runs reveal, then file, slide-in,
-indicators, then notes, in that order -- not merely some order the
-five `add-hook' calls happen to produce.  Two of these orderings are
-real correctness dependencies, not cosmetic: file-before-indicators,
-because `orgacle-show-file' calls `orgacle-clean-fringe-overlays', so
-if indicators ran first, `orgacle-show-file' would wipe the fringe
-overlays `orgacle-show-indicators-maybe' had just drawn; and, since
-fix round 1, reveal-before-slide-in, because `orgacle-slide-in-effect'
-calls `sit-for', forcing a real redisplay mid-animation -- reveal
-registered after it, this test's own value before the fix, showed
-every target for about a second before hiding them, visible to the
-audience on any slide-in deck with reveal targets.  The other new
-tests in this section let-bind `orgacle-page-hook' away to isolate the
-runner, so this is the only test that looks at the real, default
-value."
-  (should (equal '(orgacle-reveal-reset orgacle-show-file-auto orgacle-slide-in-effect
-                    orgacle-show-indicators-maybe orgacle-position-notes)
+(ert-deftest orgacle-test-page-hook-order-is-appearance-reveal-file-slide-in-indicators-notes ()
+  "The real, global `orgacle-page-hook' runs appearance, then reveal,
+file, slide-in, indicators, then notes, in that order -- not merely
+some order the six `add-hook' calls happen to produce.  Two of these
+orderings are real correctness dependencies, not cosmetic:
+file-before-indicators, because `orgacle-show-file' calls
+`orgacle-clean-fringe-overlays', so if indicators ran first,
+`orgacle-show-file' would wipe the fringe overlays
+`orgacle-show-indicators-maybe' had just drawn; and
+appearance-before-slide-in, for the same reason reveal-before-slide-in
+already was (fix round 1, Task 3): `orgacle-slide-in-effect' calls
+`sit-for', forcing a real redisplay mid-animation, so anything not yet
+applied by then is visible to the audience for the whole slide-in
+pause.  `orgacle-test-appearance-runs-before-slide-in-sit-for' pins
+that dependency directly, by stubbing `sit-for' itself; this test only
+pins the exact list.  Appearance-versus-reveal, on the other hand, is
+not a correctness dependency either way -- the two touch disjoint
+state, buffer-local `face-remapping-alist'/a frame parameter against
+overlay visibility -- so appearance landing ahead of reveal here is a
+judgment call (lowest apparent risk, matching how reveal was placed
+relative to file/indicators/notes in Task 3), not a derived
+requirement; nothing here asserts otherwise.  The other new tests in
+this section let-bind `orgacle-page-hook' away to isolate the runner,
+so this is the only test that looks at the real, default value."
+  (should (equal '(orgacle--apply-appearance orgacle-reveal-reset orgacle-show-file-auto
+                    orgacle-slide-in-effect orgacle-show-indicators-maybe orgacle-position-notes)
                  (default-value 'orgacle-page-hook))))
 
 ;;; Navigation
@@ -2291,6 +2299,184 @@ vector."
     (should-not (overlay-get (aref (orgacle--session-reveal-overlays (orgacle--session-ensure)) 0) 'invisible))
     (should (eq (overlay-get (aref (orgacle--session-reveal-overlays (orgacle--session-ensure)) 3) 'invisible)
                 'orgacle-hide))))
+
+;;; Per-slide appearance
+
+(ert-deftest orgacle-test-appearance-relative-text-scale-applies-as-float-height ()
+  "ORGACLE_TEXT_SCALE with a float value -- \"2.0\" here -- becomes a
+relative `:height' remapping of the buffer-local `default' face,
+via `face-remap-add-relative': Emacs's own face-merging rules treat a
+float `:height' as a scale factor rather than an absolute size, the
+same integer-versus-float distinction `orgacle-text-scale' and
+`orgacle--scale-font' already use for the deck-wide default, so no
+extra parsing of \"is this relative\" is needed here beyond
+`string-to-number'."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (equal (car (alist-get 'default face-remapping-alist)) '(:height 2.0)))))
+
+(ert-deftest orgacle-test-appearance-absolute-text-scale-applies-as-integer-height ()
+  "ORGACLE_TEXT_SCALE with an integer value -- \"600\" here -- becomes an
+absolute `:height' of 60pt, the same convention `orgacle-text-scale'
+itself uses (its own default, 400, is 40pt)."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 3)
+    (should (equal (car (alist-get 'default face-remapping-alist)) '(:height 600)))))
+
+(ert-deftest orgacle-test-appearance-text-scale-is-reset-entering-a-plain-slide ()
+  "The heart of Step 3: a slide with no appearance properties must look
+exactly like the deck's default, even immediately after a slide that
+set both ORGACLE_TEXT_SCALE and ORGACLE_BACKGROUND.  Checks both that
+the buffer-local remapping is gone from `face-remapping-alist' -- not
+merely present-but-inert -- and that the session's own
+appearance-text-scale slot is back to nil, so nothing is left for a
+later slide to accidentally inherit or for `orgacle-appearance-clean-text-scale'
+to still consider \"something to clean\"."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (alist-get 'default face-remapping-alist))
+    (orgacle-next-page)
+    (should (equal "Plain slide" (org-entry-get nil "ITEM")))
+    (should-not (alist-get 'default face-remapping-alist))
+    (should-not (orgacle--session-appearance-text-scale (orgacle--session-ensure)))))
+
+(ert-deftest orgacle-test-appearance-malformed-text-scale-is-ignored ()
+  "A mistyped ORGACLE_TEXT_SCALE (\"banana\", `string-to-number' of which
+is 0) must not break navigation and must not spam `*Orgacle Log*' on
+every visit to the slide: this is checked and skipped explicitly,
+rather than left to `orgacle--run-page-hook''s `condition-case' to
+catch a signal, which would still keep the presentation alive but
+would log a fresh failure -- and message the echo area -- on every
+single redisplay of this slide for the rest of the talk.  Captures the
+log buffer's content, if any, before navigating here and asserts it is
+byte-for-byte unchanged afterward, rather than merely asserting the
+buffer is absent, since an earlier test in the same batch process may
+have already created it for an unrelated reason."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (let ((before (and (get-buffer orgacle--log-buffer-name)
+                        (with-current-buffer orgacle--log-buffer-name (buffer-string)))))
+      (orgacle-jump-to-page 4)
+      (should (equal "Malformed slide" (org-entry-get nil "ITEM")))
+      (should (= 4 orgacle-page-number))
+      (should-not (alist-get 'default face-remapping-alist))
+      (let ((after (and (get-buffer orgacle--log-buffer-name)
+                         (with-current-buffer orgacle--log-buffer-name (buffer-string)))))
+        (should (equal before after))))))
+
+(ert-deftest orgacle-test-appearance-runs-before-slide-in-sit-for ()
+  "Correctness dependency mirroring reveal's own (Task 3, fix round 1,
+I1): `orgacle-slide-in-effect' calls `sit-for', forcing a real
+mid-hook redisplay.  If appearance ran after it, a slide-in deck would
+flash the *previous* slide's text scale for the whole slide-in pause
+before appearance corrected it -- the same defect class, just for
+appearance instead of visibility.  Stubs `sit-for' to capture
+`face-remapping-alist' at the exact moment slide-in first calls it,
+rather than trusting the hook-order test alone to imply the visible
+behaviour: confirmed by hand that reversing the `add-hook' calls in
+orgacle-appearance.el and orgacle-fontify.el -- registering appearance
+with APPEND instead of a bare prepend -- makes this test fail, with
+`captured' nil instead of the slide's own remapping, before restoring
+the real registration."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (let ((orgacle-slide-in t)
+          (captured 'not-called))
+      (cl-letf (((symbol-function 'sit-for)
+                 (lambda (&rest _)
+                   (when (eq captured 'not-called)
+                     (setq captured (alist-get 'default face-remapping-alist)))
+                   t)))
+        (orgacle-top))
+      (should (equal (car captured) '(:height 2.0))))))
+
+(ert-deftest orgacle-test-appearance-clean-text-scale-is-a-safe-no-op ()
+  "Safe to call with nothing to clean -- a fresh session that never
+applied a text-scale remapping at all -- matching
+`orgacle-reveal-clean-overlays''s own no-op contract."
+  (let ((orgacle--session nil))
+    (should (progn (orgacle-appearance-clean-text-scale) t))))
+
+(ert-deftest orgacle-test-appearance-background-is-a-no-op-without-a-live-frame ()
+  "ORGACLE_BACKGROUND sets a frame parameter, which batch Emacs has no
+usable frame for; see orgacle-appearance.el's Commentary for how the
+frame-parameter path was actually verified, with a real, non-batch
+Emacs process under Xvfb.  This only pins what batch can prove: with
+the session's frame slot nil -- the state every test in this suite
+leaves it in, since nothing here ever calls the real
+`orgacle--get-frame' -- applying appearance on a slide that sets
+ORGACLE_BACKGROUND neither signals nor touches any live frame; there
+is nothing further to assert without a real one."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (should-not (frame-live-p (orgacle--session-frame (orgacle--session-ensure))))
+    (should (progn (orgacle-top) t))))
+
+(ert-deftest orgacle-test-quit-removes-the-text-scale-remapping ()
+  "`orgacle-quit' must leave the presented buffer looking exactly as it
+did before the presentation, not still scaled from whatever slide was
+on display when `q' was pressed.  Batch-testable in full, unlike the
+background half of this feature: this is buffer-local state, no frame
+required.
+
+Pins the *outcome*, not the mechanism: confirmed directly, by mutating
+`orgacle-quit' locally and re-running this test, that
+`orgacle-appearance-clean-text-scale''s own call at that site is
+currently redundant on this exact path -- switching the buffer's major
+mode back to `org-mode', which `orgacle-quit' already does for an
+unrelated reason, resets `face-remapping-alist' to nil by itself, via
+the ordinary `kill-all-local-variables' every major-mode function
+runs.  This test still passed with that call removed.  It is kept in
+`orgacle-quit' anyway, and this test is kept as documentation of the
+observable contract a presenter actually cares about, not as proof
+that call is load-bearing; see the comment at that call site in
+orgacle.el for the rest of this reasoning, including why
+`orgacle-reveal-clean-overlays' just above it does not have the same
+problem."
+  (orgacle-test-with-fixture "appearance.org"
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (orgacle-run)
+          (should (alist-get 'default face-remapping-alist))
+          (orgacle-quit)
+          (should-not (alist-get 'default face-remapping-alist)))
+      (orgacle-quit))))
+
+(ert-deftest orgacle-test-run-cleans-the-previous-sessions-text-scale-remapping ()
+  "Mirrors `orgacle-test-run-cleans-the-previous-sessions-reveal-overlays'
+(Task 3, New-1) for the appearance slot introduced here: a second
+`orgacle-run', in a different buffer, with no intervening
+`orgacle-quit', must not leave the first buffer permanently scaled.
+Once `orgacle-run' replaces `orgacle--session' with a fresh struct,
+nothing else can ever reach the discarded struct's
+appearance-text-scale slot again to clean it, because both
+`orgacle-appearance-clean-text-scale' and `orgacle-quit' operate on
+whatever `orgacle--session' currently is."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-appearance-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-appearance-b")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "appearance.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run)
+            (should (alist-get 'default face-remapping-alist)))
+          (with-current-buffer buffer-b
+            (insert-file-contents
+             (expand-file-name "appearance.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run))
+          (with-current-buffer buffer-a
+            (should-not (alist-get 'default face-remapping-alist))))
+      (orgacle-quit)
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

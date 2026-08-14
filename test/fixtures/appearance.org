@@ -1,0 +1,31 @@
+#+TITLE: Appearance
+
+* Both slide
+:PROPERTIES:
+:ORGACLE_TEXT_SCALE: 2.0
+:ORGACLE_BACKGROUND: red
+:END:
+
+A relative text scale and a background colour, both set.
+
+* Plain slide
+
+No appearance properties at all -- the slide that must look exactly
+like the deck's default, even coming straight from "Both slide".
+
+* Absolute slide
+:PROPERTIES:
+:ORGACLE_TEXT_SCALE: 600
+:END:
+
+An absolute height (in 1/10pt, matching `orgacle-text-scale' itself),
+no background.
+
+* Malformed slide
+:PROPERTIES:
+:ORGACLE_TEXT_SCALE: banana
+:ORGACLE_BACKGROUND: not-a-real-colour
+:END:
+
+Both properties present but unusable -- neither should crash
+navigation, and both should behave as if absent.

@@ -201,6 +201,35 @@ hidden by default — see =orgacle-hide-todos=, =orgacle-hide-tags= and
 that package is installed; set =orgacle-use-org-superstar= to nil if you would
 rather they were not. Orgacle works without =org-superstar= installed.
 
+A slide can override the base font height, and the frame's background
+colour, just for itself, with =:ORGACLE_TEXT_SCALE:= and
+=:ORGACLE_BACKGROUND:=. Both reset automatically on the next slide, whether
+or not that slide sets its own — a slide with neither property always looks
+exactly like the deck's default, even right after one that set both.
+
+#+begin_src org :eval no
+  ,* A slide that stands out
+    :PROPERTIES:
+    :ORGACLE_TEXT_SCALE: 1.5
+    :ORGACLE_BACKGROUND: midnightblue
+    :END:
+#+end_src
+
+=:ORGACLE_TEXT_SCALE:= takes a number, read the same way =orgacle-text-scale=
+itself is: a whole number such as =600= is an absolute height in tenths of a
+point, and a number with a decimal point such as =1.5= is a scale factor
+applied to whatever height the slide would otherwise have — =1.5= for 150%,
+=0.7= for 70%. =:ORGACLE_BACKGROUND:= takes any colour Emacs recognizes, by
+name (=midnightblue=, =red=, …) or as =#rrggbb=. A value that is not a
+positive number, or not a colour Emacs recognizes, is treated exactly like
+the property being absent — a presenter's typo shows the deck's ordinary
+appearance rather than breaking the slide or the talk.
+
+=:ORGACLE_BACKGROUND:= sets a frame parameter, so it only does anything once
+a presentation is actually on screen in its own frame; nothing in a plain
+Org buffer, or before =orgacle-run= has created that frame, is affected by
+it. =:ORGACLE_TEXT_SCALE:= has no such restriction.
+
 *** Editing during a presentation
 
 =E= makes the slide editable in place, with the cursor visible; =C-c C-c=
@@ -391,10 +420,11 @@ takes effect on the next presentation, not the one already running.
 ** Extending Orgacle: orgacle-page-hook
 
 Every time a slide is displayed and narrowed, Orgacle runs =orgacle-page-hook=.
-This is how the built-in features hook into slide display — showing an
-auto-display file, the slide-in effect, the fringe indicators and the speaker
-notes are each just a function on this hook — and it is also the supported way
-to add your own behaviour without editing Orgacle itself:
+This is how the built-in features hook into slide display — per-slide
+appearance, incremental reveal, showing an auto-display file, the slide-in
+effect, the fringe indicators and the speaker notes are each just a function
+on this hook — and it is also the supported way to add your own behaviour
+without editing Orgacle itself:
 
 #+begin_src emacs-lisp :eval no
   (add-hook 'orgacle-page-hook #'my-function)
@@ -403,10 +433,15 @@ to add your own behaviour without editing Orgacle itself:
 A few things to know before adding to it:
 
 - A member takes no arguments.
-- Order matters. The built-in order is file, slide-in, indicators, then notes;
-  the invariant that has to hold is file-before-indicators, because showing a
+- Order matters. The built-in order is appearance, reveal, file, slide-in,
+  indicators, then notes. Two orderings are real invariants, not just how
+  things happen to be arranged: file-before-indicators, because showing a
   file clears the fringe overlays, so indicators drawn before it would be
-  wiped a moment later. Use the APPEND argument of =add-hook= to control where
+  wiped a moment later; and appearance-and-reveal-before-slide-in, because
+  the slide-in effect forces a real redisplay partway through itself, so
+  anything not yet applied by then — an unrevealed target, the wrong text
+  scale or background — would be visible to the audience for the length of
+  the slide-in pause. Use the APPEND argument of =add-hook= to control where
   your function lands relative to the built-ins.
 - A member that signals is logged and does not stop the rest of the hook, so a
   bug in one extension cannot end a presentation mid-talk.

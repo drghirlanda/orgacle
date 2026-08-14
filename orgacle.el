@@ -63,7 +63,7 @@
 (require 'orgacle-media)
 (require 'orgacle-notes)
 ;; Required after orgacle-fontify and orgacle-media specifically --
-;; last of all five page-hook contributors here, though only the first
+;; the fourth of six page-hook contributors here, though only the first
 ;; two are load-bearing -- so that orgacle-reveal.el's own prepending
 ;; `add-hook' call runs after `orgacle-slide-in-effect's and
 ;; `orgacle-show-file-auto's, the only other two page-hook members that
@@ -71,6 +71,12 @@
 ;; `orgacle-page-hook'; see orgacle-reveal.el's own `add-hook' comment
 ;; for why reveal has to run before slide-in specifically.
 (require 'orgacle-reveal)
+;; Required last of all six page-hook contributors, for the same
+;; before-slide-in reason as orgacle-reveal.el immediately above; see
+;; orgacle-appearance.el's own `add-hook' comment for why this position
+;; is enough, and why its position relative to orgacle-reveal.el
+;; specifically is a judgment call rather than a correctness dependency.
+(require 'orgacle-appearance)
 (require 'ox-orgacle)
 
 ;; `flyspell' is optional; the call site below is guarded by `fboundp'.
@@ -120,6 +126,31 @@ narrowed `org-restriction' slot."
           (orgacle-clean-overlays)
           (orgacle-clean-fringe-overlays)
           (orgacle-reveal-clean-overlays)
+          ;; explicit belt-and-braces, not a fix for an observed leak:
+          ;; confirmed directly (`(orgacle-mode) ... (org-mode)' on a
+          ;; scratch buffer) that switching a buffer's major mode back
+          ;; to plain `org-mode', as the block just above already does,
+          ;; already resets `face-remapping-alist' to nil via the
+          ;; ordinary `kill-all-local-variables' every major-mode
+          ;; function runs -- unlike an overlay, which is a buffer
+          ;; object with nothing to do with buffer-local variables and
+          ;; so is untouched by any mode switch, which is why
+          ;; `orgacle-reveal-clean-overlays' just above genuinely is
+          ;; load-bearing here.  This call is kept anyway, matching the
+          ;; rest of this function's practice of restoring state
+          ;; explicitly rather than depending on an incidental side
+          ;; effect of code that could change shape later (for example
+          ;; if the `org-mode' call above ever became conditional): it
+          ;; is a safe no-op given the mode switch already ran, and it
+          ;; is also what reaches a narrowed presentation's remapping,
+          ;; on the temporary export buffer already killed a few lines
+          ;; up, before this call ever runs -- also a no-op there, via
+          ;; the `buffer-live-p' guard in `orgacle-appearance-clean-text-scale'
+          ;; itself, since killing a buffer discards its buffer-local
+          ;; state regardless.  The session's frame is deleted earlier
+          ;; in this same `unwind-protect', so there is nothing to
+          ;; restore ORGACLE_BACKGROUND against either
+          (orgacle-appearance-clean-text-scale)
           ;; kill notes buffer and associated frame, if present
           (when (and session (bufferp (orgacle--session-notes-buffer session)))
             (let ((win (get-buffer-window (orgacle--session-notes-buffer session))))
@@ -281,26 +312,30 @@ the display."
   (unless (eq major-mode 'orgacle-mode)
     (unless (eq major-mode 'org-mode)
       (error "Orgacle can only be used from Org Mode"))
-    ;; delete the previous presentation's reveal overlays before its
-    ;; session is replaced below -- once `orgacle--session' points at
-    ;; the fresh struct, nothing can reach the old one's
-    ;; reveal-overlays slot to clean it again, ever: `orgacle-quit'
-    ;; already cleans the session it is given before nil-ing it, and
+    ;; delete the previous presentation's reveal overlays and
+    ;; text-scale remapping before its session is replaced below --
+    ;; once `orgacle--session' points at the fresh struct, nothing can
+    ;; reach the old one's reveal-overlays or appearance-text-scale
+    ;; slots to clean them again, ever: `orgacle-quit' already cleans
+    ;; the session it is given before nil-ing it, and
     ;; `orgacle--session-ensure' only ever creates a fresh struct when
     ;; `orgacle--session' is already nil, with nothing left to orphan;
     ;; this call site is the one place a *live*, non-nil session is
     ;; discarded outright, precisely the "second `orgacle-run', no
     ;; intervening quit" scenario the struct's own docstring says it
-    ;; defends against.  Reveal overlays are *one* piece of session
-    ;; state this replace-without-teardown hazard stranded -- the only
-    ;; one this call fixes.  It is not the only piece: the outgoing
-    ;; session's frame, notes-buffer, org-buffer and org-file slots are
-    ;; abandoned here the same way, unreachable once `orgacle--session'
-    ;; points elsewhere, and none of that is addressed by this call or
-    ;; by anything else in this task.  That is a pre-existing hazard
-    ;; from the P3 session struct, not something this task introduced
-    ;; or is scoped to fix; Task 6 Step 3 owns it
+    ;; defends against.  Reveal overlays and the text-scale remapping
+    ;; are two pieces of session state this replace-without-teardown
+    ;; hazard strands -- the only two these two calls fix.  They are
+    ;; not the only pieces: the outgoing session's frame,
+    ;; appearance-default-background, notes-buffer, org-buffer and
+    ;; org-file slots are abandoned here the same way, unreachable once
+    ;; `orgacle--session' points elsewhere, and none of that is
+    ;; addressed by these calls or by anything else in this task.  That
+    ;; is a pre-existing hazard from the P3 session struct, not
+    ;; something this task introduced or is scoped to fix; Task 6 Step
+    ;; 3 owns it
     (orgacle-reveal-clean-overlays)
+    (orgacle-appearance-clean-text-scale)
     ;; a fresh session, not a mutated leftover one: a presentation whose
     ;; frame was killed without going through `orgacle-quit' must not be
     ;; able to leave this one inheriting its state
