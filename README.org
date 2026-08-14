@@ -48,6 +48,24 @@ so bind it yourself if you want it back:
 - Settings in your init file need renaming by hand: =orgacle-migrate-buffer=
   converts presentation documents, not Emacs configuration. A
   =(setq epresent-slide-in t)= becomes =(setq orgacle-slide-in t)=.
+- =N= and =P=, during a presentation, are now incremental reveal's own keys
+  (=orgacle-reveal-next= and =orgacle-reveal-previous=) instead of the old
+  folded-subheading commands. An =:ORGACLE_STEPWISE:= deck keeps presenting
+  with no changes needed, but its behaviour changes more than "accordion
+  versus cumulative" suggests: the old mechanism never actually hid anything
+  on the way in, so a STEPWISE slide appeared fully visible; the new one
+  starts a STEPWISE slide fully *hidden*, needing =N= presses to reveal
+  anything at all — see "Revealing a slide piece by piece" below, which
+  spells out exactly what changes. The old
+  commands, =orgacle-next-subheading= and =orgacle-previous-subheading=, are
+  still defined for anyone who rebinds =N=/=P= back to them.
+- =orgacle-goto-top-level= is removed. It predated the navigation rewrite,
+  had no key of its own in =orgacle-mode-map=, and disagreed with the model
+  navigation was rewritten around: it would treat a hidden or title-page
+  heading as a valid destination, when no other command in the package ever
+  presents one as a slide. If you had bound it yourself, rebind to plain
+  Org's own =org-up-heading-safe= instead — the closest built-in equivalent,
+  though it is not frame-level-aware the way the removed command was.
 
 * Basic usage
 
@@ -103,6 +121,35 @@ Three kinds of subtree are treated specially:
   the notes buffer instead. See [[Speaker notes]].
 - Any heading with an =ORGACLE_HIDE= property is hidden from the slide.
 
+*Known issue, affecting =Speaker notes= and =ORGACLE_HIDE= subtrees:*
+pressing =r=, =g=, or =x= on a slide, editing a source block on it with
+=e= and exiting, or exiting text-edit mode with =E= then =C-c C-c=, can
+un-hide one of these subtrees on the presentation screen itself — a
+private-notes leak to the audience for =Speaker notes= in particular.
+The exposure is permanent, not limited to the slide it happened on:
+navigating away and back, or returning to the first slide with =t=,
+does not re-hide it, because the overlay that hides these subtrees is
+built once, when the presentation starts, and none of these commands
+rebuilds it — quitting and re-running the presentation is the only way
+back to a hidden state. The exact rule for whether a subtree is at
+risk: it stays hidden only when the subtree, *including any children of
+its own*, is the last subtree of its slide, with another top-level
+slide heading immediately following. Plain trailing text still inside
+the subtree's own body is fine, and so are the subtree's own children
+— what breaks it is a *sibling* heading after it on the same slide, or
+the subtree being the deck's actual last heading with nothing following
+at all. Until this is fixed, avoid pressing =r=, =g=, =x=, or editing
+text or code, on any slide with a =Speaker notes= or =ORGACLE_HIDE=
+subtree that is not immediately followed by another slide.
+
+=Title page= is exempt from this in its documented use, as a heading of
+its own at the slide level: such a heading is never itself a slide, so
+it is never the one the presentation gets narrowed to, and the leak
+above only ever exposes a subtree that lies inside the slide currently
+on screen. Used instead as a subheading *inside* a slide — not how this
+README documents it — a =Title page= heading is at exactly the same
+risk as =Speaker notes= or =ORGACLE_HIDE=, by the same rule.
+
 *** Navigating
 
 Once presenting, =n=, =f=, =SPC=, =→= and =PageDown= go forward; =p=, =b=,
@@ -115,21 +162,107 @@ The mode line shows the slide number. Set =orgacle-mode-line= to nil to hide
 it, or to any mode-line construct to show something else; a single file can
 override it with =#+ORGACLE_MODE_LINE:=.
 
+*** Talk timer
+
+Nothing about a timer appears anywhere -- not in the mode line, not in the
+presenter console (see [[Speaker notes]]) -- until a target duration is set.
+Give the talk a length, in minutes, and both places start showing elapsed
+time against it:
+
+#+begin_src org :eval no
+  ,#+ORGACLE_DURATION: 20
+#+end_src
+
+=orgacle-duration= (default nil) sets the target for every file; a single
+file overrides it with =#+ORGACLE_DURATION:=. With neither set, the mode
+line shows only the slide number, exactly as if the feature did not exist.
+=#+ORGACLE_DURATION:= takes a whole number of minutes. A value that is not
+a whole positive number -- an empty or whitespace-only value, =twenty=,
+=1,5=, =2x=, =0=, a negative number, or a number with a decimal point such
+as =1.5= (unlike =:ORGACLE_TEXT_SCALE:=, a decimal point means nothing
+here) -- is treated exactly like the keyword being absent, falling back to
+=orgacle-duration=, rather than showing a broken or permanently-overrun
+timer. Once a target is set, =MM:SS/MM:SS= -- elapsed over target -- appears
+next to the slide number, changing to =orgacle-timer-warning-face= once elapsed
+time reaches 90% of the target and to =orgacle-timer-overtime-face= once it
+reaches the target itself, so overrunning is visible at a glance rather than
+something the presenter has to do arithmetic to notice. Minutes are not
+wrapped at 60: a 75-minute talk reads =75:00=, not =1:15:00=, since the
+number a presenter actually wants mid-talk is minutes elapsed.
+
 *** Revealing a slide piece by piece
 
-Give a slide an =ORGACLE_STEPWISE= property and its subheadings stay folded;
-=N= reveals them one at a time and =P= steps back.
+Give a slide an =:ORGACLE_REVEAL:= property and it starts with its targets
+hidden, revealing them one at a time as you present. The property's value
+picks what counts as a target: =items= for its top-level list items, =headings=
+for its direct subheadings.
 
 #+begin_src org :eval no
   ,* Three things
     :PROPERTIES:
-    :ORGACLE_STEPWISE: t
+    :ORGACLE_REVEAL: headings
     :END:
 
   ,** First
   ,** Second
   ,** Third
 #+end_src
+
+=N= and =P= always drive the reveal, on any slide, regardless of the option
+below. With =orgacle-reveal-on-navigation= at its default of =t=, =n= and =p=
+drive it too, but they hand off to ordinary navigation at different points,
+not a shared "still mid-reveal" state: while the current slide still has
+something hidden, =n= reveals the next target instead of moving to the next
+slide; once nothing is left hidden -- everything already revealed, or no
+=:ORGACLE_REVEAL:= property at all -- =n= changes slide exactly as it always
+has. =p= mirrors this around what is *revealed*, not what is hidden: whenever
+the current slide has something revealed, =p= hides the last-revealed target
+again instead of moving to the previous slide -- and a fully-revealed slide
+still has everything revealed, so =p= there re-hides one target per press,
+the same number of presses =N= took to reveal them, before it actually
+leaves the slide. Only once nothing is left revealed -- the slide still at
+its fully-hidden starting state, or no =:ORGACLE_REVEAL:= property at all --
+does =p= change slide immediately. Set =orgacle-reveal-on-navigation= to
+=nil= to turn all of this off and keep =n=/=p= strictly for changing slides,
+with reveal reachable only on =N=/=P=.
+
+Moving forward onto a slide — the first time, or by jumping to it with =v= —
+always shows it fully hidden, needing =N= or =n= presses to see anything.
+Stepping backward onto it with =p=, though, lands it fully revealed instead,
+matching Beamer and reveal.js: the point of stepping back across a slide
+boundary is to see what was already shown a moment ago, not to present it
+again from scratch.
+
+=:ORGACLE_STEPWISE:= still works, as an alias for =:ORGACLE_REVEAL: headings= —
+you do not need to rename an existing property to keep a STEPWISE deck
+presenting. *Its behaviour has changed*, though, more than a first glance at
+"accordion versus cumulative" suggests, so read this carefully if you have an
+existing STEPWISE deck. At the default =orgacle-frame-level= of 1, the old
+=ORGACLE_STEPWISE= never actually hid anything on the way in: a slide with the
+property appeared with every subheading and its content already fully
+visible, exactly like a slide without the property; =N=
+(=orgacle-next-subheading=) only moved point forward, silently failing to hide
+anything because of how it checked the property (a level test that never
+matched the slide's own heading at level 1, and a lookup that does not
+inherit down to the subheadings themselves); only =P=
+(=orgacle-previous-subheading=), pressed enough times, progressively hid
+subtrees on the way back out. This is the common case and the one the old
+README described, but not the only one: with =#+ORGACLE_FRAME_LEVEL: 2= or
+deeper, the slide heading itself sits at level 2 or below, so that same level
+test *does* pass on the slide heading, and =N= did fire =outline-hide-subtree=
+there, hiding the whole subtree — some real, working accordion behaviour that
+a deck using a non-default frame level actually relied on. Either way, the new
+mechanism starts a slide with =:ORGACLE_STEPWISE:= *fully hidden* and needs =N=
+presses to reveal anything at all, cumulatively — once a heading is revealed
+it stays visible as you reveal more, alongside it. A presenter who reads only
+"one at a time, now cumulative" will not anticipate walking onto an
+empty-looking slide; the honest summary is: what used to show everything
+immediately (at the default frame level) now shows nothing until you press
+=N=.
+=orgacle-next-subheading= and =orgacle-previous-subheading=, the functions that
+used to implement the old behaviour, are still defined and still work exactly
+as before if you call them directly or rebind =N=/=P= back to them yourself;
+they are simply no longer bound by default.
 
 *** Size and appearance
 
@@ -139,6 +272,35 @@ hidden by default — see =orgacle-hide-todos=, =orgacle-hide-tags= and
 =orgacle-hide-properties=. Bullets are prettified with =org-superstar= when
 that package is installed; set =orgacle-use-org-superstar= to nil if you would
 rather they were not. Orgacle works without =org-superstar= installed.
+
+A slide can override the base font height, and the frame's background
+colour, just for itself, with =:ORGACLE_TEXT_SCALE:= and
+=:ORGACLE_BACKGROUND:=. Both reset automatically on the next slide, whether
+or not that slide sets its own — a slide with neither property always looks
+exactly like the deck's default, even right after one that set both.
+
+#+begin_src org :eval no
+  ,* A slide that stands out
+    :PROPERTIES:
+    :ORGACLE_TEXT_SCALE: 1.5
+    :ORGACLE_BACKGROUND: midnightblue
+    :END:
+#+end_src
+
+=:ORGACLE_TEXT_SCALE:= takes a number, read the same way =orgacle-text-scale=
+itself is: a whole number such as =600= is an absolute height in tenths of a
+point, and a number with a decimal point such as =1.5= is a scale factor
+applied to whatever height the slide would otherwise have — =1.5= for 150%,
+=0.7= for 70%. =:ORGACLE_BACKGROUND:= takes any colour Emacs recognizes, by
+name (=midnightblue=, =red=, …) or as =#rrggbb=. A value that is not a
+positive number, or not a colour Emacs recognizes, is treated exactly like
+the property being absent — a presenter's typo shows the deck's ordinary
+appearance rather than breaking the slide or the talk.
+
+=:ORGACLE_BACKGROUND:= sets a frame parameter, so it only does anything once
+a presentation is actually on screen in its own frame; nothing in a plain
+Org buffer, or before =orgacle-run= has created that frame, is affected by
+it. =:ORGACLE_TEXT_SCALE:= has no such restriction.
 
 *** Editing during a presentation
 
@@ -276,12 +438,29 @@ Two details worth knowing:
   Other capitalisations are still hidden from the slide, but their contents
   will not reach the notes buffer.
 - Set =orgacle-speaker-notes= to nil to skip the notes frame entirely.
+- *Known issue:* see the private-notes leak warning under [[What becomes a
+  slide]] — =Speaker notes= is the subtree kind where this matters most,
+  since a leak here exposes your own notes to the audience, not just a
+  hidden property.
 
 =M-x orgacle-estimate-time= reports how long it would take to read all your
 speaker notes aloud, together with the word count, which is a reasonable proxy
 for how long the talk will run. It assumes 150 words per minute; change that
 with =orgacle-wpm=. It is not bound to a key, since you want it while writing
 rather than while presenting.
+
+*** Presenter console
+
+With =orgacle-presenter-view= at its default of =t=, the notes buffer doubles
+as a presenter console: a header line above the notes text shows the current
+slide's position as =N/M=, the next slide's title, and the talk timer (see
+[[Talk timer]]) -- each segment separated from its neighbours by two spaces
+and simply omitted, with no separator left dangling in its place, when it has
+nothing to contribute: no "next" segment on the last slide, no timer segment
+at all with no target duration configured. Set =orgacle-presenter-view= to
+nil to leave the notes buffer exactly as it was before this existed, with no
+header line at all; it also has no effect when =orgacle-speaker-notes= is
+nil, since there is then no notes buffer for a header to appear in.
 
 ** Slide-in effect
 
@@ -330,10 +509,11 @@ takes effect on the next presentation, not the one already running.
 ** Extending Orgacle: orgacle-page-hook
 
 Every time a slide is displayed and narrowed, Orgacle runs =orgacle-page-hook=.
-This is how the built-in features hook into slide display — showing an
-auto-display file, the slide-in effect, the fringe indicators and the speaker
-notes are each just a function on this hook — and it is also the supported way
-to add your own behaviour without editing Orgacle itself:
+This is how the built-in features hook into slide display — per-slide
+appearance, incremental reveal, showing an auto-display file, the slide-in
+effect, the fringe indicators and the speaker notes are each just a function
+on this hook — and it is also the supported way to add your own behaviour
+without editing Orgacle itself:
 
 #+begin_src emacs-lisp :eval no
   (add-hook 'orgacle-page-hook #'my-function)
@@ -342,10 +522,15 @@ to add your own behaviour without editing Orgacle itself:
 A few things to know before adding to it:
 
 - A member takes no arguments.
-- Order matters. The built-in order is file, slide-in, indicators, then notes;
-  the invariant that has to hold is file-before-indicators, because showing a
+- Order matters. The built-in order is appearance, reveal, file, slide-in,
+  indicators, then notes. Two orderings are real invariants, not just how
+  things happen to be arranged: file-before-indicators, because showing a
   file clears the fringe overlays, so indicators drawn before it would be
-  wiped a moment later. Use the APPEND argument of =add-hook= to control where
+  wiped a moment later; and appearance-and-reveal-before-slide-in, because
+  the slide-in effect forces a real redisplay partway through itself, so
+  anything not yet applied by then — an unrevealed target, the wrong text
+  scale or background — would be visible to the audience for the length of
+  the slide-in pause. Use the APPEND argument of =add-hook= to control where
   your function lands relative to the built-ins.
 - A member that signals is logged and does not stop the rest of the hook, so a
   bug in one extension cannot end a presentation mid-talk.

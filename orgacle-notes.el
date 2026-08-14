@@ -41,6 +41,81 @@ without rebuilding the notes buffer."
           (org-narrow-to-subtree)
           (recenter 0))))))
 
+(defun orgacle--presenter-header ()
+  "Return the presenter console's header line for the current slide.
+Shows the slide's position as N/M, the following slide's title when
+there is one, and the talk timer from `orgacle--timer-string' when it
+has something to show -- each present segment separated from its
+neighbours by two spaces, and simply omitted, with no separator left
+dangling in its place, when it has nothing to contribute: the
+following-slide segment on the last slide, and the timer whenever no
+target duration is configured.  Reads the running session's slides and
+index slots directly, the same state `orgacle-position-notes' and
+`orgacle--sync-page-number' already read, rather than keeping any
+state of its own, so the header always reflects wherever navigation
+last left the presentation, with nothing of its own to fall out of
+step.
+
+Runs with the presented Org buffer selected -- the buffer the
+session's slides slot markers actually point into, which is the
+buffer `orgacle-run' was called from, except when a narrowed subtree
+is being presented from a temporary exported file, where it is that
+file's buffer instead -- rather than whatever buffer happens to be
+current when this is called.  In practice that is the notes buffer
+itself: `orgacle--build-notes-buffer' installs this function as that
+buffer's `header-line-format', and a header-line \\='(:eval FORM)\\='
+runs FORM with the buffer displaying it current, not the presented Org
+buffer.  Without switching buffers here, `orgacle--timer-string' would
+have `orgacle--duration' search the notes buffer for
+\"#+ORGACLE_DURATION:\", which it never carries, silently losing a
+per-file target that the main presentation frame's own mode line
+honours correctly.
+
+Returns \"0/0\", with no following-slide segment and no timer, when the
+session's slides slot is empty -- a deck with no real slides at all,
+including before `orgacle--start-slides' has ever run -- since there is
+then no slide whose buffer to switch to.
+
+Returns the bare N/M position, again with no following-slide segment
+and no timer, when the current slide's marker buffer is no longer
+live: `marker-buffer' returns nil once a buffer is killed, which is
+reachable here even though the notes frame usually goes away together
+with the presented buffer, because nothing forces the two to close in
+lockstep -- most directly, killing the temporary exported file
+`orgacle-run' visits for a narrowed-subtree presentation while the
+notes frame is still up.  Since this function runs on every redisplay
+of the notes buffer rather than in response to a keypress, the usual
+`condition-case' a keystroke command could wrap around a stale-marker
+error is not available here: a live buffer to fail against is checked
+first instead, and only the always-computable position is shown, to
+avoid the alternative of an error spamming *Messages* on every
+redisplay for as long as the notes frame stays open."
+  (let* ((session (orgacle--session-ensure))
+         (slides (orgacle--session-slides session))
+         (total (length slides))
+         (index (orgacle--session-index session)))
+    (if (zerop total)
+        "0/0"
+      (let* ((position (format "%d/%d" (1+ index) total))
+             (buffer (marker-buffer (aref slides index))))
+        (if (not (buffer-live-p buffer))
+            position
+          (with-current-buffer buffer
+            (let* ((next-index (1+ index))
+                   (next (and (< next-index total)
+                              (save-excursion
+                                (save-restriction
+                                  (widen)
+                                  (goto-char (aref slides next-index))
+                                  (org-entry-get nil "ITEM")))))
+                   (timer (orgacle--timer-string)))
+              (mapconcat #'identity
+                         (delq nil
+                               (list position
+                                     (and next (concat "Next: " next))
+                                     (and (not (string= timer "")) timer)))
+                         "  "))))))))
+
 (defun orgacle--collect-notes-segments ()
   "Return this buffer's speaker notes as a list of per-slide strings.
 One element per slide in the session's slides slot, in order --
@@ -130,7 +205,19 @@ first segment always starts at `point-min' anyway.  Falls back to
 `point-min' when the index slot is nil or past the end of the
 notes-markers slot, the same cases `orgacle-position-notes' guards
 against -- a fresh session before `orgacle--start-slides' has run, or a
-deck with no speaker notes segments at all."
+deck with no speaker notes segments at all.
+
+Sets the buffer's `header-line-format' to evaluate
+`orgacle--presenter-header' when `orgacle-presenter-view' is non-nil,
+and to nil -- no header line at all -- when it is nil, so the buffer
+this function builds with the option off is the exact buffer it always
+built: the header lives in `header-line-format', never in the inserted
+text itself, so there is nothing in the buffer's contents for the
+option to change either way.  A header line evaluated this way needs
+no page-hook member of its own to track navigation, the same way
+`orgacle-mode-line's default already tracks the page number and timer
+in the presentation frame without one: Emacs re-evaluates a
+`(:eval FORM)' construct on every redisplay."
   (let* ((session (orgacle--session-ensure))
          (segments (orgacle--collect-notes-segments))
          (win (and (bufferp (orgacle--session-notes-buffer session))
@@ -157,12 +244,18 @@ deck with no speaker notes segments at all."
         (goto-char (if (and index (< index (length markers)))
                        (aref markers index)
                      (point-min))))
-      (org-narrow-to-subtree))
+      (org-narrow-to-subtree)
+      (setq header-line-format
+            (and orgacle-presenter-view '(:eval (orgacle--presenter-header)))))
     (when win (set-window-buffer win (orgacle--session-notes-buffer session)))
     (orgacle--session-notes-buffer session)))
 
 (defun orgacle-make-notes-buffer ()
-  "Collect speaker notes into a buffer and show it in a new frame."
+  "Collect speaker notes into a buffer and show it in a new frame.
+With `orgacle-presenter-view' non-nil (the default), that buffer is a
+presenter console: `orgacle--build-notes-buffer' gives it a header
+line naming the current slide's position, the following slide's
+title, and the talk timer, above the current slide's own notes."
   (interactive)
   (orgacle--build-notes-buffer)
   (switch-to-buffer-other-frame

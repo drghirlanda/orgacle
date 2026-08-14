@@ -1,7 +1,11 @@
 #+Title: Orgacle: Presentations in Emacs
 #+Author: Eric Schulte, Stefano Ghirlanda
+#+ORGACLE_DURATION: 10
 
 * Introduction
+  :PROPERTIES:
+  :ORGACLE_REVEAL: items
+  :END:
 
 Simple presentations in Emacs
 - Uses Org-mode *markup* /for text/ =and things=
@@ -9,6 +13,23 @@ Simple presentations in Emacs
 - Somewhat customizable
 - Display external documents
 - Live code execution
+
+** Speaker notes
+   Reveal these one at a time with =N= -- it keeps people listening instead of reading ahead to the bottom of the list.
+
+* Agenda
+  :PROPERTIES:
+  :ORGACLE_REVEAL: headings
+  :END:
+
+  A quick tour before we dive in.
+
+** Basics
+   Writing a presentation is nothing more than writing an Org file.
+** LaTeX, tables and images
+   Math, data and figures render inline, with no export step.
+** Executing code live
+   Run a command in front of the audience and watch the slide update with the result.
 
 * Basics
 
@@ -24,7 +45,8 @@ Call =orgacle-run= to present an Org-mode buffer.
     (interactive)
     (unless (eq major-mode 'org-mode)
       (error "Orgacle can only be used from Org Mode"))
-    (setq orgacle--org-buffer (current-buffer))
+    (setq orgacle--session (orgacle--session-create))
+    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
     (orgacle--get-frame)
     (orgacle-mode)
     (orgacle-top))
@@ -59,16 +81,16 @@ in-line image display
      date
    #+end_src
 
-#+RESULTS:
-: Sun Jun 28 12:30:51 EDT 2020
+   #+RESULTS:
+   : Sun Jun 28 12:30:51 EDT 2020
 
 2. Press =C= to move to the previous code block.
    #+begin_src sh
      uname -a
    #+end_src
 
-#+RESULTS:
-: Linux darkstar 4.4.14 #2 SMP Fri Jun 24 13:38:27 CDT 2016 x86_64 Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz GenuineIntel GNU/Linux
+   #+RESULTS:
+   : Linux darkstar 4.4.14 #2 SMP Fri Jun 24 13:38:27 CDT 2016 x86_64 Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz GenuineIntel GNU/Linux
 
 3. When a code block is executed with =C-c C-c=, the page is refreshed
    to show the results.
@@ -76,5 +98,19 @@ in-line image display
      echo "hello from a source block"
    #+end_src
 
-#+RESULTS:
-: hello from a source block
+   #+RESULTS:
+   : hello from a source block
+
+** Speaker notes
+   Run each block live rather than reading the results off the slide; the audience already saw them appear.
+
+* Questions?
+  :PROPERTIES:
+  :ORGACLE_TEXT_SCALE: 1.5
+  :ORGACLE_BACKGROUND: lightyellow
+  :END:
+
+  Thanks -- happy to take questions now.
+
+** Speaker notes
+   Pause here and actually wait; don't rush to fill the silence.

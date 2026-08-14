@@ -1,0 +1,29 @@
+#+TITLE: Reveal
+
+* Items slide
+:PROPERTIES:
+:ORGACLE_REVEAL: items
+:END:
+
+- First item
+- Second item
+- Third item
+
+* Headings slide
+:PROPERTIES:
+:ORGACLE_REVEAL: headings
+:END:
+
+** First point
+Body of the first point.
+
+** Second point
+Body of the second point.
+
+* No reveal slide
+
+Ordinary text, and a list that must stay fully visible because this
+slide carries no ORGACLE_REVEAL property at all.
+
+- Not hidden
+- Also not hidden

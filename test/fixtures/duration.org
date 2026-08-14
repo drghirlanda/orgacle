@@ -1,0 +1,7 @@
+#+TITLE: Duration
+#+AUTHOR: Nobody
+#+ORGACLE_DURATION: 20
+
+* First slide
+
+Some text.

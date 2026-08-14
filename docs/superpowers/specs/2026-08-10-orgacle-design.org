@@ -583,6 +583,113 @@ The four features of section 8, each with tests for its state machine.
 
 *Exit:* tests green; each feature demonstrated in =present.org=.
 
+*Status: COMPLETE* (2026-08-14). All exit criteria met locally: =make clean &&
+make all= exits 0 on Emacs 30.2, and all four capabilities are demonstrated in
+=present.org=. The suite grew from 89 tests (this phase's own starting count,
+after P0-P3 were merged to master and this branch was cut) to 199, plus three
+expected failures — the pre-existing, documented =Speaker notes=/=ORGACLE_HIDE=
+notes-leak issue below, pinned with =:expected-result= rather than left to fail
+silently. Two new files joined the five from P2, =orgacle-reveal.el= and
+=orgacle-appearance.el=, for ten total; section 5.1's dependency rule held
+throughout — every feature module depends only on =orgacle-core=, never on a
+sibling, confirmed this phase's final task by compiling each of the ten files
+alone in a fresh Emacs rather than only in the Makefile's own fixed sequence,
+which could have masked a module that only compiled because a sibling happened
+to load first.
+
+Each of the four capabilities went in behind the phase's own standing
+constraint — off by default, costing nothing unused, applied state undone on
+leaving the slide — with two controller rulings narrowing what "off by
+default" actually requires. Task 1's talk timer shows nothing at all, not even
+a bare elapsed clock, until a target duration is configured via
+=#+ORGACLE_DURATION:= or =orgacle-duration=: elapsed-with-no-target was ruled
+not actionable, and the audience-facing mode line must look exactly as it did
+before the timer existed for a presenter who configured nothing. Task 2's
+presenter console — =orgacle-presenter-view=, default =t= — was ruled the one
+deliberate exception: it lives entirely in the =*Orgacle Notes*= buffer's own
+=header-line-format=, a presenter-private surface already opted into via
+=orgacle-speaker-notes=, never in that buffer's text and never on the projected
+frame, so defaulting it on does not touch anything an audience sees. That
+buffer is also where section 8's design deviated from the plan as written: the
+console is the existing notes buffer promoted in place, not a new
+=*Orgacle Presenter*= buffer, because a =header-line-format= of =(:eval ...)=
+is re-evaluated on every redisplay regardless, so =redraw-display= keeps the
+console in step with navigation with no page-hook member of its own to
+maintain. Task 3's incremental reveal generalizes =EPRESENT_STEPWISE= into a
+symmetric index over a slide's =:ORGACLE_REVEAL:= targets (=items=,
+=headings=, or =blocks=), so backward steps correctly un-reveal instead of
+collapsing the whole subtree as the old hide/show-subtree hack did; =n= and
+=p= drive it first and only change slide once it is exhausted, governed by
+=orgacle-reveal-on-navigation= (default =t=). Task 4's per-slide appearance
+applies =:ORGACLE_BACKGROUND:= and =:ORGACLE_TEXT_SCALE:= through a
+buffer-local =face-remapping-alist= and the frame's own background parameter,
+reset on every page change so nothing leaks to the next slide; the task also
+found and fixed a real-frame-only defect no batch test could have shown, a
+100%-white right fringe on a coloured slide because =orgacle--get-frame= pins
+the fringe face at frame-creation time while the appearance code only touched
+the frame parameter, caught by pixel-sampling a live Xvfb frame rather than by
+reading the code. Task 6 closed four items P3 had deferred: the dead
+=orgacle-goto-top-level= command was removed; =orgacle-refresh= now re-narrows
+in place, without running the page hook, by comparing the current restriction's
+own bounds against the target slide's recomputed subtree bounds rather than
+=buffer-narrowed-p= (itself replacing an even earlier position-only
+comparison, across three fix rounds); a second =orgacle-run= now confirms and
+tears down a genuinely live previous session instead of orphaning its frame;
+and exiting =org-edit-src-code= now rebuilds a live notes buffer.
+
+Task 7 verified the phase rather than building anything new. Beyond the
+standalone-compile matrix above: the off-by-default constraint was confirmed
+end to end, not per feature — a deck with none of the new properties, run for
+real through =orgacle-run=, left a user's own customized =orgacle-mode-line=
+byte-for-byte untouched, left the notes buffer's text exactly as P3 produced
+it (the presenter-console header stayed in =header-line-format=, never in the
+text), created no reveal overlays, and left =face-remapping-alist= nil. With no
+=xvfb-run= on this machine, a real frame was driven the same way P3 and this
+phase's earlier tasks did — =Xvfb= plus =fluxbox=, real =XTEST= key events via
+=xdotool=, screenshots via =import= — exercising all four capabilities
+together in =present.org=: the timer at =0:00/10:00= advancing live, its
+=orgacle-timer-warning-face= and =orgacle-timer-overtime-face= colours
+confirmed by pixel, not just by face symbol, at 90% and past 100% of target;
+the presenter console tracking position, next-slide title and timer across
+navigation; both reveal kinds (=items= on Introduction, =headings= on Agenda)
+stepping forward via =N= and via plain =n=; the =Questions?= slide's yellow
+background and enlarged text applying and resetting cleanly, its fringe
+pixel-sampled to match the slide body in both directions with no white stripe;
+and =orgacle-quit= restoring the presented buffer to a clean, unnarrowed,
+unmodified state. One tooling artifact surfaced and is worth recording here so
+it is not mistaken for a product defect later: this sandbox's =Xvfb=/=XTEST=
+combination occasionally redelivered a key's autorepeat to whatever frame next
+had focus after the original frame was destroyed (=orgacle-quit= deletes the
+presentation frame mid-keystroke), self-inserting stray characters into
+whatever buffer that frame showed; reproduced twice, traced to the input
+layer rather than to Orgacle (only the literal key pressed ever reappeared,
+never through any Orgacle code path that self-inserts), and confirmed harmless
+— nothing was ever saved, =git diff= stayed empty throughout.
+
+Five items were deliberately left for the final whole-branch review rather
+than fixed here, and this task re-confirmed each still reproduces:
+=orgacle-refresh='s docstring claim that its bounds predicate is "a strict
+superset" of the =buffer-narrowed-p=-based disjunct it replaced does not hold
+in either direction — confirmed empirically, not just by reading, with one
+case each way; the README frames the notes-leak exemption as specific to
+=Title page=, when =orgacle--slide-p= actually exempts all three hidden kinds
+uniformly by frame level, so the project's own =* Hidden slide= fixture is
+flagged as at-risk when it is not; the no-transition test at
+=test/orgacle-test.el= around line 1172 carries a =#+begin_src= block its body
+never executes, asserts point and reveal index but not hook count or
+restriction bounds, and moves point with an unexplained =(forward-char 13)=;
+=orgacle-run='s own docstring rationale for skipping a dead buffer restore
+overstates what happens next — =find-file= only runs for a narrowed-region
+presentation, not unconditionally; and the notes-buffer round-trip test passes
+only because =orgacle--get-frame= is stubbed out — confirmed directly that the
+unstubbed path fails hard under =-Q --batch= trying to create a real frame.
+Full detail, reproductions and pixel/face evidence for all of the above are in
+=.superpowers/sdd/2026-08-14-p4-capabilities.org/task-7-report.md=.
+
+Per this task's own constraint, nothing was pushed and CI has not yet run on
+this branch's final state; that confirmation on Emacs 29.4, 30.2 and snapshot
+is the controller's to authorize.
+
 ** P5 — Ship
 
 Fill the seven empty README sections (The basics, Inline images, Code blocks,
