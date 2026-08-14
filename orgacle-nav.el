@@ -140,10 +140,20 @@ the slide's own marker buffer when presentation-window is not live --
 nil, because nothing has called `orgacle-run' yet (every test in this
 suite that exercises navigation directly, without a full run), or a
 window the presenter closed by hand -- so a slide can still narrow and
-run its hook correctly even with no window to select, the same
-guarantee fix round 2 established.  `orgacle-position-notes' and
-`orgacle-reveal-reset', the other two page-hook members, were never
-affected either way -- the former always explicitly selects the notes
+run its hook in that fallback, the same guarantee fix round 2
+established, but not every member runs *correctly* there: fix round 4
+confirmed live that `orgacle-show-file-auto', on a slide carrying
+ORGACLE_SHOW_AUTO, signals `Wrong type argument: window-live-p' in
+this exact fallback, because `orgacle-show-file' itself unconditionally
+calls `select-window' on the session's presentation-window at its own
+end, with no live-window guard of its own.  `orgacle--run-page-hook'
+catches and logs it, same as any other failing member, so this stays
+non-fatal to the presentation, but \"narrow and run the hook\" is not
+the same claim as \"every member behaves correctly\" and this
+docstring should not have implied the latter.  `orgacle-position-notes'
+and `orgacle-reveal-reset', the other two page-hook members, were
+never affected either way -- the former always explicitly selects the
+notes
 buffer's own window via `with-selected-window' regardless of what is
 selected, and the latter locates its slide from the session's own
 slides/index slots rather than from point or the selected window at

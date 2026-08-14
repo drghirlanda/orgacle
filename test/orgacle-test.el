@@ -975,7 +975,26 @@ asserts the first window is selected again afterward and still shows
 the presented buffer.  Confirmed by mutation: reverting the
 `select-window'/`window-live-p' branch back to fix round 2's plain
 `set-buffer' makes this test fail, with the notes stand-in window
-still selected after `orgacle-top' returns."
+still selected after `orgacle-top' returns.
+
+Fix round 4 (Important): this end-state check is not the pin the fix
+actually needs, and does not by itself catch every way the fix could
+regress.  It only asserts what is selected *after* `orgacle-top'
+returns; the reason the fix matters is which window is selected
+*while the page hook runs*, since `orgacle-show-file' does its window
+splitting from inside a hook member.  A mutant that keeps the buffer
+correction but moves `select-window' to run *after*
+`orgacle-current-page' instead of before it leaves the end state this
+test checks unchanged -- confirmed directly, this test still passes
+under that mutant -- while reintroducing the exact live bug this round
+fixed: under Xvfb, the same mutant puts the auto-shown file back in
+the notes frame.  See
+`orgacle-test-goto-slide-selects-the-presentation-window-before-the-page-hook-runs',
+added this round, for the test that actually pins the timing rather
+than only the outcome; this test is kept alongside it since it still
+correctly pins the buffer-correctness half (the belt-and-braces
+`set-window-buffer'/`set-buffer' logic), which the timing test does
+not exercise on its own."
   (orgacle-test-with-fixture "appearance.org"
     (orgacle--start-slides)
     (let* ((session (orgacle--session-ensure))
@@ -1013,6 +1032,44 @@ still selected after `orgacle-top' returns."
         ;; production function's defensive correction to stay clean,
         ;; and a stale, dead-marker-filled session serves no test that
         ;; runs after this one any purpose.
+        (setq orgacle--session nil)))))
+
+(ert-deftest orgacle-test-goto-slide-selects-the-presentation-window-before-the-page-hook-runs ()
+  "Fix round 4 (Important): the real pin the fix in the previous test
+needs.  Binds `orgacle-page-hook' to a single member that records
+`(selected-window)' at the moment it runs, so the assertion is about
+the state *during* the hook, not the state left behind once
+`orgacle-top' has already returned -- the distinction that matters
+because `orgacle-show-file' (via `orgacle-show-file-auto', an ordinary
+page-hook member) does its window splitting from inside that same
+hook run.  Confirmed by mutation, reproducing the reviewer's own M12
+exactly: with `select-window' moved to run *after*
+`orgacle-current-page' instead of before it -- buffer correction left
+untouched, end state left unchanged -- this test fails, recording the
+notes stand-in window instead of presentation-window, while
+`orgacle-test-goto-slide-reselects-the-presentation-window''s own
+end-state check still passes under the identical mutant.  Restored and
+reconfirmed green afterward."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (let* ((session (orgacle--session-ensure))
+           (presented-buffer (current-buffer))
+           (presentation-window (selected-window))
+           (notes-stand-in-buffer (generate-new-buffer "orgacle-test-notes-window-stand-in-2"))
+           (notes-stand-in-window (split-window presentation-window))
+           (recorded 'orgacle-test-hook-did-not-run))
+      (unwind-protect
+          (progn
+            (set-window-buffer presentation-window presented-buffer)
+            (set-window-buffer notes-stand-in-window notes-stand-in-buffer)
+            (setf (orgacle--session-presentation-window session) presentation-window)
+            (select-window notes-stand-in-window)
+            (let ((orgacle-page-hook
+                   (list (lambda () (setq recorded (selected-window))))))
+              (orgacle-top))
+            (should (eq recorded presentation-window)))
+        (when (window-live-p notes-stand-in-window) (delete-window notes-stand-in-window))
+        (when (buffer-live-p notes-stand-in-buffer) (kill-buffer notes-stand-in-buffer))
         (setq orgacle--session nil)))))
 
 (ert-deftest orgacle-test-nav-starts-at-the-first-real-slide ()
@@ -2697,19 +2754,24 @@ itself the way the tests below it do.
 
 Minor, fix round 3: this test's first version let `orgacle--get-frame'
 run its X-pointer-shape and `void-text-area-pointer' side effects
-unguarded, unlike `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
-and `orgacle-test-get-frame-resyncs-mouse-visible-across-a-quit', its
-two neighbours, which both save and restore the X-pointer variables in
-an `unwind-protect' and let-bind `orgacle-mouse-visible'.  Measured
-before and after the unguarded first version ran: `x-pointer-shape'
-nil to 38, `x-sensitive-text-pointer-shape' nil to 38,
-`void-text-area-pointer' `arrow' to `text' -- latent only because
-every test elsewhere that cares about these sets its own sentinel
-value rather than trusting whatever the previous test left behind, the
-same accidental-safety shape `orgacle-test-nav-commands-tolerate-a-fresh-sessions-nil-arithmetic'
-was called out for in Task 3.  Now follows the same save/restore
-convention as its two neighbours, plus `void-text-area-pointer', which
-neither of them happens to restore either but which
+unguarded.  Corrected, fix round 4, what this paragraph claimed about
+its two neighbours: `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
+saves and restores `x-pointer-shape'/`x-sensitive-text-pointer-shape'
+in an `unwind-protect', but does not bind `orgacle-mouse-visible' at
+all; `orgacle-test-get-frame-resyncs-mouse-visible-across-a-quit' does
+the same X-pointer save/restore and does let-bind
+`orgacle-mouse-visible', but as that test's own input -- forcing it to
+nil to set up the desync scenario it exists to check -- not as hygiene
+restoring a prior value.  Neither one saves or restores
+`void-text-area-pointer'.  Measured before and after this test's own
+unguarded first version ran: `x-pointer-shape' nil to 38,
+`x-sensitive-text-pointer-shape' nil to 38, `void-text-area-pointer'
+`arrow' to `text' -- latent only because every test elsewhere that
+cares about these sets its own sentinel value rather than trusting
+whatever the previous test left behind, the same accidental-safety
+shape `orgacle-test-nav-commands-tolerate-a-fresh-sessions-nil-arithmetic'
+was called out for in Task 3.  Now follows the X-pointer save/restore
+convention its neighbours do use, plus `void-text-area-pointer', which
 `orgacle--get-frame' also sets unconditionally in the same guarded
 block."
   (orgacle-test-with-restored-frame-background

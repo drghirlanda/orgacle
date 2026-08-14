@@ -179,11 +179,17 @@ Has no effect when the `org-superstar' package is not installed."
   "Hook run after starting a presentation.
 Runs at the very end of `orgacle-run', after the first slide is
 already on screen.  The presented buffer is current when this runs --
-true since fix round 3 of the per-slide appearance task, an
-undocumented behaviour change and improvement over earlier versions,
-where `orgacle-run' calling `orgacle-make-notes-buffer' before the
-first slide's display could leave the *notes* buffer current here
-instead, with speaker notes on (the default)."
+true since fix round 2 of the per-slide appearance task (Critical 2),
+an undocumented behaviour change and improvement over earlier
+versions, where `orgacle-run' calling `orgacle-make-notes-buffer'
+before the first slide's display could leave the *notes* buffer
+current here instead, with speaker notes on (the default).  Fix round
+3 of that same task went further: the presentation window and its
+frame are also selected by then, not only the buffer current, so a
+member that displays something of its own (`pop-to-buffer', a second
+`split-window', and so on) does so relative to the presentation frame
+rather than wherever the notes frame or some other window happened to
+be selected."
   :type 'hook
   :group 'orgacle)
 
