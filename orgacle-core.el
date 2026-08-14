@@ -47,7 +47,7 @@
 
 (defgroup orgacle nil
   "This is a presentation mode for Emacs."
-  :group 'orgacle)
+  :group 'org)
 
 (defface orgacle-title-face
   '((t :weight bold :height 360 :underline t :inherit variable-pitch))
@@ -616,16 +616,50 @@ Keeps that warning to once per session instead of once per slide.")
 (defun orgacle--duration ()
   "Return this buffer's target duration in minutes, or nil for none.
 Reads #+ORGACLE_DURATION: if present, the same way `orgacle-get-frame-level'
-and `orgacle-get-mode-line' read their own keywords; falls back to
-`orgacle-duration' otherwise."
+and `orgacle-get-mode-line' read their own keywords, but -- unlike either
+of those -- the value has to survive validation before it is trusted, the
+same discipline `orgacle--appearance-text-scale' (`orgacle-appearance.el')
+already applies to its own ORGACLE_TEXT_SCALE property: a keyword whose
+text does not match a whole, optionally-signed integer, or one that does
+match but is not a positive count of minutes, is treated exactly like the
+keyword being absent, falling back to `orgacle-duration'.
+
+Before this validation existed, `string-to-number' was applied to the raw
+keyword text unconditionally.  That function parses a numeric *prefix* of
+its argument, not the whole string, and returns 0 when there is no
+leading digit at all, so \"twenty\", \"abc20\", an empty value and a
+whitespace-only one all silently became a genuine 0-minute target --
+which is not nil -- and `orgacle--timer-string' showed \"0:00/0:00\" in
+`orgacle-timer-overtime-face' from the first second of the talk, on a
+file where no target was ever validly configured.  \"1,5\" (a decimal
+comma, a highly plausible typo) became 1 and \"2x\" became 2, each a
+duration the presenter never actually typed.  \"-5\" matched a bare
+signed integer and became the negative integer -5, rendering
+\"MM:SS/-5:00\", also permanently in the overtime face.  See
+`orgacle-test-duration-rejects-malformed-keyword-values' and
+`orgacle-test-timer-string-is-empty-with-a-malformed-duration-keyword'
+for both reproduced, then fixed.
+
+This deliberately does not reuse `orgacle--appearance-text-scale''s
+regex as-is: that function's ORGACLE_TEXT_SCALE is genuinely allowed to
+be a float, where a decimal point means \"scale factor\", but
+`orgacle-duration''s own `:type' is `(choice (const nil) integer)' -- a
+whole number of minutes -- so a value with a decimal point, such as
+\"1.5\", is rejected here exactly like \"1,5\" or \"twenty\", never
+read as a truncated integer."
   (save-excursion
     (save-restriction
       (widen)
       (goto-char (point-min))
-      (if (re-search-forward
-           "^#\\+ORGACLE_DURATION:[ \t]*\\(.*?\\)[ \t]*$" nil t)
-          (string-to-number (match-string 1))
-        orgacle-duration))))
+      (let* ((found (re-search-forward
+                     "^#\\+ORGACLE_DURATION:[ \t]*\\(.*?\\)[ \t]*$" nil t))
+             (value (and found (match-string 1)))
+             (number (and value
+                          (string-match-p "\\`[+-]?[0-9]+\\'" value)
+                          (string-to-number value))))
+        (if (and number (> number 0))
+            number
+          orgacle-duration)))))
 
 (defun orgacle--elapsed (&optional now)
   "Return whole seconds elapsed since the running session started.

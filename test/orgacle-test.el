@@ -2344,6 +2344,50 @@ presented -- deleted that buffer's own LaTeX preview overlays."
     (let ((orgacle-duration nil))
       (should-not (orgacle--duration)))))
 
+(defun orgacle-test--duration-of (raw-value)
+  "Return `orgacle--duration' in a fresh buffer whose keyword line is
+\"#+ORGACLE_DURATION:RAW-VALUE\", verbatim -- so the caller controls
+every character after the colon, including how much whitespace, if
+any, comes before the value and whether there is a value at all.
+`orgacle-duration' is bound to nil around the call, so a nil result
+here means the keyword was rejected and the fallback was consulted
+and found nothing -- the same as the keyword being absent entirely."
+  (with-temp-buffer
+    (insert "#+ORGACLE_DURATION:" raw-value "\n")
+    (let ((orgacle-duration nil))
+      (orgacle--duration))))
+
+(ert-deftest orgacle-test-duration-rejects-malformed-keyword-values ()
+  "A malformed #+ORGACLE_DURATION: value is treated exactly like the
+keyword being absent -- falling back to `orgacle-duration' -- rather
+than reaching `string-to-number' unvalidated.  `string-to-number'
+parses a numeric *prefix* of its argument, not the whole string, and
+returns 0 for anything with no leading digit at all: \"twenty\" and
+\"abc20\" (no leading digit), an empty value, and a whitespace-only
+one all used to silently become a genuine 0-minute target, which is
+not nil, so `orgacle--timer-string' treated the talk as already over
+before it started -- see
+`orgacle-test-timer-string-is-empty-with-a-malformed-duration-keyword'
+for that consequence reproduced end to end.  \"1,5\" (a decimal
+comma, a highly plausible typo) becomes 1; \"2x\" becomes 2 -- both
+silently accepted the old way, each describing a duration the
+presenter never actually typed.  \"1.5\" is rejected too, and
+deliberately does not mirror `orgacle--appearance-text-scale': that
+function's ORGACLE_TEXT_SCALE property is genuinely allowed to be a
+float (a decimal point there means \"scale factor\"), but
+`orgacle-duration''s own `:type' is `(choice (const nil) integer)' --
+a whole number of minutes -- so a value with a decimal point is exactly
+as malformed here as \"1,5\" or \"twenty\", never a truncated integer.
+\"-5\" and \"0\" both match a bare signed-integer shape but are not a
+positive count of minutes, so both are rejected too, the same way
+`orgacle--appearance-text-scale' rejects \"-1\" and \"0\" via its own
+positivity check; -5 is also the exact value the phase-4 review
+reproduced rendering as \"3:24/-5:00\", permanently in the overtime
+face.  A genuinely valid value such as \"20\" is unaffected."
+  (dolist (value '("twenty" "abc20" "" "   " " 1,5" " 2x" " 1.5" " -5" " 0"))
+    (should-not (orgacle-test--duration-of value)))
+  (should (equal 20 (orgacle-test--duration-of " 20"))))
+
 (ert-deftest orgacle-test-elapsed-computes-from-the-session-start-time ()
   "`orgacle--elapsed' is NOW minus the session's start-time slot.
 NOW is passed explicitly instead of being read from the real clock, so
@@ -2426,6 +2470,37 @@ target being nil is under test here."
     (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () (* 20 60))))
       (should (eq 'orgacle-timer-overtime-face
                   (get-text-property 0 'face (orgacle--timer-string)))))))
+
+(ert-deftest orgacle-test-timer-string-overtime-face-past-target ()
+  "Well past the target, not only exactly at it, the string still takes
+the over-time face -- closing a coverage gap the phase-4 review found:
+until now only the exact-100% boundary was ever exercised, so a
+`>=' that had regressed to `=' would still have passed every existing
+test.  Also asserts the numeric text itself is not clamped to the
+target -- \"30:00/20:00\", ten minutes over, not \"20:00/20:00\"."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-duration 20))
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () (* 30 60))))
+      (should (equal "30:00/20:00" (orgacle--timer-string)))
+      (should (eq 'orgacle-timer-overtime-face
+                  (get-text-property 0 'face (orgacle--timer-string)))))))
+
+(ert-deftest orgacle-test-timer-string-is-empty-with-a-malformed-duration-keyword ()
+  "The mode-line consequence of the bug
+`orgacle-test-duration-rejects-malformed-keyword-values' covers at the
+`orgacle--duration' level, reproduced end to end: before the fix,
+`string-to-number' on \"twenty\" returned 0, which is not nil, so
+`orgacle--timer-string' treated the file as having a genuine 0-minute
+target and showed \"0:00/0:00\" in `orgacle-timer-overtime-face' from
+the first second of the talk, on a file where no target was ever
+validly configured.  The correct behaviour, matching a file with no
+#+ORGACLE_DURATION: keyword at all, is the empty string."
+  (with-temp-buffer
+    (insert "#+ORGACLE_DURATION: twenty\n")
+    (let ((orgacle--session (orgacle--session-create))
+          (orgacle-duration nil))
+      (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 0)))
+        (should (equal "" (orgacle--timer-string)))))))
 
 ;;; Mode-line composition
 

@@ -176,8 +176,14 @@ time against it:
 =orgacle-duration= (default nil) sets the target for every file; a single
 file overrides it with =#+ORGACLE_DURATION:=. With neither set, the mode
 line shows only the slide number, exactly as if the feature did not exist.
-Once a target is set, =MM:SS/MM:SS= -- elapsed over target -- appears next
-to the slide number, changing to =orgacle-timer-warning-face= once elapsed
+=#+ORGACLE_DURATION:= takes a whole number of minutes. A value that is not
+a whole positive number -- an empty or whitespace-only value, =twenty=,
+=1,5=, =2x=, =0=, a negative number, or a number with a decimal point such
+as =1.5= (unlike =:ORGACLE_TEXT_SCALE:=, a decimal point means nothing
+here) -- is treated exactly like the keyword being absent, falling back to
+=orgacle-duration=, rather than showing a broken or permanently-overrun
+timer. Once a target is set, =MM:SS/MM:SS= -- elapsed over target -- appears
+next to the slide number, changing to =orgacle-timer-warning-face= once elapsed
 time reaches 90% of the target and to =orgacle-timer-overtime-face= once it
 reaches the target itself, so overrunning is visible at a glance rather than
 something the presenter has to do arithmetic to notice. Minutes are not

@@ -4,12 +4,12 @@
 ;;               2010 Eric Schulte <schulte.eric@gmail.com>
 ;;               2020 Stefano Ghirlanda <drghirlanda@gmail.com>
 
-;; Authors: Tom Tromey <tromey@redhat.com>
-;;          Phil Hagelberg <technomancy@gmail.com>
-;;          Eric Schulte <schulte.eric@gmail.com>
-;;          Puneeth Chaganti <punchagan@gmail.com>
-;;          Lee Hinman <lee@writequit.org>
-;;          Stefano Ghirlanda <drghirlanda@gmail.com>
+;; Author: Tom Tromey <tromey@redhat.com>
+;;         Phil Hagelberg <technomancy@gmail.com>
+;;         Eric Schulte <schulte.eric@gmail.com>
+;;         Puneeth Chaganti <punchagan@gmail.com>
+;;         Lee Hinman <lee@writequit.org>
+;;         Stefano Ghirlanda <drghirlanda@gmail.com>
 ;; Maintainer: Stefano Ghirlanda <drghirlanda@gmail.com>
 ;; URL: https://github.com/drghirlanda/orgacle
 ;; Created: 12 Jun 2008
