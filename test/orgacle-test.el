@@ -1169,6 +1169,50 @@ itself produces."
       (orgacle-quit)
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest orgacle-test-refresh-does-not-reset-a-single-slide-preambleless-deck ()
+  "Fix round 3, item 1.  Fix round 2's `(not (buffer-narrowed-p))'
+disjunct has a false positive on a deck with exactly one slide and no
+preamble: the slide's own subtree *is* the whole buffer, so narrowing
+to it leaves `buffer-narrowed-p' nil even though the restriction is
+already exactly correct -- there is nothing outside the subtree to
+exclude.  Every `orgacle-refresh' then wrongly takes the transition
+branch.  Reproduced directly, before fixing, with a source block that
+does nothing but return a value (no widening needed to trigger it) on
+a slide with an ORGACLE_REVEAL property advanced to step 2 and point
+away from the heading: `orgacle-refresh' reset the reveal index to 0
+and moved point back to the heading, on every call, when nothing about
+the slide had changed.
+
+Fixed by comparing both ends of the current restriction against the
+just-recomputed slide's own subtree bounds, computed the same way the
+real transition would \(widen, go to the marker, `org-narrow-to-subtree',
+all inside `save-excursion'/`save-restriction' so the sandbox leaves
+the actual buffer state untouched\) instead of testing
+`buffer-narrowed-p' at all: equal bounds mean the view is already
+correct regardless of the flag, so nothing needs to change."
+  (let ((buf (generate-new-buffer "orgacle-test-f3-single-slide-preambleless")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "* Slide One\n"
+                  ":PROPERTIES:\n:ORGACLE_REVEAL: items\n:END:\n"
+                  "- First item\n- Second item\n- Third item\n"
+                  "#+begin_src emacs-lisp\n(+ 1 1)\n#+end_src\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (orgacle-mode)
+          (orgacle--start-slides)
+          (orgacle-top)
+          (orgacle-reveal-next)
+          (orgacle-reveal-next)
+          (should (= 2 (orgacle--session-reveal-index (orgacle--session-ensure))))
+          (goto-char (point-min))
+          (forward-char 13)
+          (let ((before-point (point)))
+            (orgacle-refresh)
+            (should (= before-point (point)))
+            (should (= 2 (orgacle--session-reveal-index (orgacle--session-ensure))))))
+      (orgacle-quit)
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 ;;; Migration
 
 (ert-deftest orgacle-test-migrate-renames-properties ()

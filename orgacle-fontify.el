@@ -324,14 +324,48 @@ equal, and concluded \"same slide, nothing to change\" -- leaving the
 *entire* deck on screen, every slide's speaker notes included, instead
 of re-narrowing to slide 1 alone.  `E' followed by `C-x n w' reaches
 the same state without a special source block at all, since
-`orgacle-edit-text' never narrows or widens on its own.  Fixed with a
-second, independent trigger: `(not (buffer-narrowed-p))' alongside the
-position comparison, either one enough on its own to force a
-re-narrow, so a widened buffer is always caught regardless of whether
-the recomputed slide's own position happens to coincide with what
-widening alone would also produce.
+`orgacle-edit-text' never narrows or widens on its own.  Fix round 2's
+own fix added a second, independent trigger: `(not (buffer-narrowed-p))'
+alongside the position comparison, either one enough on its own to
+force a re-narrow.
 
-When the two differ, this calls `orgacle-current-page' -- the same
+That disjunct, in turn, has a false positive of its own, fix round 3's
+own item 1: on a deck with exactly *one* slide and no preamble, that
+slide's own subtree -- run through `org-narrow-to-subtree' -- covers
+the entire buffer, so `buffer-narrowed-p' reads nil even when the
+restriction is already exactly correct; there is nothing outside the
+subtree to exclude.  `(not (buffer-narrowed-p))' then fires on *every*
+refresh of such a deck, not only after a genuine widen.  Confirmed
+directly, before fixing, with a slide carrying an ORGACLE_REVEAL
+property advanced to step 2 and point moved away from the heading: a
+plain, non-widening source block run via `x' reset the reveal index
+to 0 and snapped point back to the heading, on a slide that had not
+changed at all.
+
+Replaced `buffer-narrowed-p' entirely with a direct comparison of both
+ends of the restriction: `old-point-min'/`old-point-max', captured
+before rebuilding, against `new-bounds', the just-recomputed slide's
+own subtree bounds, computed the same way the real transition below
+would arrive at them -- widen, go to the marker, `org-narrow-to-subtree'
+-- but sandboxed in `save-excursion'/`save-restriction' so probing
+those bounds does not itself move point or change the buffer's actual
+restriction.  Equal bounds mean the view already shows exactly the
+target slide's subtree, whether that got there through an ordinary
+narrow or, as in the single-slide case above, through a widen that
+happens to expose nothing else; either way nothing needs to change.
+Unequal bounds catch a genuine transition, and, as a strict superset of
+the old disjunct, still catch a widened multi-slide deck: there the
+sandboxed bounds are the *narrower* target subtree while the old
+restriction is the whole, wider buffer, so they compare unequal
+regardless of where either one's `point-min' happens to fall.  The
+sandboxed `org-narrow-to-subtree' call runs on every refresh once the
+slides slot is non-empty, not only on an actual transition -- more work
+than the old flag check, but still bounded by the target subtree's own
+size, the same cost shape the rest of this function is built around,
+and nowhere near the cost of the page hook it is here to avoid running
+unnecessarily.
+
+When the bounds differ, this calls `orgacle-current-page' -- the same
 function ordinary navigation uses -- rather than repeating its work:
 that function clears a stale aux-window slot as its own first act,
 narrows to the new subtree, and runs `orgacle-page-hook' in full, so
@@ -366,6 +400,7 @@ to transition to, the same guard `orgacle--goto-slide' applies to its
 own work."
   (interactive)
   (let ((old-point-min (point-min))
+        (old-point-max (point-max))
         (session (orgacle--session-ensure)))
     (setf (orgacle--session-slides session) (orgacle--build-slides))
     (setf (orgacle--session-index session) (orgacle--slide-index-at-point))
@@ -373,10 +408,17 @@ own work."
       (orgacle--build-notes-buffer))
     (let* ((slides (orgacle--session-slides session))
            (new-index (orgacle--session-index session))
-           (new-marker (and (> (length slides) 0) (aref slides new-index))))
+           (new-marker (and (> (length slides) 0) (aref slides new-index)))
+           (new-bounds
+            (and new-marker
+                 (save-excursion
+                   (save-restriction
+                     (widen)
+                     (goto-char new-marker)
+                     (org-narrow-to-subtree)
+                     (cons (point-min) (point-max)))))))
       (when (and new-marker
-                 (or (/= old-point-min (marker-position new-marker))
-                     (not (buffer-narrowed-p))))
+                 (not (equal new-bounds (cons old-point-min old-point-max))))
         (widen)
         (goto-char new-marker)
         (orgacle-current-page))))

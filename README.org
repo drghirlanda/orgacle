@@ -121,20 +121,34 @@ Three kinds of subtree are treated specially:
   the notes buffer instead. See [[Speaker notes]].
 - Any heading with an =ORGACLE_HIDE= property is hidden from the slide.
 
-*Known issue, affecting all three kinds equally:* pressing =r=, =g=, or =x=
-on a slide, or editing a source block on it with =e= and exiting, can
-un-hide one of these subtrees on the presentation screen itself, for the
-rest of that slide's time on screen — a private-notes leak to the audience
-for =Speaker notes= in particular. The exact rule: it stays hidden only when
-the hidden subtree, *including any children of its own*, is the last
-subtree of its slide, with another top-level slide heading immediately
-following. Plain trailing text still inside the hidden subtree's own body
-is fine, and so are the subtree's own children — what breaks it is a
-*sibling* heading after it on the same slide, or the hidden subtree being
-the deck's actual last heading with nothing following at all. Until this is
-fixed, avoid pressing =r=, =g=, =x=, or editing code, on any slide with a
-=Title page=, =Speaker notes=, or =ORGACLE_HIDE= subtree that is not
-immediately followed by another slide.
+*Known issue, affecting =Speaker notes= and =ORGACLE_HIDE= subtrees:*
+pressing =r=, =g=, or =x= on a slide, editing a source block on it with
+=e= and exiting, or exiting text-edit mode with =E= then =C-c C-c=, can
+un-hide one of these subtrees on the presentation screen itself — a
+private-notes leak to the audience for =Speaker notes= in particular.
+The exposure is permanent, not limited to the slide it happened on:
+navigating away and back, or returning to the first slide with =t=,
+does not re-hide it, because the overlay that hides these subtrees is
+built once, when the presentation starts, and none of these commands
+rebuilds it — quitting and re-running the presentation is the only way
+back to a hidden state. The exact rule for whether a subtree is at
+risk: it stays hidden only when the subtree, *including any children of
+its own*, is the last subtree of its slide, with another top-level
+slide heading immediately following. Plain trailing text still inside
+the subtree's own body is fine, and so are the subtree's own children
+— what breaks it is a *sibling* heading after it on the same slide, or
+the subtree being the deck's actual last heading with nothing following
+at all. Until this is fixed, avoid pressing =r=, =g=, =x=, or editing
+text or code, on any slide with a =Speaker notes= or =ORGACLE_HIDE=
+subtree that is not immediately followed by another slide.
+
+=Title page= is exempt from this in its documented use, as a heading of
+its own at the slide level: such a heading is never itself a slide, so
+it is never the one the presentation gets narrowed to, and the leak
+above only ever exposes a subtree that lies inside the slide currently
+on screen. Used instead as a subheading *inside* a slide — not how this
+README documents it — a =Title page= heading is at exactly the same
+risk as =Speaker notes= or =ORGACLE_HIDE=, by the same rule.
 
 *** Navigating
 
@@ -421,7 +435,7 @@ Two details worth knowing:
 - *Known issue:* see the private-notes leak warning under [[What becomes a
   slide]] — =Speaker notes= is the subtree kind where this matters most,
   since a leak here exposes your own notes to the audience, not just a
-  hidden property or the title page.
+  hidden property.
 
 =M-x orgacle-estimate-time= reports how long it would take to read all your
 speaker notes aloud, together with the word count, which is a reasonable proxy
