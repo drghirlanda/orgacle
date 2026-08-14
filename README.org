@@ -168,13 +168,21 @@ for its direct subheadings.
 
 =N= and =P= always drive the reveal, on any slide, regardless of the option
 below. With =orgacle-reveal-on-navigation= at its default of =t=, =n= and =p=
-drive it too: while the current slide still has something hidden, =n= reveals
-the next target instead of moving to the next slide, and =p= hides the
-last-revealed target again instead of moving to the previous slide; once
-everything is revealed, or on a slide with no =:ORGACLE_REVEAL:= property at
-all, =n= and =p= change slide exactly as they always have. Set
-=orgacle-reveal-on-navigation= to =nil= to turn that off and keep =n=/=p=
-strictly for changing slides, with reveal reachable only on =N=/=P=.
+drive it too, but they hand off to ordinary navigation at different points,
+not a shared "still mid-reveal" state: while the current slide still has
+something hidden, =n= reveals the next target instead of moving to the next
+slide; once nothing is left hidden -- everything already revealed, or no
+=:ORGACLE_REVEAL:= property at all -- =n= changes slide exactly as it always
+has. =p= mirrors this around what is *revealed*, not what is hidden: whenever
+the current slide has something revealed, =p= hides the last-revealed target
+again instead of moving to the previous slide -- and a fully-revealed slide
+still has everything revealed, so =p= there re-hides one target per press,
+the same number of presses =N= took to reveal them, before it actually
+leaves the slide. Only once nothing is left revealed -- the slide still at
+its fully-hidden starting state, or no =:ORGACLE_REVEAL:= property at all --
+does =p= change slide immediately. Set =orgacle-reveal-on-navigation= to
+=nil= to turn all of this off and keep =n=/=p= strictly for changing slides,
+with reveal reachable only on =N=/=P=.
 
 Moving forward onto a slide — the first time, or by jumping to it with =v= —
 always shows it fully hidden, needing =N= or =n= presses to see anything.

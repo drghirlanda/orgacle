@@ -26,10 +26,10 @@ Simple presentations in Emacs
 
 ** Basics
    Writing a presentation is nothing more than writing an Org file.
-** Executing code live
-   Run a command in front of the audience and watch the slide update with the result.
 ** LaTeX, tables and images
    Math, data and figures render inline, with no export step.
+** Executing code live
+   Run a command in front of the audience and watch the slide update with the result.
 
 * Basics
 
@@ -45,7 +45,8 @@ Call =orgacle-run= to present an Org-mode buffer.
     (interactive)
     (unless (eq major-mode 'org-mode)
       (error "Orgacle can only be used from Org Mode"))
-    (setq orgacle--org-buffer (current-buffer))
+    (setq orgacle--session (orgacle--session-create))
+    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
     (orgacle--get-frame)
     (orgacle-mode)
     (orgacle-top))
