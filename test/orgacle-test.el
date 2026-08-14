@@ -1532,17 +1532,19 @@ stubbed out and `orgacle-speaker-notes' is off, matching
   (let ((orgacle--session nil))
     (should (equal "" (orgacle--timer-string)))))
 
-(ert-deftest orgacle-test-timer-string-shows-elapsed-with-no-target ()
-  "With no target duration, the string is bare elapsed time, unpropertized.
-`orgacle--elapsed' is stubbed rather than read from the real clock or the
-session's start-time slot, isolating this test to what `orgacle--timer-string'
-itself does with the number."
+(ert-deftest orgacle-test-timer-string-is-empty-with-no-target ()
+  "With no target duration, the string is empty, not bare elapsed time.
+A presenter who never set `orgacle-duration' (or #+ORGACLE_DURATION:)
+must not see a clock appear that they never asked for -- the phase's
+\"off by default\" rule -- and a bare elapsed count with nothing to
+measure against is not very actionable anyway.  `orgacle--elapsed' is
+stubbed to a non-zero value specifically so a wrongly-shown elapsed
+string could not be mistaken for the empty-session case; only the
+target being nil is under test here."
   (let ((orgacle--session (orgacle--session-create))
         (orgacle-duration nil))
     (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 125)))
-      (let ((string (orgacle--timer-string)))
-        (should (equal "2:05" string))
-        (should-not (get-text-property 0 'face string))))))
+      (should (equal "" (orgacle--timer-string))))))
 
 (ert-deftest orgacle-test-timer-string-shows-elapsed-over-target ()
   "With a target duration, the string is ELAPSED/TARGET."
@@ -1579,20 +1581,30 @@ itself does with the number."
 ;;; Mode-line composition
 
 (ert-deftest orgacle-test-default-mode-line-composes-page-number-and-timer ()
-  "The default mode-line construct shows both the page number and the timer."
+  "With a target configured, the default construct shows the page number and the timer."
   (let ((orgacle--session (orgacle--session-create))
         (orgacle-page-number 3)
-        (orgacle-duration nil))
+        (orgacle-duration 20))
     (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 65)))
       (let ((line (orgacle--default-mode-line)))
         (should (string-match-p "3" line))
-        (should (string-match-p "1:05" line))))))
+        (should (string-match-p "1:05/20:00" line))))))
 
 (ert-deftest orgacle-test-default-mode-line-is-just-the-page-number-with-no-session ()
   "With no session running, the default construct is unchanged from before."
   (let ((orgacle--session nil)
         (orgacle-page-number 3))
     (should (equal "3" (orgacle--default-mode-line)))))
+
+(ert-deftest orgacle-test-default-mode-line-is-just-the-page-number-with-no-target ()
+  "With a session running but no target duration, the timer stays invisible.
+This is the \"off by default\" case: presenting with nothing configured
+must look exactly as it did before the timer existed."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-page-number 3)
+        (orgacle-duration nil))
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 65)))
+      (should (equal "3" (orgacle--default-mode-line))))))
 
 (ert-deftest orgacle-test-custom-mode-line-is-not-augmented-with-the-timer ()
   "A fully custom `orgacle-mode-line' is returned exactly as the user set it.

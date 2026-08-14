@@ -225,9 +225,12 @@ screen, and follows the slide being presented."
 (defcustom orgacle-duration nil
   "Target length of the presentation, in minutes, or nil for no target.
 A single file overrides this with its own #+ORGACLE_DURATION: keyword;
-see `orgacle--duration'.  With a target set, the mode-line timer from
-`orgacle--timer-string' shows elapsed time against it and changes face
-as the target approaches and passes."
+see `orgacle--duration'.  Also controls whether the mode-line timer
+appears at all: with no target, `orgacle--timer-string' is the empty
+string, exactly as if no timer feature existed; with a target set, it
+shows elapsed time against it and changes face as the target approaches
+and passes.  There is no way to show elapsed time alone without a
+target -- set a generous one instead."
   :type '(choice (const :tag "No target duration" nil) integer)
   :group 'orgacle)
 
@@ -550,41 +553,45 @@ tests slow and their exact assertions flaky."
 
 (defun orgacle--format-mmss (seconds)
   "Format SECONDS as a MINUTES:SS string for the mode line.
-Minutes are neither padded nor wrapped at 60 -- an hour into a talk
-this reads \"60:00\", not \"1:00:00\" -- while seconds are always two
-digits."
+Minutes are neither padded nor wrapped at 60: a 75-minute talk reads
+\"75:00\", not \"1:15:00\".  This is deliberate, not an oversight -- the
+number a presenter actually wants mid-talk is minutes elapsed, and the
+hour:minute:second form invites misreading \"1:15:00\" as one minute
+fifteen.  Seconds are always two digits."
   (format "%d:%02d" (/ seconds 60) (mod seconds 60)))
 
 (defun orgacle--timer-string ()
   "Return the running presentation's timer as a mode-line string.
-Empty when no presentation is running (`orgacle--session' is nil),
-which keeps this safe to splice into a mode-line construct whether or
-not a presentation is actually in progress.  Otherwise shows the
-elapsed time from `orgacle--elapsed' as MINUTES:SS.  When
-`orgacle--duration' returns a target for this buffer, the string
-becomes ELAPSED/TARGET instead, propertized with
+Empty both when no presentation is running (`orgacle--session' is nil)
+and when `orgacle--duration' returns no target for this buffer: with
+nothing to measure against, a bare elapsed count is not very
+actionable -- \"7:42\" says little, \"7:42/20:00\" says where the
+presenter stands -- and the phase's \"off by default\" rule means a
+presenter who never set a target should not see a clock appear that
+they never asked for.  Set `orgacle-duration' (or #+ORGACLE_DURATION:)
+to get a timer at all; a generous value with no real deadline gets an
+effectively elapsed-only display deliberately, rather than this
+function growing a second, target-less display mode of its own.
+Otherwise shows ELAPSED/TARGET, both from `orgacle--elapsed' and
+`orgacle--duration' as MINUTES:SS, propertized with
 `orgacle-timer-warning-face' once elapsed time reaches 90% of the
 target and with `orgacle-timer-overtime-face' once it reaches the
 target itself, so a presenter sees the timer change colour without
-doing the arithmetic themselves.  With no target, the string carries no
-face at all: there is nothing to warn about without one to measure
-against."
-  (if (null orgacle--session)
+doing the arithmetic themselves."
+  (if (or (null orgacle--session) (null (orgacle--duration)))
       ""
     (let* ((elapsed (orgacle--elapsed))
            (target (orgacle--duration))
-           (string (if target
-                       (format "%s/%s"
-                               (orgacle--format-mmss elapsed)
-                               (orgacle--format-mmss (* target 60)))
-                     (orgacle--format-mmss elapsed))))
+           (string (format "%s/%s"
+                           (orgacle--format-mmss elapsed)
+                           (orgacle--format-mmss (* target 60)))))
       (cond
        ;; target * 60 * 9 compares against elapsed * 10 rather than
        ;; dividing, so this never risks a float rounding the boundary
        ;; the wrong way, and never divides by a zero-minute target.
-       ((and target (>= elapsed (* target 60)))
+       ((>= elapsed (* target 60))
         (propertize string 'face 'orgacle-timer-overtime-face))
-       ((and target (>= (* elapsed 10) (* target 60 9)))
+       ((>= (* elapsed 10) (* target 60 9))
         (propertize string 'face 'orgacle-timer-warning-face))
        (t string)))))
 
@@ -595,9 +602,11 @@ so this is what a presenter sees unless they have replaced that
 defcustom or set #+ORGACLE_MODE_LINE: in the file being presented, in
 which case neither this function nor `orgacle--timer-string' is ever
 called; see `orgacle-get-mode-line'.  `orgacle--timer-string' is empty
-whenever `orgacle--session' is nil, so this reduces to the page number
-alone outside of a presentation, exactly as `orgacle-mode-line' behaved
-before the timer existed."
+whenever `orgacle--session' is nil or `orgacle--duration' has no
+target, so this reduces to the page number alone outside of a
+presentation, and stays that way through an entire presentation for
+which no target duration was ever configured -- exactly how
+`orgacle-mode-line' behaved before the timer existed, in both cases."
   (let ((timer (orgacle--timer-string)))
     (if (string= timer "")
         (int-to-string orgacle-page-number)
