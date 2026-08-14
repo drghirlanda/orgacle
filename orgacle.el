@@ -62,11 +62,14 @@
 (require 'orgacle-src)
 (require 'orgacle-media)
 (require 'orgacle-notes)
-;; Required after every other page-hook contributor, so that
-;; orgacle-reveal.el's own APPEND-t `add-hook' call -- see its
-;; comment -- lands after file, slide-in, indicators and notes in the
-;; real, default `orgacle-page-hook', not merely after whichever of
-;; them happened to be registered before it.
+;; Required after orgacle-fontify and orgacle-media specifically --
+;; last of all five page-hook contributors here, though only the first
+;; two are load-bearing -- so that orgacle-reveal.el's own prepending
+;; `add-hook' call runs after `orgacle-slide-in-effect's and
+;; `orgacle-show-file-auto's, the only other two page-hook members that
+;; also prepend, and so lands ahead of both in the real, default
+;; `orgacle-page-hook'; see orgacle-reveal.el's own `add-hook' comment
+;; for why reveal has to run before slide-in specifically.
 (require 'orgacle-reveal)
 (require 'ox-orgacle)
 

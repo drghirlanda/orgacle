@@ -51,9 +51,12 @@ so bind it yourself if you want it back:
 - =N= and =P=, during a presentation, are now incremental reveal's own keys
   (=orgacle-reveal-next= and =orgacle-reveal-previous=) instead of the old
   folded-subheading commands. An =:ORGACLE_STEPWISE:= deck keeps presenting
-  with no changes needed, but its behaviour changes from an accordion (one
-  subheading visible at a time) to a cumulative reveal (each one stays visible
-  as you add more); see "Revealing a slide piece by piece" below. The old
+  with no changes needed, but its behaviour changes more than "accordion
+  versus cumulative" suggests: the old mechanism never actually hid anything
+  on the way in, so a STEPWISE slide appeared fully visible; the new one
+  starts a STEPWISE slide fully *hidden*, needing =N= presses to reveal
+  anything at all — see "Revealing a slide piece by piece" below, which
+  spells out exactly what changes. The old
   commands, =orgacle-next-subheading= and =orgacle-previous-subheading=, are
   still defined for anyone who rebinds =N=/=P= back to them.
 
@@ -149,23 +152,37 @@ last-revealed target again instead of moving to the previous slide; once
 everything is revealed, or on a slide with no =:ORGACLE_REVEAL:= property at
 all, =n= and =p= change slide exactly as they always have. Set
 =orgacle-reveal-on-navigation= to =nil= to turn that off and keep =n=/=p=
-strictly for changing slides, with reveal reachable only on =N=/=P=. A slide
-you return to is always shown fully hidden again, whatever it was left at
-before — reveal progress is per visit, not remembered across one.
+strictly for changing slides, with reveal reachable only on =N=/=P=.
+
+Moving forward onto a slide — the first time, or by jumping to it with =v= —
+always shows it fully hidden, needing =N= or =n= presses to see anything.
+Stepping backward onto it with =p=, though, lands it fully revealed instead,
+matching Beamer and reveal.js: the point of stepping back across a slide
+boundary is to see what was already shown a moment ago, not to present it
+again from scratch.
 
 =:ORGACLE_STEPWISE:= still works, as an alias for =:ORGACLE_REVEAL: headings= —
 you do not need to rename an existing property to keep a STEPWISE deck
-presenting. *Its behaviour has changed*, though, and deliberately so: the old
-=ORGACLE_STEPWISE= showed one subheading at a time, hiding the previous one as
-it went (an accordion). The new mechanism is cumulative: once a heading is
-revealed it stays visible as you reveal more, alongside it, the same way
-revealing =items= builds up a list rather than replacing one bullet with the
-next. A presentation that relied on only ever seeing one subheading at a time
-will now show all of them, accumulating, by the time you reach the last one.
+presenting. *Its behaviour has changed*, though, more than a first glance at
+"accordion versus cumulative" suggests, so read this carefully if you have an
+existing STEPWISE deck. The old =ORGACLE_STEPWISE= never actually hid anything
+on the way in: a slide with the property appeared with every subheading and
+its content already fully visible, exactly like a slide without the property;
+=N= (=orgacle-next-subheading=) only moved point forward, silently failing to
+hide anything because of how it checked the property (a level test that never
+matched the slide's own heading, and a lookup that does not inherit down to
+the subheadings themselves); only =P= (=orgacle-previous-subheading=), pressed
+enough times, progressively hid subtrees on the way back out. The new
+mechanism inverts this: a slide with =:ORGACLE_STEPWISE:= now starts *fully
+hidden* and needs =N= presses to reveal anything at all, cumulatively — once a
+heading is revealed it stays visible as you reveal more, alongside it. A
+presenter who reads only "one at a time, now cumulative" will not anticipate
+walking onto an empty-looking slide; the honest summary is: what used to show
+everything immediately now shows nothing until you press =N=.
 =orgacle-next-subheading= and =orgacle-previous-subheading=, the functions that
-used to implement the accordion, are still defined and still work exactly as
-before if you call them directly or rebind =N=/=P= back to them yourself; they
-are simply no longer bound by default.
+used to implement the old behaviour, are still defined and still work exactly
+as before if you call them directly or rebind =N=/=P= back to them yourself;
+they are simply no longer bound by default.
 
 *** Size and appearance
 

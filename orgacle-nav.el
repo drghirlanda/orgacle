@@ -43,7 +43,6 @@
 (declare-function orgacle-reveal-next "orgacle-reveal" ())
 (declare-function orgacle-reveal-previous "orgacle-reveal" ())
 (declare-function orgacle-reveal-clean-overlays "orgacle-reveal" ())
-(defvar orgacle--reveal-index)
 
 (defun orgacle-goto-top-level ()
   "Go to the current top level heading containing point."
@@ -67,23 +66,27 @@ and `orgacle-jump-to-page' are index arithmetic over the vector it
 builds.
 
 Also clears any reveal overlays and resets the reveal index left over
-from whatever was on display before -- `orgacle--reveal-overlays' and
-`orgacle--reveal-index' are plain variables, not part of the session
-struct this function otherwise resets, so nothing else guarantees they
-describe *this* buffer's first slide rather than the last thing some
-earlier presentation (or, in the test suite, some earlier fixture)
-left revealed.  Without this, `orgacle-next-page', called here before
-`orgacle-current-page' has ever run for this buffer to rebuild reveal
-state honestly, could consult that leftover state and decide there was
-still something to reveal on a slide that has no reveal targets at
-all, silently swallowing the very first `n' of the new presentation
-instead of moving to the next slide."
+from whatever was on display before.  The session struct's own
+reveal-overlays and reveal-index slots are already guaranteed fresh
+for a *brand-new* session -- see their docstring in orgacle-core.el --
+but `orgacle--session-ensure' reuses an *existing* session when one is
+already current, which is exactly what happens here when this function
+runs a second time without an intervening `orgacle-quit': directly,
+from a second `orgacle-run'; and in the test suite, from one fixture's
+buffer to the next, since `orgacle-test-with-fixture' does not call
+`orgacle-quit' between tests.  Without this explicit reset, a reused
+session would carry the previous buffer's reveal overlays and index
+into `orgacle--start-slides''s caller here, exactly as the slides and
+index slots just above would if this function did not also reset
+those by hand."
   (let ((session (orgacle--session-ensure)))
     (setf (orgacle--session-slides session) (orgacle--build-slides))
     (setf (orgacle--session-index session) 0))
   (orgacle--sync-page-number)
   (orgacle-reveal-clean-overlays)
-  (setq orgacle--reveal-index 0))
+  (let ((session (orgacle--session-ensure)))
+    (setf (orgacle--session-reveal-index session) 0
+          (orgacle--session-reveal-enter-revealed session) nil)))
 
 (defun orgacle--goto-slide (index)
   "Move to slide INDEX of the session's slides slot and present it.
@@ -168,12 +171,27 @@ slide, nothing moves and the last slide stays on display;
 With `orgacle-reveal-on-navigation' non-nil (the default) and the
 current slide's reveal index above 0, calls `orgacle-reveal-previous'
 and stops there -- the slide does not change.  Otherwise moves to the
-previous slide exactly as before this option existed.  Before the
-first slide, nothing moves and the first slide stays on display;
-`orgacle--goto-slide' is what clamps that."
+previous slide exactly as before this option existed, landing on it
+fully revealed rather than fully hidden, matching Beamer and
+reveal.js: stepping backward across a slide boundary shows that
+slide's last step, not its bare heading, so returning to a slide does
+not cost its target count in `n' presses just to see what was already
+shown before.  Signalled to `orgacle-reveal-reset' -- which actually
+builds the destination slide's overlays -- via the session's
+reveal-enter-revealed slot, set here only when a slide change is
+actually about to happen; at the first slide already, where
+`orgacle--goto-slide' clamps back to the same slide and still re-runs
+the page hook, leaving the flag unset here is what keeps that
+redundant redisplay from re-revealing a slide already at reveal index
+0 that the presenter never actually left.  Before the first slide,
+nothing moves and the first slide stays on display; `orgacle--goto-slide'
+is what clamps that."
   (interactive)
   (unless (and orgacle-reveal-on-navigation (orgacle-reveal-previous))
-    (orgacle--goto-slide (1- (orgacle--session-index (orgacle--session-ensure))))))
+    (let ((session (orgacle--session-ensure)))
+      (when (> (orgacle--session-index session) 0)
+        (setf (orgacle--session-reveal-enter-revealed session) t))
+      (orgacle--goto-slide (1- (orgacle--session-index session))))))
 
 (defun orgacle-next-subheading ()
   "Advance to next subheading, unhiding it if hidden."

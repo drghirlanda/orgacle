@@ -190,6 +190,12 @@ zero, so no sequence of calls can produce a non-positive height, which
 ;; `orgacle-toggle-hide-src-blocks'.
 (declare-function orgacle--build-notes-buffer "orgacle-notes" ())
 
+;; Same idiom, same reason, for orgacle-reveal.el's own rebuild-after-edit
+;; function: `orgacle-refresh' below needs it so an edit that changes a
+;; half-revealed slide's target count does not leave the reveal overlays
+;; describing text that no longer matches what is actually there.
+(declare-function orgacle-reveal-refresh "orgacle-reveal" ())
+
 (defun orgacle-refresh ()
   "Rebuild the slide vector, then delete overlays and re-fontify.
 Bound to r, g, and to the key that exits `orgacle-edit-text', and
@@ -217,7 +223,18 @@ re-derived index slot indexing the *old*, now-misaligned marker
 vector, so the next navigation would show the wrong slide's notes --
 silently, since the guard in `orgacle-position-notes' only catches an
 index that runs past the end of the vector, not one that is merely
-pointing at a different slide within it."
+pointing at a different slide within it.
+
+Also rebuilds the current slide's reveal overlays via
+`orgacle-reveal-refresh', which clamps the reveal index to the
+possibly-changed target count instead of simply resetting it, so an
+edit that does not touch the target count leaves reveal progress
+alone.  This has to run *after* `orgacle-clean-overlays' below, not
+before: reveal overlays deliberately do not live in the shared
+`orgacle-overlays' list that call sweeps -- see the session struct's
+reveal-overlays slot docstring in orgacle-core.el -- precisely so that
+a blanket sweep like this one cannot delete them out from under a
+rebuild that has not happened yet."
   (interactive)
   (let ((session (orgacle--session-ensure)))
     (setf (orgacle--session-slides session) (orgacle--build-slides))
@@ -226,6 +243,7 @@ pointing at a different slide within it."
       (orgacle--build-notes-buffer)))
   (orgacle--sync-page-number)
   (orgacle-clean-overlays (point-min) (point-max))
+  (orgacle-reveal-refresh)
   (orgacle-fontify))
 
 ;; Joins `orgacle-page-hook' at load time.  orgacle.el requires this

@@ -278,9 +278,10 @@ Slots replace what used to be individually loose `defvar' forms: the
 presentation frame, the original Org buffer and its restriction, the
 temporary file used for a narrowed presentation, the slide vector and
 the index into it, the speaker-notes buffer and its marker vector, the
-auxiliary and presentation windows, and the time the presentation
-started.  `orgacle--session-ensure' is almost always the right way to
-reach a slot; see its docstring for why.
+auxiliary and presentation windows, the time the presentation started,
+and the current slide's incremental-reveal state.
+`orgacle--session-ensure' is almost always the right way to reach a
+slot; see its docstring for why.
 
 The index slot defaults to 0, not nil: `orgacle-next-page' and
 `orgacle-previous-page' do arithmetic directly on this slot -- (1+
@@ -296,10 +297,30 @@ The start-time slot, by contrast, has no default and stays nil until
 `orgacle-run' sets it with `float-time': a session auto-vivified by
 `orgacle--session-ensure' before a presentation has actually started
 has nothing to measure elapsed time from, and `orgacle--elapsed' treats
-a nil start-time as zero elapsed seconds rather than signalling."
+a nil start-time as zero elapsed seconds rather than signalling.
+
+The three reveal-* slots hold `orgacle-reveal.el's per-presentation
+state: reveal-overlays (a vector, or nil for a slide with no reveal
+targets), reveal-index (defaulting to 0, for the same
+arithmetic-before-`orgacle--start-slides' reason as the index slot
+above), and reveal-enter-revealed (a one-shot flag `orgacle-previous-page'
+sets before stepping back onto a slide it wants to land fully
+revealed, that `orgacle-reveal-reset' reads once and clears).  These
+used to be plain variables; moving them here means a session
+auto-vivified fresh by `orgacle--session-ensure' -- because
+`orgacle--session' was nil, the same auto-vivification the index slot's
+own paragraph above describes -- carries no reveal state left over
+from whatever ran before it, by construction, the same way its slides
+slot starts empty rather than pointing at a previous presentation's
+markers.  This closed a real defect: with `orgacle--session' nil and a
+killed presented buffer, `orgacle-next-page' used to consult
+leftover, no-longer-meaningful reveal overlays from before the reset,
+`overlay-put' a dead one -- a silent no-op -- and report that it had
+moved, swallowing the keypress instead of changing slide."
   frame org-buffer org-restriction org-file
   slides (index 0) notes-buffer notes-markers
-  aux-window presentation-window start-time)
+  aux-window presentation-window start-time
+  reveal-overlays (reveal-index 0) reveal-enter-revealed)
 
 (defvar orgacle--session nil
   "The running presentation, or nil when none is running.
