@@ -281,6 +281,21 @@ the display."
   (unless (eq major-mode 'orgacle-mode)
     (unless (eq major-mode 'org-mode)
       (error "Orgacle can only be used from Org Mode"))
+    ;; delete the previous presentation's reveal overlays before its
+    ;; session is replaced below -- once `orgacle--session' points at
+    ;; the fresh struct, nothing can reach the old one's
+    ;; reveal-overlays slot to clean it again, ever: `orgacle-quit'
+    ;; already cleans the session it is given before nil-ing it, and
+    ;; `orgacle--session-ensure' only ever creates a fresh struct when
+    ;; `orgacle--session' is already nil, with nothing left to orphan;
+    ;; this call site is the one place a *live*, non-nil session is
+    ;; discarded outright, precisely the "second `orgacle-run', no
+    ;; intervening quit" scenario the struct's own docstring says it
+    ;; defends against -- reveal overlays are the one piece of session
+    ;; state a fresh struct's own defaults cannot reach, because they
+    ;; are attached to the *old* buffer, not carried by the struct
+    ;; itself
+    (orgacle-reveal-clean-overlays)
     ;; a fresh session, not a mutated leftover one: a presentation whose
     ;; frame was killed without going through `orgacle-quit' must not be
     ;; able to leave this one inheriting its state

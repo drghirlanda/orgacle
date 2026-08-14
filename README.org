@@ -165,20 +165,28 @@ again from scratch.
 you do not need to rename an existing property to keep a STEPWISE deck
 presenting. *Its behaviour has changed*, though, more than a first glance at
 "accordion versus cumulative" suggests, so read this carefully if you have an
-existing STEPWISE deck. The old =ORGACLE_STEPWISE= never actually hid anything
-on the way in: a slide with the property appeared with every subheading and
-its content already fully visible, exactly like a slide without the property;
-=N= (=orgacle-next-subheading=) only moved point forward, silently failing to
-hide anything because of how it checked the property (a level test that never
-matched the slide's own heading, and a lookup that does not inherit down to
-the subheadings themselves); only =P= (=orgacle-previous-subheading=), pressed
-enough times, progressively hid subtrees on the way back out. The new
-mechanism inverts this: a slide with =:ORGACLE_STEPWISE:= now starts *fully
-hidden* and needs =N= presses to reveal anything at all, cumulatively — once a
-heading is revealed it stays visible as you reveal more, alongside it. A
-presenter who reads only "one at a time, now cumulative" will not anticipate
-walking onto an empty-looking slide; the honest summary is: what used to show
-everything immediately now shows nothing until you press =N=.
+existing STEPWISE deck. At the default =orgacle-frame-level= of 1, the old
+=ORGACLE_STEPWISE= never actually hid anything on the way in: a slide with the
+property appeared with every subheading and its content already fully
+visible, exactly like a slide without the property; =N=
+(=orgacle-next-subheading=) only moved point forward, silently failing to hide
+anything because of how it checked the property (a level test that never
+matched the slide's own heading at level 1, and a lookup that does not
+inherit down to the subheadings themselves); only =P=
+(=orgacle-previous-subheading=), pressed enough times, progressively hid
+subtrees on the way back out. This is the common case and the one the old
+README described, but not the only one: with =#+ORGACLE_FRAME_LEVEL: 2= or
+deeper, the slide heading itself sits at level 2 or below, so that same level
+test *does* pass on the slide heading, and =N= did fire =outline-hide-subtree=
+there, hiding the whole subtree — some real, working accordion behaviour that
+a deck using a non-default frame level actually relied on. Either way, the new
+mechanism starts a slide with =:ORGACLE_STEPWISE:= *fully hidden* and needs =N=
+presses to reveal anything at all, cumulatively — once a heading is revealed
+it stays visible as you reveal more, alongside it. A presenter who reads only
+"one at a time, now cumulative" will not anticipate walking onto an
+empty-looking slide; the honest summary is: what used to show everything
+immediately (at the default frame level) now shows nothing until you press
+=N=.
 =orgacle-next-subheading= and =orgacle-previous-subheading=, the functions that
 used to implement the old behaviour, are still defined and still work exactly
 as before if you call them directly or rebind =N=/=P= back to them yourself;

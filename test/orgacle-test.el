@@ -976,9 +976,18 @@ ERT's alphabetical ordering (`n' sorts before `r').  Now that a fresh
 session -- auto-vivified here on every `(setq orgacle--session nil)'
 above -- carries fresh, nil reveal-overlays by construction (see the
 session struct's slot docstring in orgacle-core.el), this test's pass
-no longer depends on run order at all; the specific swallowed-keypress
-scenario itself is pinned separately and more directly by
-`orgacle-test-next-page-with-nil-session-does-not-swallow-the-keypress'."
+no longer depends on run order at all.  Fix round 2 removed a
+companion test that tried to pin the swallowed-keypress scenario
+itself directly with a bare nil session: with no deck ever built for
+that session, `orgacle-next-page' correctly does nothing either way
+(there is no slide to move to, bug or no bug), so its assertions held
+by construction regardless of whether the underlying defect was
+present -- a test that cannot fail.  The scenarios that can actually
+recur, and that a deleted assertion cannot silently stop covering, are
+pinned directly and falsifiably by
+`orgacle-test-start-slides-resets-stale-reveal-state' (a reused,
+non-nil session) and `orgacle-test-run-cleans-the-previous-sessions-reveal-overlays'
+(`orgacle-run' replacing a live session outright) below."
   (unwind-protect
       (progn
         (setq orgacle--session nil)
@@ -2065,15 +2074,18 @@ subheadings without setting ORGACLE_REVEAL explicitly."
   "Documents the new mechanism's own shape: revealing a second heading
 leaves the first one visible too, rather than hiding it again.  Not a
 comparison against what the old `orgacle-next-subheading' actually did
-going forward, which was nothing -- its property check
+going forward on `stepwise.org', at the default `orgacle-frame-level'
+of 1, which was nothing -- its property check
 \(`(and (org-entry-get nil \"ORGACLE_STEPWISE\") (> (org-current-level) 1))')
 never matched on the level-1 slide heading itself, and `org-entry-get'
 there does not inherit down to the level-2 subheadings it moved point
 between, so the old mechanism's hide branch never fired advancing;
 everything was already visible the moment the slide appeared, and only
 `orgacle-previous-subheading' -- unconditionally, with no property
-check at all -- progressively hid things going backwards.  See the
-README's \"Revealing a slide piece by piece\" section for the fuller
+check at all -- progressively hid things going backwards.  At a deeper
+frame level the old level check could pass on the slide heading
+itself, and the old hide branch did fire; see the README's \"Revealing
+a slide piece by piece\" section for that qualifier and the fuller
 comparison this docstring used to get wrong in the same way."
   (orgacle-test-with-fixture "stepwise.org"
     (orgacle--start-slides)
@@ -2116,23 +2128,45 @@ just the shared and fringe overlay lists -- previously unpinned."
       (orgacle-quit)
       (should (null (overlay-buffer ov))))))
 
-(ert-deftest orgacle-test-next-page-with-nil-session-does-not-swallow-the-keypress ()
-  "I2, the reviewer's exact reproduction: with `orgacle--session' nil --
-nothing running, or just after `orgacle-quit' -- `orgacle-next-page'
-must not consult another session's leftover reveal state and report
-that it moved when it did not.  Before reveal state moved into the
-session struct, a session auto-vivified here by `orgacle--session-ensure'
-got fresh slides and index slots but still read whatever the free
-variables `orgacle--reveal-overlays' and `orgacle--reveal-index' held
-from an unrelated, earlier presentation -- silently swallowing this
-keypress by `overlay-put'-ing a dead overlay and reporting non-nil."
-  (unwind-protect
-      (progn
-        (setq orgacle--session nil)
-        (orgacle-next-page)
-        (should (= 0 (orgacle--session-index (orgacle--session-ensure))))
-        (should (null (orgacle--session-reveal-overlays (orgacle--session-ensure)))))
-    (setq orgacle--session nil)))
+(ert-deftest orgacle-test-run-cleans-the-previous-sessions-reveal-overlays ()
+  "New-1 regression (fix round 2): a second `orgacle-run', in a
+different buffer, with no intervening `orgacle-quit', must not orphan
+the first session's reveal overlays.  Once `orgacle-run' replaces
+`orgacle--session' with a fresh struct, nothing -- not
+`orgacle--start-slides''s reset, not `orgacle-quit' -- can ever reach
+the discarded struct's reveal-overlays slot again, because both of
+those operate on whatever `orgacle--session' currently is, and it no
+longer is that struct.  Reproduces the reviewer's own diagnosis
+exactly: reveals one of a three-item slide's targets in the first
+buffer, captures the still-hidden second target's overlay, runs
+`orgacle-run' again in a second buffer with no `orgacle-quit' in
+between, and asserts both that the orphan overlay is dead
+\(`overlay-buffer' nil\) and that the character position it used to
+cover in the first buffer no longer reads as invisible because of it."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-reveal-a"))
+        (buffer-b (generate-new-buffer "orgacle-test-reveal-b")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "reveal.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run)
+            (orgacle-reveal-next))
+          (let* ((orphan (aref (orgacle--session-reveal-overlays orgacle--session) 1))
+                 (pos (overlay-start orphan)))
+            (with-current-buffer buffer-b
+              (insert-file-contents
+               (expand-file-name "reveal.org" orgacle-test-fixture-directory))
+              (let ((org-mode-hook nil)) (org-mode))
+              (orgacle-run))
+            (should (null (overlay-buffer orphan)))
+            (with-current-buffer buffer-a
+              (should-not (get-char-property pos 'invisible)))))
+      (orgacle-quit)
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b)))))
 
 (ert-deftest orgacle-test-previous-page-lands-on-a-previous-slide-fully-revealed ()
   "I4, controller ruling: stepping `p' back across a slide boundary
@@ -2162,14 +2196,23 @@ and spuriously reveal a slide the presenter never left."
     (should (= 0 (orgacle--session-reveal-index (orgacle--session-ensure))))))
 
 (ert-deftest orgacle-test-refresh-preserves-reveal-progress-when-count-is-unchanged ()
-  "M2: `orgacle-refresh' rebuilds reveal overlays rather than losing them
-to its own blanket `orgacle-clean-overlays' sweep over the shared
-`orgacle-overlays' list, and preserves how much was already revealed
-when the target count has not changed.  This is also what pins the
-central overlay-ownership decision: if reveal overlays had joined
-`orgacle-overlays' instead of keeping their own list, this test would
-see the reveal index survive but every overlay already deleted by that
-sweep, with nothing here to rebuild them."
+  "M2: `orgacle-refresh' rebuilds reveal overlays -- always fresh, never
+reused, which is what actually protects it from `orgacle-clean-overlays''s
+blanket sweep over the shared `orgacle-overlays' list, independent of
+which list reveal overlays belong to -- and preserves how much was
+already revealed when the target count has not changed.  Asserts
+`overlay-buffer' non-nil on each inspected overlay, not just its
+properties: `overlay-get' returns a property fine even on a deleted
+overlay, which is exactly why properties alone do not prove anything
+survived.  Does *not* pin the overlay-ownership decision -- fix round
+1's docstring here wrongly claimed it did; because
+`orgacle-reveal-refresh' rebuilds unconditionally on every call, it
+produces this same, correct end state regardless of which list the
+*previous* call's overlays belonged to, so no assertion made only
+after a refresh completes can distinguish the two.  See
+`orgacle-test-reveal-overlays-are-never-in-the-shared-list' for the
+test that actually pins ownership, on the invariant itself rather than
+a masked side effect of it."
   (orgacle-test-with-fixture "reveal.org"
     (orgacle--start-slides)
     (orgacle-top)
@@ -2177,11 +2220,35 @@ sweep, with nothing here to rebuild them."
     (orgacle-reveal-next)
     (orgacle-refresh)
     (should (= 2 (orgacle--session-reveal-index (orgacle--session-ensure))))
-    (should (= 3 (length (orgacle--session-reveal-overlays (orgacle--session-ensure)))))
-    (should-not (overlay-get (aref (orgacle--session-reveal-overlays (orgacle--session-ensure)) 0) 'invisible))
-    (should-not (overlay-get (aref (orgacle--session-reveal-overlays (orgacle--session-ensure)) 1) 'invisible))
-    (should (eq (overlay-get (aref (orgacle--session-reveal-overlays (orgacle--session-ensure)) 2) 'invisible)
-                'orgacle-hide))))
+    (let ((overlays (orgacle--session-reveal-overlays (orgacle--session-ensure))))
+      (should (= 3 (length overlays)))
+      (should (cl-every #'overlay-buffer overlays))
+      (should-not (overlay-get (aref overlays 0) 'invisible))
+      (should-not (overlay-get (aref overlays 1) 'invisible))
+      (should (eq (overlay-get (aref overlays 2) 'invisible) 'orgacle-hide)))))
+
+(ert-deftest orgacle-test-reveal-overlays-are-never-in-the-shared-list ()
+  "New-3: pins the overlay-ownership decision directly, on the
+invariant itself -- no overlay carrying the `orgacle-reveal' marker
+property is ever a member of `orgacle-overlays' -- rather than through
+a refresh's end state, which `orgacle-reveal-refresh''s own
+unconditional rebuild can mask regardless of ownership; see the
+previous test's docstring for why that indirect approach does not
+work.  Checked after both call sites that build reveal overlays:
+`orgacle-reveal-reset' (via `orgacle-top') and `orgacle-reveal-refresh'
+(via `orgacle-refresh').  Confirmed against a real reversal: with
+`orgacle--reveal-build-overlays' temporarily patched to also
+`push' each overlay onto `orgacle-overlays', this test fails
+immediately after `orgacle-top' alone, while
+`orgacle-test-refresh-preserves-reveal-progress-when-count-is-unchanged'
+above keeps passing even after a subsequent refresh -- exactly the gap
+this test exists to close."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should-not (cl-some (lambda (ov) (overlay-get ov 'orgacle-reveal)) orgacle-overlays))
+    (orgacle-refresh)
+    (should-not (cl-some (lambda (ov) (overlay-get ov 'orgacle-reveal)) orgacle-overlays))))
 
 (ert-deftest orgacle-test-refresh-adapts-when-a-target-is-added ()
   "M2, the reviewer's exact reproduction: editing a fourth item into a

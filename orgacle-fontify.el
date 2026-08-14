@@ -229,12 +229,18 @@ Also rebuilds the current slide's reveal overlays via
 `orgacle-reveal-refresh', which clamps the reveal index to the
 possibly-changed target count instead of simply resetting it, so an
 edit that does not touch the target count leaves reveal progress
-alone.  This has to run *after* `orgacle-clean-overlays' below, not
-before: reveal overlays deliberately do not live in the shared
-`orgacle-overlays' list that call sweeps -- see the session struct's
-reveal-overlays slot docstring in orgacle-core.el -- precisely so that
-a blanket sweep like this one cannot delete them out from under a
-rebuild that has not happened yet."
+alone.  Its position relative to `orgacle-clean-overlays' below does
+not actually matter for correctness, in either order: reveal overlays
+deliberately do not live in the shared `orgacle-overlays' list that
+call sweeps -- see the session struct's reveal-overlays slot docstring
+in orgacle-core.el -- so that sweep can never see them regardless of
+when `orgacle-reveal-refresh' runs relative to it, and
+`orgacle-reveal-refresh' always deletes and rebuilds its own overlays
+unconditionally, so it does not depend on anything this sweep does or
+does not touch either.  It is placed after purely to read top to
+bottom in the same order as the rest of this function: rebuild the
+deck's own bookkeeping, clean up, then refresh the two things -- reveal
+and fontification -- that redraw the current slide's actual content."
   (interactive)
   (let ((session (orgacle--session-ensure)))
     (setf (orgacle--session-slides session) (orgacle--build-slides))

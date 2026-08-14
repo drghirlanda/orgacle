@@ -171,21 +171,36 @@ not keep re-triggering the fully-revealed start.
 
 Every overlay is built by `orgacle--reveal-build-overlays', which see
 for why it takes the target buffer explicitly rather than trusting
-`current-buffer'."
+`current-buffer'.
+
+The enter-revealed flag is cleared, and the reveal-index slot reset to
+0, immediately after `orgacle-reveal-clean-overlays' -- before
+`orgacle--reveal-targets' is ever called, not after it returns.
+`orgacle--reveal-targets' parses the buffer via `org-element' and can
+in principle signal, and `orgacle--run-page-hook' deliberately
+swallows a member's error rather than letting it end the presentation;
+were the flag cleared only after a successful return, a signal here
+would leave it set for whatever slide is entered next -- one not
+stepped back into at all -- and land that unrelated slide fully
+revealed instead of hidden.  Clearing first, before anything that
+could throw, means a signal here leaves the session in the same safe
+state as an ordinary property-less slide: no overlays, index 0, flag
+clear -- not a stuck one-shot flag or a stale index a later
+`orgacle-reveal-refresh' could clamp against the wrong slide's target
+count."
   (orgacle-reveal-clean-overlays)
   (let* ((session (orgacle--session-ensure))
-         (enter-revealed (orgacle--session-reveal-enter-revealed session))
-         (marker (orgacle--reveal-current-marker))
-         (targets (orgacle--reveal-targets))
-         (overlays (and targets marker
-                        (orgacle--reveal-build-overlays targets (marker-buffer marker)))))
+         (enter-revealed (orgacle--session-reveal-enter-revealed session)))
     (setf (orgacle--session-reveal-enter-revealed session) nil)
-    (setf (orgacle--session-reveal-overlays session) overlays)
-    (if (and enter-revealed overlays)
-        (progn
-          (mapc (lambda (ov) (overlay-put ov 'invisible nil)) overlays)
-          (setf (orgacle--session-reveal-index session) (length overlays)))
-      (setf (orgacle--session-reveal-index session) 0))))
+    (setf (orgacle--session-reveal-index session) 0)
+    (let* ((marker (orgacle--reveal-current-marker))
+           (targets (orgacle--reveal-targets))
+           (overlays (and targets marker
+                          (orgacle--reveal-build-overlays targets (marker-buffer marker)))))
+      (setf (orgacle--session-reveal-overlays session) overlays)
+      (when (and enter-revealed overlays)
+        (mapc (lambda (ov) (overlay-put ov 'invisible nil)) overlays)
+        (setf (orgacle--session-reveal-index session) (length overlays))))))
 
 (defun orgacle-reveal-refresh ()
   "Rebuild the current slide's reveal overlays after a buffer edit.
