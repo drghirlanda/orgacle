@@ -96,18 +96,49 @@ at or past the last valid index goes to the last slide -- which is why
 below can pass plain arithmetic and leave clamping to this, their one
 shared entry point, rather than each repeating it.  Sets the session's
 index slot to the clamped value and `orgacle-page-number' to match via
-`orgacle--sync-page-number', widens the buffer, moves point to the
-slide's marker, and calls `orgacle-current-page' exactly once.  That
-single call is what makes jumping any number of slides cost one
-redisplay instead of one per slide skipped over.  Does nothing when
-the slides slot is empty, which an Org buffer with no headings at all
-produces; there is then no slide to move to."
+`orgacle--sync-page-number', switches to the slide marker's own buffer,
+widens it, moves point to the slide's marker, and calls
+`orgacle-current-page' exactly once.  That single call is what makes
+jumping any number of slides cost one redisplay instead of one per
+slide skipped over.  Does nothing when the slides slot is empty, which
+an Org buffer with no headings at all produces; there is then no slide
+to move to.
+
+The buffer switch (fix round 2, Critical 2) is what makes
+`orgacle-page-hook''s own contract -- \"a slide has been displayed and
+narrowed\" before members run -- actually true regardless of what was
+current when this was called, rather than only when the caller
+happened to leave the right buffer current.  It was not, for real, in
+the default configuration: `orgacle-run' calls `orgacle-make-notes-buffer',
+whose last act is `switch-to-buffer-other-frame' to the notes buffer,
+immediately before calling `orgacle-top' with no buffer switch of its
+own in between -- so the first `orgacle-current-page' of every
+presentation with speaker notes on (the default) used to run with the
+*notes* buffer current, not the slide's.  `widen'/`goto-char' then
+operated on the wrong buffer, leaving the actual presented buffer
+unnarrowed and every point-based page-hook member (`orgacle-slide-in-effect',
+`orgacle-show-file-auto', `orgacle-show-indicators-maybe' and this
+package's own `orgacle--apply-appearance') reading nothing at point in
+a buffer they were never shown.  Fixed here, the one shared entry
+point every navigation command already funnels through, rather than
+patched at `orgacle-run''s call site: any future caller that leaves an
+unrelated buffer current inherits the fix for free.  `orgacle-position-notes'
+and `orgacle-reveal-reset', the other two page-hook members, were
+never affected either way -- the former always explicitly selects the
+notes buffer's own window via `with-selected-window' regardless of
+what is current, and the latter locates its slide from the session's
+own slides/index slots rather than from point at all; see
+`orgacle-test-goto-slide-narrows-the-slides-own-buffer-not-whatever-is-current'
+for how this was reproduced and confirmed fixed."
   (let* ((session (orgacle--session-ensure))
          (slides (orgacle--session-slides session)))
     (when (> (length slides) 0)
       (setf (orgacle--session-index session)
             (max 0 (min (1- (length slides)) index)))
       (orgacle--sync-page-number)
+      (let ((buffer (marker-buffer (aref slides (orgacle--session-index session)))))
+        (when (buffer-live-p buffer)
+          (set-buffer buffer)))
       (widen)
       (goto-char (aref slides (orgacle--session-index session)))
       (orgacle-current-page))))

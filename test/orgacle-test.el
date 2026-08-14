@@ -890,6 +890,51 @@ so this is the only test that looks at the real, default value."
 
 ;;; Navigation
 
+(ert-deftest orgacle-test-goto-slide-narrows-the-slides-own-buffer-not-whatever-is-current ()
+  "Critical 2, fix round 2: `orgacle-page-hook''s own contract --
+\"a slide has been displayed and narrowed\" before members run -- is
+false whenever some *other* buffer is current when navigation starts,
+which happens for real, in the default configuration, every time
+`orgacle-run' shows the first slide: `orgacle-make-notes-buffer''s
+last act is `switch-to-buffer-other-frame' to the notes buffer, and
+`orgacle-run' calls `orgacle-top' right after that with no buffer
+switch in between, so `orgacle--goto-slide''s own `widen'/`goto-char'
+-- and therefore the whole of `orgacle-current-page', including
+`orgacle--run-page-hook' -- used to run against whatever was current,
+not the slide's own buffer.  `org-entry-get' at that point in the
+wrong buffer reads nothing, so every point-based page-hook member
+(this file's own `orgacle--apply-appearance', `orgacle-slide-in-effect',
+`orgacle-show-file-auto', `orgacle-show-indicators-maybe') silently
+did nothing on the very first slide of a real presentation.
+
+Fixed at `orgacle--goto-slide' itself -- the one shared entry point
+every navigation command funnels through -- not by patching
+`orgacle-run''s call order: it now switches to the slide marker's own
+buffer before doing anything else, so the contract holds regardless of
+what was current when navigation was invoked.  Simulated here without
+a real second frame (batch cannot create one): a second, unrelated
+org-mode buffer standing in for the notes buffer is made current by
+hand before calling `orgacle-top', reproducing the reviewer's own
+diagnosis exactly -- confirmed directly, before this fix, that the
+presented buffer stayed unnarrowed and `orgacle--appearance-text-scale'
+found nothing, with `current-buffer' still the stand-in afterward."
+  (orgacle-test-with-fixture "appearance.org"
+    (orgacle--start-slides)
+    (let ((presented-buffer (current-buffer))
+          (notes-stand-in (generate-new-buffer "orgacle-test-notes-stand-in")))
+      (unwind-protect
+          (progn
+            (with-current-buffer notes-stand-in
+              (let ((org-mode-hook nil)) (org-mode))
+              (insert "* Some unrelated heading\nNotes text.\n"))
+            (set-buffer notes-stand-in)
+            (orgacle-top)
+            (with-current-buffer presented-buffer
+              (should (buffer-narrowed-p))
+              (should (equal "Both slide" (org-entry-get nil "ITEM")))
+              (should (car (alist-get 'default face-remapping-alist)))))
+        (when (buffer-live-p notes-stand-in) (kill-buffer notes-stand-in))))))
+
 (ert-deftest orgacle-test-nav-starts-at-the-first-real-slide ()
   "A leading title page is skipped without recursion."
   (orgacle-test-with-fixture "slides.org"
@@ -2382,12 +2427,30 @@ property string to match a number now, via `string-match-p' before
 accepted shape still works, including a leading-dot value
 `orgacle-test-appearance-malformed-text-scale-is-ignored' does not
 cover: \"600\" (absolute), \"1.5\" (relative) and \".5\" (relative, no
-leading digit)."
+leading digit).
+
+Finding 3, fix round 2: \"1.\" and \"5.\" -- a dot with nothing after
+it -- used to match the first version of this round's regex too, and
+`(string-to-number \"1.\")' returns the integer 1, not a float, so
+those were applied as an absolute `:height' of 0.1pt: the identical
+blank-slide consequence F4 was opened for, on a value that visibly has
+a decimal point, contradicting the \"decimal point means relative\"
+claim this docstring and the README both make.  Added to the same
+reject list, now that the regex requires a digit after any dot it
+matches.
+
+Finding 4, fix round 2: this round's own regex fix left `(> number 0)'
+itself unpinned -- before it, the fixture's \"banana\" reached that
+check via `string-to-number' returning 0; the regex now rejects
+\"banana\" first, so nothing exercised the positivity check on its
+own.  \"0\" and \"-1\" both match the regex (a plain, unsigned or
+signed integer) and are rejected only by `(> number 0)'; added to the
+same reject list so that check stays covered too."
   (with-temp-buffer
     (insert "* Slide\n:PROPERTIES:\n:ORGACLE_TEXT_SCALE: 600\n:END:\n")
     (let ((org-mode-hook nil)) (org-mode))
     (goto-char (point-min))
-    (dolist (value '("2x" "1,5" "1/2" "1.5.2"))
+    (dolist (value '("2x" "1,5" "1/2" "1.5.2" "1." "5." "0" "-1"))
       (org-entry-put (point) "ORGACLE_TEXT_SCALE" value)
       (should-not (orgacle--appearance-text-scale)))
     (org-entry-put (point) "ORGACLE_TEXT_SCALE" "600")
@@ -2426,25 +2489,36 @@ the real registration."
 (ert-deftest orgacle-test-appearance-clean-text-scale-is-a-safe-no-op ()
   "F8, fix round 1: strengthened from a bare `(should (progn ... t))'
 that asserted nothing about the slot or about leaving other
-remappings alone.  Now checks both: the session's own slot stays nil
-across the call (still true by construction of a fresh session, but
-now actually inspected rather than merely surviving without a signal),
-and, more to the point, an unrelated `face-remapping-alist' entry --
-one this code never added -- is left completely untouched.  Confirmed
-by mutation: temporarily changing `orgacle-appearance-clean-text-scale'
-to `(setq-local face-remapping-alist nil)' unconditionally, instead of
-removing only the session's own recorded cookie, makes this test fail
-on the second `should' (the unrelated `italic' entry vanishes); the
-weak version before this round could not have caught that."
+remappings alone.
+
+Finding 5, fix round 2: fix round 1's own strengthening ran with
+`orgacle--session' nil, so the session's appearance-text-scale slot
+was already nil before the call -- the function's `(when entry ...)'
+removal branch never actually executed, only the harmless no-entry
+path.  Its own mutation test (a blanket `(setq-local face-remapping-alist
+nil)') did fail it, so the claim it made was literally true, but the
+realistic defect -- over-removal, replacing the scoped
+`face-remap-remove-relative' call with something broader while still
+inside the `when entry' branch -- would not have been caught, since
+that branch never ran at all.  Fixed by giving the session a real
+\(BUFFER . COOKIE\) entry to clean, alongside the unrelated `italic'
+remapping: now the removal branch genuinely executes, removing only
+the recorded `default' cookie and nothing else.  Confirmed by
+mutation: replacing the `face-remap-remove-relative' call inside
+`orgacle-appearance-clean-text-scale''s `when entry' branch with
+`(setq-local face-remapping-alist nil)' now makes this test fail (the
+`italic' entry vanishes too), which it did not before this round."
   (with-temp-buffer
     (let ((org-mode-hook nil)) (org-mode))
-    (let ((cookie (face-remap-add-relative 'italic '(:weight bold))))
-      (unwind-protect
-          (let ((orgacle--session nil))
-            (orgacle-appearance-clean-text-scale)
-            (should-not (orgacle--session-appearance-text-scale (orgacle--session-ensure)))
-            (should (equal (car (alist-get 'italic face-remapping-alist)) '(:weight bold))))
-        (face-remap-remove-relative cookie)))))
+    (face-remap-add-relative 'italic '(:weight bold))
+    (let ((default-cookie (face-remap-add-relative 'default '(:height 2.0)))
+          (orgacle--session nil))
+      (setf (orgacle--session-appearance-text-scale (orgacle--session-ensure))
+            (cons (current-buffer) default-cookie))
+      (orgacle-appearance-clean-text-scale)
+      (should-not (orgacle--session-appearance-text-scale (orgacle--session-ensure)))
+      (should-not (alist-get 'default face-remapping-alist))
+      (should (equal (car (alist-get 'italic face-remapping-alist)) '(:weight bold))))))
 
 (ert-deftest orgacle-test-appearance-background-is-a-no-op-without-a-live-frame ()
   "The session's frame slot nil -- true before `orgacle--get-frame' has
@@ -2494,6 +2568,36 @@ starting to fail only when run after one of these, never alone."
        (set-face-background 'fringe orgacle-test--original-fringe
                              (selected-frame))
        (setq orgacle--session nil))))
+
+(ert-deftest orgacle-test-get-frame-captures-the-appearance-default-background ()
+  "Critical 1, fix round 2: nothing pinned the two-line `setf' in
+`orgacle--get-frame' (orgacle-core.el) that captures the session's
+appearance-default-background slot at frame creation; every test
+added in fix round 1 set that slot by hand instead of ever calling the
+real capture code.  Confirmed by mutation: deleting those two lines
+left every test in the previous round green while, on a real frame, a
+coloured slide renders fully unstyled with no log entry.  Worth noting
+explicitly: before fix round 1's F3 guard, that same deletion produced
+a loud `wrong-type-argument stringp nil' signal on a real frame; the
+guard is correct and stays, but it converted that failure from loud to
+silent, and this is the test that has to exist for the guard not to
+be hiding a real regression.
+
+`make-frame' itself cannot run in plain batch (confirmed directly:
+signals \"Unknown terminal type\" regardless of parameters, even for a
+plain tty frame), so this stubs it to return `(selected-frame)' --
+itself real and live in batch -- which lets the *real* body of
+`orgacle--get-frame' run: its own `frame-live-p' check, its own
+`frame-parameter' read, and its own `setf' against a real frame,
+rather than asserting anything about a value this test manufactured
+itself the way the tests below it do."
+  (orgacle-test-with-restored-frame-background
+    (let ((orgacle--session nil))
+      (cl-letf (((symbol-function 'make-frame) (lambda (&rest _) (selected-frame))))
+        (orgacle--get-frame))
+      (should (equal (frame-parameter (selected-frame) 'background-color)
+                     (orgacle--session-appearance-default-background
+                      (orgacle--session-ensure)))))))
 
 (ert-deftest orgacle-test-appearance-background-applies-and-resets-with-a-real-frame ()
   "F2/F1, fix round 1: the live counterpart of

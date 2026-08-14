@@ -26,10 +26,15 @@
 ;; own `:background' alongside it (F1, fix round 1: added after a
 ;; coloured slide was found, by pixel-sampling a real frame, to leave a
 ;; visibly mismatched white fringe strip down the edge of the frame --
-;; `orgacle--get-frame' pins the fringe to the frame background only
-;; once, at frame creation, and nothing kept the two in step after
-;; that) -- `orgacle--get-frame' had to be fixed in an earlier phase
-;; for reading the selected frame instead, so this reads the session's
+;; `orgacle--get-frame' pins the fringe to whatever the frame's
+;; background happens to be at the time it runs, from the *selected*
+;; frame's parameters, not the session's; Finding 6, fix round 2:
+;; that call sits outside `orgacle--get-frame''s own "only when the
+;; frame does not already exist" guard, so it is not creation-only by
+;; construction, only in effect, because `orgacle-run' is that
+;; function's sole caller today and calls it once per presentation)
+;; -- `orgacle--get-frame' had to be fixed in an earlier phase for
+;; reading the selected frame instead, so this reads the session's
 ;; frame slot directly, the same way that fix left every other
 ;; frame-facing call in the package.
 ;;
@@ -47,13 +52,25 @@
 ;; errors on `x-open-connection' with "Unknown terminal type"): the
 ;; specific colours a real X frame's `make-frame' and `color-defined-p'
 ;; produce and recognize, and one full, unstubbed `orgacle-run' against
-;; test/fixtures/appearance.org read directly off that real frame --
-;; matching the batch-tested sequence exactly, red / default / default
-;; / default / red across the four fixture slides and back via three
-;; `p' presses, with the fringe face equal to the frame parameter at
-;; every step and `orgacle-quit' leaving the frame dead and the
-;; buffer's `face-remapping-alist' nil -- see the task report for the
-;; verbatim session.
+;; test/fixtures/appearance.org read directly off that real frame,
+;; with `orgacle-speaker-notes' explicitly nil -- corrected here, fix
+;; round 2, from the original report and this Commentary both stating
+;; this run's result without saying that -- matching the batch-tested
+;; sequence exactly, red / default / default / default / red across
+;; the four fixture slides and back via three `p' presses, with the
+;; fringe face equal to the frame parameter at every step and
+;; `orgacle-quit' leaving the frame dead and the buffer's
+;; `face-remapping-alist' nil -- see the task report for the verbatim
+;; session.  A second live run, this time with `orgacle-speaker-notes'
+;; at its real default (t), is what caught Critical 2 (see
+;; `orgacle--goto-slide' in orgacle-nav.el): with speaker notes on,
+;; `orgacle-run''s own `orgacle-make-notes-buffer' call leaves the
+;; notes buffer current, and the first slide's own appearance never
+;; applied at all until fixed there.  Re-run after that fix, with
+;; `orgacle-speaker-notes' left at its default this time: slide 1
+;; showed `narrowed=t height=(:height 2.0) bg="red" fringe="red"'
+;; immediately, with no navigation needed to reach it -- see the
+;; task report's fix round 2 section for the verbatim session.
 
 ;;; Code:
 
@@ -93,10 +110,23 @@ rather than being rejected the way this docstring already claimed; see
 `orgacle-test-appearance-text-scale-rejects-a-numeric-prefix', added in
 fix round 1, for how this was reproduced and fixed, and
 `orgacle-test-appearance-malformed-text-scale-is-ignored' for the
-already-nil-under-`string-to-number'-alone cases this does not change."
+already-nil-under-`string-to-number'-alone cases this does not change.
+
+Finding 3, fix round 2: the first version of this regex also matched a
+bare trailing dot -- \"1.\" or \"5.\" -- because the digits after the
+dot were optional rather than required alongside it.
+`(string-to-number \"1.\")' returns the *integer* 1, not a float, so
+\"1.\" was applied as an absolute `:height' of 0.1pt, not only
+contradicting this docstring's own \"a number with a decimal point is
+a scale factor\" claim but reproducing F4's identical blank-slide
+consequence on a value that visibly has a decimal point.  The digits
+after a dot are now required whenever a dot is present, so \"1.\" and
+\"5.\" are rejected outright, exactly like \"1,5\" or \"2x\"; a dot
+with nothing before it, such as \".5\", is still accepted, since that
+one is genuinely a complete, valid float literal."
   (let ((value (org-entry-get nil "ORGACLE_TEXT_SCALE")))
     (when (and value
-               (string-match-p "\\`[+-]?\\([0-9]+\\.?[0-9]*\\|\\.[0-9]+\\)\\'" value))
+               (string-match-p "\\`[+-]?\\([0-9]+\\(\\.[0-9]+\\)?\\|\\.[0-9]+\\)\\'" value))
       (let ((number (string-to-number value)))
         (and (> number 0) number)))))
 
@@ -182,12 +212,18 @@ default in place rather than signalling or applying a nonsense value,
 so a presenter's mistake never breaks navigation and never leaves a
 stray colour on screen for the rest of the talk.  The `fringe' face is
 set explicitly, not left to follow `background-color' on its own,
-because nothing does that automatically: `orgacle--get-frame' only
-ever sets it once, from the frame's *original* background, at frame
-creation (F1, fix round 1) -- without this, a coloured slide left a
-visibly mismatched fringe strip down the edge of the frame for as long
-as that slide was on screen, confirmed by pixel-sampling a real frame
-before this fix.
+because nothing does that automatically: `orgacle--get-frame' sets it
+from whatever the frame's background happens to be at the moment that
+function runs, and only `orgacle-run' ever calls it, once per
+presentation -- true in effect, not by any guard inside
+`orgacle--get-frame' itself, which does not gate that particular call
+to first-creation the way it gates creating the frame at all (Finding
+6, fix round 2, corrected from an earlier, too-strong \"only once, at
+frame creation\" claim) -- so nothing keeps the two in step for the
+rest of a running presentation without this call (F1, fix round 1):
+without it, a coloured slide left a visibly mismatched fringe strip
+down the edge of the frame for as long as that slide was on screen,
+confirmed by pixel-sampling a real frame before this fix.
 
 Guarded explicitly on appearance-default-background being non-nil
 before doing anything else (F3, fix round 1, latent): without this
