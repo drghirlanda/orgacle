@@ -1479,5 +1479,128 @@ presented -- deleted that buffer's own LaTeX preview overlays."
         (orgacle-quit))
       (should (overlay-buffer ov)))))
 
+;;; Talk timer
+
+(ert-deftest orgacle-test-duration-from-keyword ()
+  "#+ORGACLE_DURATION overrides the option."
+  (orgacle-test-with-fixture "duration.org"
+    (let ((orgacle-duration 5))
+      (should (equal 20 (orgacle--duration))))))
+
+(ert-deftest orgacle-test-duration-falls-back-to-the-option ()
+  "Without the keyword, `orgacle--duration' returns `orgacle-duration' as-is."
+  (orgacle-test-with-fixture "plain.org"
+    (let ((orgacle-duration 30))
+      (should (equal 30 (orgacle--duration))))
+    (let ((orgacle-duration nil))
+      (should-not (orgacle--duration)))))
+
+(ert-deftest orgacle-test-elapsed-computes-from-the-session-start-time ()
+  "`orgacle--elapsed' is NOW minus the session's start-time slot.
+NOW is passed explicitly instead of being read from the real clock, so
+this test is deterministic and never sleeps."
+  (let ((orgacle--session (orgacle--session-create)))
+    (setf (orgacle--session-start-time orgacle--session) 1000.0)
+    (should (equal 125 (orgacle--elapsed 1125.0)))))
+
+(ert-deftest orgacle-test-elapsed-rounds-to-the-nearest-second ()
+  "A sub-second difference rounds rather than truncating or erroring."
+  (let ((orgacle--session (orgacle--session-create)))
+    (setf (orgacle--session-start-time orgacle--session) 1000.0)
+    (should (equal 1 (orgacle--elapsed 1000.6)))))
+
+(ert-deftest orgacle-test-elapsed-is-zero-before-a-start-time-is-set ()
+  "A session auto-vivified before `orgacle-run' has no start-time slot yet."
+  (let ((orgacle--session nil))
+    (should (equal 0 (orgacle--elapsed 99999.0)))))
+
+(ert-deftest orgacle-test-run-sets-the-session-start-time ()
+  "`orgacle-run' records a start-time slot for the timer to measure from.
+Batch Emacs cannot create a real frame, so `orgacle--get-frame' is
+stubbed out and `orgacle-speaker-notes' is off, matching
+`orgacle-test-run-displays-the-first-slide'."
+  (orgacle-test-with-fixture "slides.org"
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  (orgacle-speaker-notes nil))
+          (orgacle-run)
+          (should (numberp (orgacle--session-start-time orgacle--session))))
+      (orgacle-quit))))
+
+(ert-deftest orgacle-test-timer-string-is-empty-with-no-session ()
+  "`orgacle--timer-string' is the empty string when nothing is running."
+  (let ((orgacle--session nil))
+    (should (equal "" (orgacle--timer-string)))))
+
+(ert-deftest orgacle-test-timer-string-shows-elapsed-with-no-target ()
+  "With no target duration, the string is bare elapsed time, unpropertized.
+`orgacle--elapsed' is stubbed rather than read from the real clock or the
+session's start-time slot, isolating this test to what `orgacle--timer-string'
+itself does with the number."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-duration nil))
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 125)))
+      (let ((string (orgacle--timer-string)))
+        (should (equal "2:05" string))
+        (should-not (get-text-property 0 'face string))))))
+
+(ert-deftest orgacle-test-timer-string-shows-elapsed-over-target ()
+  "With a target duration, the string is ELAPSED/TARGET."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-duration 20))
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 125)))
+      (should (equal "2:05/20:00" (orgacle--timer-string))))))
+
+(ert-deftest orgacle-test-timer-string-has-no-face-under-90-percent ()
+  "Below the warning threshold, the string carries no face."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-duration 20))
+    ;; 17 of 20 minutes is 85%.
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () (* 17 60))))
+      (should-not (get-text-property 0 'face (orgacle--timer-string))))))
+
+(ert-deftest orgacle-test-timer-string-warning-face-at-90-percent ()
+  "At 90% of the target, the string takes the warning face."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-duration 20))
+    ;; 18 of 20 minutes is exactly 90%.
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () (* 18 60))))
+      (should (eq 'orgacle-timer-warning-face
+                  (get-text-property 0 'face (orgacle--timer-string)))))))
+
+(ert-deftest orgacle-test-timer-string-overtime-face-at-100-percent ()
+  "At or past the target, the string takes the over-time face instead."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-duration 20))
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () (* 20 60))))
+      (should (eq 'orgacle-timer-overtime-face
+                  (get-text-property 0 'face (orgacle--timer-string)))))))
+
+;;; Mode-line composition
+
+(ert-deftest orgacle-test-default-mode-line-composes-page-number-and-timer ()
+  "The default mode-line construct shows both the page number and the timer."
+  (let ((orgacle--session (orgacle--session-create))
+        (orgacle-page-number 3)
+        (orgacle-duration nil))
+    (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 65)))
+      (let ((line (orgacle--default-mode-line)))
+        (should (string-match-p "3" line))
+        (should (string-match-p "1:05" line))))))
+
+(ert-deftest orgacle-test-default-mode-line-is-just-the-page-number-with-no-session ()
+  "With no session running, the default construct is unchanged from before."
+  (let ((orgacle--session nil)
+        (orgacle-page-number 3))
+    (should (equal "3" (orgacle--default-mode-line)))))
+
+(ert-deftest orgacle-test-custom-mode-line-is-not-augmented-with-the-timer ()
+  "A fully custom `orgacle-mode-line' is returned exactly as the user set it.
+The default composes the timer; a user who replaced the mode line
+entirely must not gain it too."
+  (orgacle-test-with-fixture "plain.org"
+    (let ((orgacle-mode-line '(:eval "just the page number, my way")))
+      (should (equal orgacle-mode-line (orgacle-get-mode-line))))))
+
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

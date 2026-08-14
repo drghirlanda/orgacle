@@ -77,6 +77,19 @@ rejects it at compile time.  This face is not applied anywhere in the
 file; it is kept only because removing it would be a public API
 change, which is out of scope here."
   :group 'orgacle)
+(defface orgacle-timer-warning-face
+  '((t :foreground "orange" :weight bold))
+  "Face for the talk timer once elapsed time nears the target duration.
+Applied by `orgacle--timer-string' once elapsed time reaches 90% of the
+target `orgacle--duration' returns, and up until the target itself, at
+which point `orgacle-timer-overtime-face' takes over instead."
+  :group 'orgacle)
+(defface orgacle-timer-overtime-face
+  '((t :foreground "red" :weight bold))
+  "Face for the talk timer once elapsed time reaches the target duration.
+Applied by `orgacle--timer-string' once elapsed time reaches or exceeds
+the target `orgacle--duration' returns."
+  :group 'orgacle)
 
 (defcustom orgacle-indicators t
   "Whether to display fringe indicators for extra content on a slide.
@@ -138,8 +151,15 @@ Only relevant when `orgacle-slide-in' is enabled."
   :type 'boolean
   :group 'orgacle)
 
-(defcustom orgacle-mode-line '(:eval (int-to-string orgacle-page-number))
-  "Mode-line construct to use during the presentation, or nil to hide it."
+(defcustom orgacle-mode-line '(:eval (orgacle--default-mode-line))
+  "Mode-line construct to use during the presentation, or nil to hide it.
+The default shows the page number and, once `orgacle--timer-string' has
+something to show, the talk timer beside it; see
+`orgacle--default-mode-line'.  Set this to any other mode-line construct
+to replace that entirely -- a fully custom value here is returned
+exactly as set, never augmented with the timer -- or set nil to hide
+the mode line altogether.  A single file overrides whatever this holds
+with its own #+ORGACLE_MODE_LINE: keyword; see `orgacle-get-mode-line'."
   :type 'sexp
   :group 'orgacle)
 
@@ -202,6 +222,15 @@ screen, and follows the slide being presented."
   :type 'integer
   :group 'orgacle)
 
+(defcustom orgacle-duration nil
+  "Target length of the presentation, in minutes, or nil for no target.
+A single file overrides this with its own #+ORGACLE_DURATION: keyword;
+see `orgacle--duration'.  With a target set, the mode-line timer from
+`orgacle--timer-string' shows elapsed time against it and changes face
+as the target approaches and passes."
+  :type '(choice (const :tag "No target duration" nil) integer)
+  :group 'orgacle)
+
 (defcustom orgacle-video-player "mplayer"
   "Program used to play videos; see `orgacle-show-video'.
 Supported players are \"mplayer\" and \"vlc\"."
@@ -213,10 +242,10 @@ Supported players are \"mplayer\" and \"vlc\"."
 Slots replace what used to be individually loose `defvar' forms: the
 presentation frame, the original Org buffer and its restriction, the
 temporary file used for a narrowed presentation, the slide vector and
-the index into it, the speaker-notes buffer and its marker vector, and
-the auxiliary and presentation windows.  `orgacle--session-ensure' is
-almost always the right way to reach a slot; see its docstring for
-why.
+the index into it, the speaker-notes buffer and its marker vector, the
+auxiliary and presentation windows, and the time the presentation
+started.  `orgacle--session-ensure' is almost always the right way to
+reach a slot; see its docstring for why.
 
 The index slot defaults to 0, not nil: `orgacle-next-page' and
 `orgacle-previous-page' do arithmetic directly on this slot -- (1+
@@ -226,10 +255,16 @@ run, for example when a fresh session is auto-vivified by
 running, or after `orgacle-quit' set `orgacle--session' back to nil.
 Leaving the slot without a default made that arithmetic (1+ nil),
 which signals `wrong-type-argument'; `orgacle-jump-to-page' was immune
-only because it computes from its own argument instead of this slot."
+only because it computes from its own argument instead of this slot.
+
+The start-time slot, by contrast, has no default and stays nil until
+`orgacle-run' sets it with `float-time': a session auto-vivified by
+`orgacle--session-ensure' before a presentation has actually started
+has nothing to measure elapsed time from, and `orgacle--elapsed' treats
+a nil start-time as zero elapsed seconds rather than signalling."
   frame org-buffer org-restriction org-file
   slides (index 0) notes-buffer notes-markers
-  aux-window presentation-window)
+  aux-window presentation-window start-time)
 
 (defvar orgacle--session nil
   "The running presentation, or nil when none is running.
@@ -485,6 +520,88 @@ Keeps that warning to once per session instead of once per slide.")
            "^#\\+ORGACLE_MODE_LINE:[ \t]*\\(.*?\\)[ \t]*$" nil t)
           (car (read-from-string (match-string 1)))
         orgacle-mode-line))))
+
+(defun orgacle--duration ()
+  "Return this buffer's target duration in minutes, or nil for none.
+Reads #+ORGACLE_DURATION: if present, the same way `orgacle-get-frame-level'
+and `orgacle-get-mode-line' read their own keywords; falls back to
+`orgacle-duration' otherwise."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (if (re-search-forward
+           "^#\\+ORGACLE_DURATION:[ \t]*\\(.*?\\)[ \t]*$" nil t)
+          (string-to-number (match-string 1))
+        orgacle-duration))))
+
+(defun orgacle--elapsed (&optional now)
+  "Return whole seconds elapsed since the running session started.
+Zero when the session's start-time slot is nil, which is the case for a
+session `orgacle--session-ensure' auto-vivifies before `orgacle-run' has
+actually started a presentation.  NOW, when given, replaces the actual
+current time (what `float-time' would return); the test suite passes a
+fixed value here instead of sleeping, which would make elapsed-time
+tests slow and their exact assertions flaky."
+  (let ((start (orgacle--session-start-time (orgacle--session-ensure))))
+    (if start
+        (round (- (or now (float-time)) start))
+      0)))
+
+(defun orgacle--format-mmss (seconds)
+  "Format SECONDS as a MINUTES:SS string for the mode line.
+Minutes are neither padded nor wrapped at 60 -- an hour into a talk
+this reads \"60:00\", not \"1:00:00\" -- while seconds are always two
+digits."
+  (format "%d:%02d" (/ seconds 60) (mod seconds 60)))
+
+(defun orgacle--timer-string ()
+  "Return the running presentation's timer as a mode-line string.
+Empty when no presentation is running (`orgacle--session' is nil),
+which keeps this safe to splice into a mode-line construct whether or
+not a presentation is actually in progress.  Otherwise shows the
+elapsed time from `orgacle--elapsed' as MINUTES:SS.  When
+`orgacle--duration' returns a target for this buffer, the string
+becomes ELAPSED/TARGET instead, propertized with
+`orgacle-timer-warning-face' once elapsed time reaches 90% of the
+target and with `orgacle-timer-overtime-face' once it reaches the
+target itself, so a presenter sees the timer change colour without
+doing the arithmetic themselves.  With no target, the string carries no
+face at all: there is nothing to warn about without one to measure
+against."
+  (if (null orgacle--session)
+      ""
+    (let* ((elapsed (orgacle--elapsed))
+           (target (orgacle--duration))
+           (string (if target
+                       (format "%s/%s"
+                               (orgacle--format-mmss elapsed)
+                               (orgacle--format-mmss (* target 60)))
+                     (orgacle--format-mmss elapsed))))
+      (cond
+       ;; target * 60 * 9 compares against elapsed * 10 rather than
+       ;; dividing, so this never risks a float rounding the boundary
+       ;; the wrong way, and never divides by a zero-minute target.
+       ((and target (>= elapsed (* target 60)))
+        (propertize string 'face 'orgacle-timer-overtime-face))
+       ((and target (>= (* elapsed 10) (* target 60 9)))
+        (propertize string 'face 'orgacle-timer-warning-face))
+       (t string)))))
+
+(defun orgacle--default-mode-line ()
+  "Default mode-line construct: the page number plus the timer.
+`orgacle-mode-line' defaults to `(:eval (orgacle--default-mode-line))',
+so this is what a presenter sees unless they have replaced that
+defcustom or set #+ORGACLE_MODE_LINE: in the file being presented, in
+which case neither this function nor `orgacle--timer-string' is ever
+called; see `orgacle-get-mode-line'.  `orgacle--timer-string' is empty
+whenever `orgacle--session' is nil, so this reduces to the page number
+alone outside of a presentation, exactly as `orgacle-mode-line' behaved
+before the timer existed."
+  (let ((timer (orgacle--timer-string)))
+    (if (string= timer "")
+        (int-to-string orgacle-page-number)
+      (concat (int-to-string orgacle-page-number) "  " timer))))
 
 (defun orgacle--slide-p ()
   "Return non-nil when point is on a heading that is its own slide.

@@ -270,6 +270,9 @@ the display."
     ;; frame was killed without going through `orgacle-quit' must not be
     ;; able to leave this one inheriting its state
     (setq orgacle--session (orgacle--session-create))
+    ;; the talk timer measures from here, not from whenever the mode
+    ;; line happens to first redisplay
+    (setf (orgacle--session-start-time orgacle--session) (float-time))
     (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
     ;; regenerate image previews
     (orgacle--link-preview-refresh)
