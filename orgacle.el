@@ -291,10 +291,15 @@ the display."
     ;; this call site is the one place a *live*, non-nil session is
     ;; discarded outright, precisely the "second `orgacle-run', no
     ;; intervening quit" scenario the struct's own docstring says it
-    ;; defends against -- reveal overlays are the one piece of session
-    ;; state a fresh struct's own defaults cannot reach, because they
-    ;; are attached to the *old* buffer, not carried by the struct
-    ;; itself
+    ;; defends against.  Reveal overlays are *one* piece of session
+    ;; state this replace-without-teardown hazard stranded -- the only
+    ;; one this call fixes.  It is not the only piece: the outgoing
+    ;; session's frame, notes-buffer, org-buffer and org-file slots are
+    ;; abandoned here the same way, unreachable once `orgacle--session'
+    ;; points elsewhere, and none of that is addressed by this call or
+    ;; by anything else in this task.  That is a pre-existing hazard
+    ;; from the P3 session struct, not something this task introduced
+    ;; or is scoped to fix; Task 6 Step 3 owns it
     (orgacle-reveal-clean-overlays)
     ;; a fresh session, not a mutated leftover one: a presentation whose
     ;; frame was killed without going through `orgacle-quit' must not be

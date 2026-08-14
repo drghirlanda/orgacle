@@ -232,8 +232,8 @@ edit that does not touch the target count leaves reveal progress
 alone.  Its position relative to `orgacle-clean-overlays' below does
 not actually matter for correctness, in either order: reveal overlays
 deliberately do not live in the shared `orgacle-overlays' list that
-call sweeps -- see the session struct's reveal-overlays slot docstring
-in orgacle-core.el -- so that sweep can never see them regardless of
+call sweeps -- see `orgacle-reveal-clean-overlays's docstring for why
+-- so that sweep can never see them regardless of
 when `orgacle-reveal-refresh' runs relative to it, and
 `orgacle-reveal-refresh' always deletes and rebuilds its own overlays
 unconditionally, so it does not depend on anything this sweep does or

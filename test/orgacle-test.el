@@ -2195,6 +2195,28 @@ and spuriously reveal a slide the presenter never left."
     (should (= 0 (orgacle--session-index (orgacle--session-ensure))))
     (should (= 0 (orgacle--session-reveal-index (orgacle--session-ensure))))))
 
+(ert-deftest orgacle-test-reveal-enter-revealed-flag-does-not-leak-forward ()
+  "Fix round 3, item A: the one-shot reveal-enter-revealed flag, set by
+`orgacle-previous-page' and consumed by `orgacle-reveal-reset', must
+not survive past the single slide entry it was set for.  Deleting the
+`(setf (orgacle--session-reveal-enter-revealed session) nil)' fix
+round 2 added leaves every other test green while producing a real,
+user-visible bug: jump to slide 2, `p' (steps back to slide 1, which
+correctly lands fully revealed and consumes the flag), then `n' (slide
+1 is now exhausted, so this actually changes slide, to slide 2) --
+without the fix, the flag is still set from the `p' step and slide 2
+arrives fully revealed instead of freshly hidden, even though nothing
+ever stepped backward into it."
+  (orgacle-test-with-fixture "reveal.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 2)
+    (orgacle-previous-page)
+    (orgacle-next-page)
+    (should (= 0 (orgacle--session-reveal-index (orgacle--session-ensure))))
+    (should (eq (overlay-get (aref (orgacle--session-reveal-overlays (orgacle--session-ensure)) 0)
+                             'invisible)
+                'orgacle-hide))))
+
 (ert-deftest orgacle-test-refresh-preserves-reveal-progress-when-count-is-unchanged ()
   "M2: `orgacle-refresh' rebuilds reveal overlays -- always fresh, never
 reused, which is what actually protects it from `orgacle-clean-overlays''s

@@ -139,9 +139,26 @@ Safe to call with nothing to clean -- a slide with no reveal targets,
 or a session with no presentation ever started -- since it is then a
 no-op.  Called by `orgacle-reveal-reset' and `orgacle-reveal-refresh'
 before each builds a fresh set, and by `orgacle-quit', the same way
-`orgacle-clean-fringe-overlays' is; see the session struct's
-reveal-overlays slot docstring in orgacle-core.el for why reveal keeps
-its own list instead of joining `orgacle-overlays'."
+`orgacle-clean-fringe-overlays' is.
+
+Why the session's own reveal-overlays slot, rather than joining the
+shared `orgacle-overlays' list `orgacle-clean-overlays' manages: that
+list is mutated by several unrelated concerns -- the
+ORGACLE_HIDE/title-page/speaker-notes hiding loop in `orgacle-mode',
+every hiding and face application `orgacle-fontify' does,
+`orgacle-src.el's per-block toggle state -- none of which know or care
+that reveal tracks *which* overlay is which target by array position.
+That correspondence would be one accidental change to
+`orgacle-clean-overlays', or one unrelated `cl-set-difference'
+elsewhere in the package, away from silently pointing at the wrong
+target.  This is not primarily about `orgacle-refresh's blanket sweep
+of `orgacle-overlays' specifically: `orgacle-reveal-refresh' rebuilds
+its overlays unconditionally on every call regardless of which list
+the previous set belonged to, so that sweep alone would not actually
+lose anything reveal could not already recover from -- see that
+function's own docstring.  The test
+`orgacle-test-reveal-overlays-are-never-in-the-shared-list' is what
+pins this list staying separate."
   (let* ((session (orgacle--session-ensure))
          (overlays (orgacle--session-reveal-overlays session)))
     (when overlays (mapc #'delete-overlay overlays))
@@ -218,10 +235,16 @@ unlike `orgacle-reveal-reset', which always starts a slide at 0 or at
 the top -- preserves how many were revealed, clamped to the new target
 count: reveal progress survives a refresh when the count is unchanged,
 and adapts, rather than desyncing, when editing has added or removed
-targets.  `orgacle-refresh's own `orgacle-clean-overlays' sweeps the
-shared `orgacle-overlays' list on every call, which is exactly why
-reveal overlays living in that list instead of their own would be
-silently wiped, with nothing here to rebuild them, on every refresh."
+targets.  This function's own unconditional rebuild, on every call, is
+what actually protects reveal overlays from `orgacle-refresh's
+`orgacle-clean-overlays' sweep of the shared `orgacle-overlays' list --
+not which list they belong to, since a fresh set is built here
+regardless of what became of the previous one.  See
+`orgacle-test-reveal-overlays-are-never-in-the-shared-list' for what
+does pin the ownership decision, and its docstring for why a claim
+resembling \"joining that list would leave nothing here to rebuild
+them\" does not hold: there is always something here to rebuild them,
+which is the whole point of this function."
   (let* ((session (orgacle--session-ensure))
          (old-index (orgacle--session-reveal-index session)))
     (orgacle-reveal-clean-overlays)
