@@ -126,6 +126,28 @@ The mode line shows the slide number. Set =orgacle-mode-line= to nil to hide
 it, or to any mode-line construct to show something else; a single file can
 override it with =#+ORGACLE_MODE_LINE:=.
 
+*** Talk timer
+
+Nothing about a timer appears anywhere -- not in the mode line, not in the
+presenter console (see [[Speaker notes]]) -- until a target duration is set.
+Give the talk a length, in minutes, and both places start showing elapsed
+time against it:
+
+#+begin_src org :eval no
+  ,#+ORGACLE_DURATION: 20
+#+end_src
+
+=orgacle-duration= (default nil) sets the target for every file; a single
+file overrides it with =#+ORGACLE_DURATION:=. With neither set, the mode
+line shows only the slide number, exactly as if the feature did not exist.
+Once a target is set, =MM:SS/MM:SS= -- elapsed over target -- appears next
+to the slide number, changing to =orgacle-timer-warning-face= once elapsed
+time reaches 90% of the target and to =orgacle-timer-overtime-face= once it
+reaches the target itself, so overrunning is visible at a glance rather than
+something the presenter has to do arithmetic to notice. Minutes are not
+wrapped at 60: a 75-minute talk reads =75:00=, not =1:15:00=, since the
+number a presenter actually wants mid-talk is minutes elapsed.
+
 *** Revealing a slide piece by piece
 
 Give a slide an =:ORGACLE_REVEAL:= property and it starts with its targets
@@ -372,6 +394,19 @@ speaker notes aloud, together with the word count, which is a reasonable proxy
 for how long the talk will run. It assumes 150 words per minute; change that
 with =orgacle-wpm=. It is not bound to a key, since you want it while writing
 rather than while presenting.
+
+*** Presenter console
+
+With =orgacle-presenter-view= at its default of =t=, the notes buffer doubles
+as a presenter console: a header line above the notes text shows the current
+slide's position as =N/M=, the next slide's title, and the talk timer (see
+[[Talk timer]]) -- each segment separated from its neighbours by two spaces
+and simply omitted, with no separator left dangling in its place, when it has
+nothing to contribute: no "next" segment on the last slide, no timer segment
+at all with no target duration configured. Set =orgacle-presenter-view= to
+nil to leave the notes buffer exactly as it was before this existed, with no
+header line at all; it also has no effect when =orgacle-speaker-notes= is
+nil, since there is then no notes buffer for a header to appear in.
 
 ** Slide-in effect
 
