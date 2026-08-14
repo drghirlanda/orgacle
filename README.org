@@ -59,6 +59,13 @@ so bind it yourself if you want it back:
   spells out exactly what changes. The old
   commands, =orgacle-next-subheading= and =orgacle-previous-subheading=, are
   still defined for anyone who rebinds =N=/=P= back to them.
+- =orgacle-goto-top-level= is removed. It predated the navigation rewrite,
+  had no key of its own in =orgacle-mode-map=, and disagreed with the model
+  navigation was rewritten around: it would treat a hidden or title-page
+  heading as a valid destination, when no other command in the package ever
+  presents one as a slide. If you had bound it yourself, rebind to plain
+  Org's own =org-up-heading-safe= instead — the closest built-in equivalent,
+  though it is not frame-level-aware the way the removed command was.
 
 * Basic usage
 
@@ -396,6 +403,16 @@ Two details worth knowing:
   Other capitalisations are still hidden from the slide, but their contents
   will not reach the notes buffer.
 - Set =orgacle-speaker-notes= to nil to skip the notes frame entirely.
+- *Known issue:* if a slide's =Speaker notes= subheading is the very last
+  heading in the whole presentation buffer — typically, the notes on your
+  final slide, with nothing else after them — then pressing =r=, =g=, or =x=
+  on that slide, or editing a source block inside those notes with =e= and
+  exiting it, un-hides them on the presentation screen itself, for the rest
+  of that slide's time on screen. Ordinary slides, where something (even
+  just another heading) follows the =Speaker notes= subheading, are not
+  affected. Until this is fixed, avoid running code or refreshing on your
+  last slide if it ends in speaker notes — or add a harmless trailing
+  heading after them to sidestep it.
 
 =M-x orgacle-estimate-time= reports how long it would take to read all your
 speaker notes aloud, together with the word count, which is a reasonable proxy

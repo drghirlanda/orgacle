@@ -240,13 +240,52 @@ unconditionally, so it does not depend on anything this sweep does or
 does not touch either.  It is placed after purely to read top to
 bottom in the same order as the rest of this function: rebuild the
 deck's own bookkeeping, clean up, then refresh the two things -- reveal
-and fontification -- that redraw the current slide's actual content."
+and fontification -- that redraw the current slide's actual content.
+
+Also re-narrows to the just-recomputed current slide, before any of
+that.  P4 Task 6 Step 2: without this, deleting the heading the
+presentation is narrowed to -- for example by clearing it out entirely
+in `E' edit-text mode and pressing the key that exits it, bound to
+this function -- left the slides and index slots above correctly
+rebuilt, but the buffer's actual restriction untouched: narrowed to a
+region collapsed to zero width around wherever the deleted heading used
+to start, `(point-min)' equal to `(point-max)', showing nothing at all
+until the next navigation command re-narrowed for its own reason.
+Reproduced directly against the unfixed function before deciding on
+this fix; see
+`orgacle-test-refresh-renarrows-when-the-current-heading-is-deleted'.
+P3 left this out because a full re-narrow, through `orgacle-current-page',
+also runs `orgacle-page-hook' -- expensive to run on every source-block
+execution, which is where this function is also called from via
+`org-babel-after-execute-hook' -- and that hook has only grown heavier
+since, with reveal and per-slide appearance now both members.  This is
+not that: only `org-narrow-to-subtree' runs here, the single cheap
+operation actually needed to keep the view honest; `orgacle-current-page''s
+other work -- `outline-hide-body', child folding, and the page hook
+itself -- stays exactly as out of scope for this function as it was
+before this fix, so the cost this function now pays on every
+source-block execution and every `r'/`g' press is one subtree-narrow
+more than before, not a hook run.  `widen' first: `org-narrow-to-subtree'
+only ever extends an existing restriction (`(min (point-max) ...)' in
+its own implementation) and refuses to narrow at all when the target
+heading starts before the current `(point-min)' -- both false exactly
+in the stale-narrowing case this exists to fix, so without widening
+first this call would silently do nothing there, the same failure
+mode it is meant to close.  Guarded on a non-empty slides slot, the
+same guard `orgacle--goto-slide' applies to its own work: an edit that
+leaves no slides at all -- every heading deleted or ORGACLE_HIDE-tagged
+-- has no subtree to narrow to."
   (interactive)
   (let ((session (orgacle--session-ensure)))
     (setf (orgacle--session-slides session) (orgacle--build-slides))
     (setf (orgacle--session-index session) (orgacle--slide-index-at-point))
     (when (buffer-live-p (orgacle--session-notes-buffer session))
-      (orgacle--build-notes-buffer)))
+      (orgacle--build-notes-buffer))
+    (let ((slides (orgacle--session-slides session)))
+      (when (> (length slides) 0)
+        (widen)
+        (goto-char (aref slides (orgacle--session-index session)))
+        (org-narrow-to-subtree))))
   (orgacle--sync-page-number)
   (orgacle-clean-overlays (point-min) (point-max))
   (orgacle-reveal-refresh)

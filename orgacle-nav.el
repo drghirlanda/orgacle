@@ -44,14 +44,6 @@
 (declare-function orgacle-reveal-previous "orgacle-reveal" ())
 (declare-function orgacle-reveal-clean-overlays "orgacle-reveal" ())
 
-(defun orgacle-goto-top-level ()
-  "Go to the current top level heading containing point."
-  (interactive)
-  (unless (org-at-heading-p) (outline-previous-heading))
-  (let ((level (ignore-errors (org-reduced-level (org-current-level)))))
-    (when (and level (> level orgacle-frame-level))
-      (org-up-heading-all (- level orgacle-frame-level)))))
-
 (defun orgacle--start-slides ()
   "Build the session's slides slot and reset navigation to the first slide.
 Sets the slides slot from `orgacle--build-slides', the index slot to 0,

@@ -317,28 +317,103 @@ the display."
   (unless (eq major-mode 'orgacle-mode)
     (unless (eq major-mode 'org-mode)
       (error "Orgacle can only be used from Org Mode"))
+    ;; P4 Task 6 Step 3.  A second `orgacle-run', from a different Org
+    ;; buffer, used to replace `orgacle--session' with a fresh struct
+    ;; before anything tore the old one down, so every slot of the old
+    ;; session became unreachable at once -- not only the reveal
+    ;; overlays and text-scale remapping the two calls below patch (see
+    ;; their own comment just under this one).  Measured directly
+    ;; during this task, run A then run B then a single `orgacle-quit':
+    ;; the first notes buffer stranded, `*Orgacle Notes*', while the
+    ;; new session held `*Orgacle Notes*<2>'; buffer A left in
+    ;; `orgacle-mode' permanently, its restriction never reapplied; a
+    ;; second frame built while frame A became unreachable; a
+    ;; narrowed-subtree presentation's temp file never deleted, its
+    ;; buffer never killed.  See the task report for the reproduction
+    ;; against the unfixed code, and the tests below this file's own
+    ;; require chain in test/orgacle-test.el -- search for "Step 3" --
+    ;; for each of the four pinned individually.
+    ;;
+    ;; Two options were on the table: refuse outright when a session is
+    ;; live, or quit the old one first with no confirmation.  Neither
+    ;; alone is right.  Refusing is safe but leaves a "M-x orgacle-quit,
+    ;; M-x orgacle-run" dance every time a presenter means to switch
+    ;; decks, for a command whose whole point is to be fast to invoke.
+    ;; Quitting unconditionally can pull the screen out from under an
+    ;; audience still looking at it, with no way back -- silently
+    ;; ending a presentation is a strictly worse failure mode than
+    ;; merely refusing to start a new one.  What this does instead:
+    ;; when the previous session's frame is still genuinely live --
+    ;; someone could be looking at it right now -- ask via
+    ;; `yes-or-no-p' before ending it, the same idiom
+    ;; `orgacle-migrate-file' already uses for its own "this would also
+    ;; discard something" confirmation.  Declining signals `user-error'
+    ;; and leaves the old presentation completely untouched, exactly as
+    ;; refusing outright would have.  When the frame is already gone --
+    ;; the window manager killed it, or this session never actually
+    ;; got as far as putting anything on screen -- there is nothing
+    ;; live left to lose, so this cleans up without asking.
+    ;;
+    ;; Gated on the start-time slot, set only by a real `orgacle-run'
+    ;; and never by `orgacle--session-ensure' auto-vivifying a session
+    ;; for some other caller -- a navigation command run directly, for
+    ;; example, or the test suite's own fixtures: a session that never
+    ;; actually presented anything has no frame, buffer mode, notes
+    ;; buffer or temp file to strand, so there is nothing here for it
+    ;; to tear down, and it must not be mistaken for a live
+    ;; presentation and trigger a confirmation prompt of its own.
+    ;; Batch Emacs, which cannot create a real frame, never reaches the
+    ;; confirmation branch either way: every `orgacle--get-frame' the
+    ;; test suite stubs leaves the frame slot nil, so `frame-live-p' is
+    ;; nil there too.
+    (when (and orgacle--session (orgacle--session-start-time orgacle--session))
+      (if (and (frame-live-p (orgacle--session-frame orgacle--session))
+               (not (yes-or-no-p
+                     "A presentation is already running.  Quit it and start this one? ")))
+          (user-error "Orgacle already running")
+        ;; Switch to whichever buffer the old session was actually
+        ;; presenting before quitting it, then switch back: a
+        ;; narrowed-subtree presentation's real, on-screen buffer is
+        ;; the temporary export buffer named by the org-file slot, not
+        ;; the org-buffer slot directly -- see that slot's own
+        ;; docstring on the session struct in orgacle-core.el.
+        ;; `orgacle-quit' itself acts on several things -- clearing
+        ;; LaTeX previews, removing the buffer-local
+        ;; `org-babel-after-execute-hook' addition -- via whatever
+        ;; buffer happens to be current when it is called, rather than
+        ;; through a session slot, on the assumption that it is always
+        ;; invoked from inside the presentation it is ending; switching
+        ;; first makes that assumption true here too, exactly as if the
+        ;; presenter had gone back there and pressed q themselves.
+        ;; Switching back afterwards matters just as much: without it,
+        ;; the `(current-buffer)' capture a few lines below, for the
+        ;; *new* session's own org-buffer slot, would record buffer A
+        ;; -- wherever `orgacle-quit' left it -- instead of the buffer
+        ;; this command was actually just called from.
+        (let* ((requested (current-buffer))
+               (old orgacle--session)
+               (presented (or (and (orgacle--session-org-file old)
+                                    (get-file-buffer (orgacle--session-org-file old)))
+                              (orgacle--session-org-buffer old))))
+          (when (buffer-live-p presented) (set-buffer presented))
+          (orgacle-quit)
+          (set-buffer requested))))
     ;; delete the previous presentation's reveal overlays and
-    ;; text-scale remapping before its session is replaced below --
-    ;; once `orgacle--session' points at the fresh struct, nothing can
-    ;; reach the old one's reveal-overlays or appearance-text-scale
-    ;; slots to clean them again, ever: `orgacle-quit' already cleans
-    ;; the session it is given before nil-ing it, and
-    ;; `orgacle--session-ensure' only ever creates a fresh struct when
-    ;; `orgacle--session' is already nil, with nothing left to orphan;
-    ;; this call site is the one place a *live*, non-nil session is
-    ;; discarded outright, precisely the "second `orgacle-run', no
-    ;; intervening quit" scenario the struct's own docstring says it
-    ;; defends against.  Reveal overlays and the text-scale remapping
-    ;; are two pieces of session state this replace-without-teardown
-    ;; hazard strands -- the only two these two calls fix.  They are
-    ;; not the only pieces: the outgoing session's frame,
-    ;; appearance-default-background, notes-buffer, org-buffer and
-    ;; org-file slots are abandoned here the same way, unreachable once
-    ;; `orgacle--session' points elsewhere, and none of that is
-    ;; addressed by these calls or by anything else in this task.  That
-    ;; is a pre-existing hazard from the P3 session struct, not
-    ;; something this task introduced or is scoped to fix; Task 6 Step
-    ;; 3 owns it
+    ;; text-scale remapping before its session is replaced below.
+    ;; Independent of the block just above, which only fires for a
+    ;; session that actually reached a real presentation: a session
+    ;; auto-vivified by some other caller -- again, a navigation
+    ;; command run directly, or the test suite -- can still carry
+    ;; leftover reveal overlays or a text-scale remapping of its own
+    ;; (both are reachable through plain navigation, with no
+    ;; `orgacle-run' involved), and the block above deliberately leaves
+    ;; such a session alone rather than tearing it down or asking about
+    ;; it.  `orgacle-quit' already cleans both for any session the
+    ;; block above did handle, so these two calls are a safe no-op
+    ;; there -- `orgacle-reveal-clean-overlays' and
+    ;; `orgacle-appearance-clean-text-scale' both auto-vivify a fresh,
+    ;; empty session via `orgacle--session-ensure' when `orgacle--session'
+    ;; is nil, which is exactly what the block above just set it to.
     (orgacle-reveal-clean-overlays)
     (orgacle-appearance-clean-text-scale)
     ;; a fresh session, not a mutated leftover one: a presentation whose
