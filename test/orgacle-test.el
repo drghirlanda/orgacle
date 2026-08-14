@@ -1045,11 +1045,22 @@ page-hook member) does its window splitting from inside that same
 hook run.  Confirmed by mutation, reproducing the reviewer's own M12
 exactly: with `select-window' moved to run *after*
 `orgacle-current-page' instead of before it -- buffer correction left
-untouched, end state left unchanged -- this test fails, recording the
-notes stand-in window instead of presentation-window, while
-`orgacle-test-goto-slide-reselects-the-presentation-window''s own
-end-state check still passes under the identical mutant.  Restored and
-reconfirmed green afterward."
+untouched, end state left unchanged -- this test fails, but not by
+recording the notes stand-in window; fix round 5 corrected this
+sentence, which claimed exactly that.  What actually happens, traced
+twice: in this test's own setup the belt-and-braces buffer-correction
+branch finds `presentation-window''s buffer already matches, so its
+`set-buffer' never fires either, and with `select-window' disabled by
+the mutant nothing else makes the presented buffer current; the notes
+stand-in buffer stays current, `orgacle-current-page''s own
+`org-current-level' check finds no heading there, and the branch that
+calls the page hook at all is never reached.  `recorded' stays the
+initial sentinel, `orgacle-test-hook-did-not-run', which is what the
+failed `should' actually reports.  Either way the hook does not see
+presentation-window selected, which is the one thing this test claims
+to check and correctly does; `orgacle-test-goto-slide-reselects-the-presentation-window''s
+own end-state check still passes under the identical mutant.  Restored
+and reconfirmed green afterward."
   (orgacle-test-with-fixture "appearance.org"
     (orgacle--start-slides)
     (let* ((session (orgacle--session-ensure))
