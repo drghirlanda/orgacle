@@ -22,43 +22,38 @@
 ;; `orgacle-scalable-faces' exactly, with no translation needed.
 ;;
 ;; A heading's ORGACLE_BACKGROUND property sets the `background-color'
-;; frame parameter of the *session's* frame -- `orgacle--get-frame' had
-;; to be fixed in an earlier phase for reading the selected frame
-;; instead, so this reads the session's frame slot directly, the same
-;; way that fix left every other frame-facing call in the package.
-;; This half is not exercised by `make test': batch Emacs has no
-;; graphical frame, so every batch test here that touches it observes
-;; only the documented no-op guard, `(frame-live-p frame)' false.  It
-;; was instead verified with a real, non-batch Emacs process connected
-;; to an `Xvfb' virtual display (`DISPLAY=:99 Emacs -Q ...', no
-;; `--batch'; batch Emacs errors on `x-open-connection' with "Unknown
-;; terminal type"): confirmed `frame-parameter' after `make-frame'
-;; returns a concrete colour string, never nil, so
-;; appearance-default-background is never captured as nil on a live
-;; frame; confirmed `set-frame-parameter' accepts any string for
-;; `background-color' with no validation of its own, silently, which is
-;; exactly why this file checks `color-defined-p' itself before
-;; applying one; and confirmed `color-defined-p' returns non-nil for an
-;; ordinary colour name and nil for a made-up one on that same live
-;; frame.  Also ran `orgacle-run' itself, unstubbed, under that same
-;; Xvfb session, against test/fixtures/appearance.org, and read the
-;; frame's actual `background-color' parameter and the buffer's actual
-;; `face-remapping-alist' at each step, not just messages about them:
-;; slide 1 (\"Both slide\", 2.0 and \"red\") showed height (:height 2.0)
-;; and background \"red\"; slide 2 (\"Plain slide\", no properties) showed
-;; no height entry at all and background back to \"white\", the frame's
-;; own default captured at creation -- the live version of
-;; `orgacle-test-appearance-text-scale-is-reset-entering-a-plain-slide',
-;; confirming the reset half of this feature with a real frame, not
-;; only the buffer-local half batch already covers; slide 3
-;; (\"Absolute slide\", 600 only) showed height (:height 600) and
-;; background still \"white\"; slide 4 (\"Malformed slide\", \"banana\" and
-;; \"not-a-real-colour\") showed no height entry and background \"white\",
-;; matching `orgacle-test-appearance-malformed-text-scale-is-ignored'
-;; for the frame parameter too; stepping back to slide 1 with three
-;; `p' presses showed (:height 2.0) and \"red\" again; and `orgacle-quit'
-;; left the frame dead (`frame-live-p' nil) and the buffer's
-;; `face-remapping-alist' nil.
+;; frame parameter of the *session's* frame, and the `fringe' face's
+;; own `:background' alongside it (F1, fix round 1: added after a
+;; coloured slide was found, by pixel-sampling a real frame, to leave a
+;; visibly mismatched white fringe strip down the edge of the frame --
+;; `orgacle--get-frame' pins the fringe to the frame background only
+;; once, at frame creation, and nothing kept the two in step after
+;; that) -- `orgacle--get-frame' had to be fixed in an earlier phase
+;; for reading the selected frame instead, so this reads the session's
+;; frame slot directly, the same way that fix left every other
+;; frame-facing call in the package.
+;;
+;; F2, fix round 1: this Commentary used to claim the whole of this
+;; half was untestable in batch, because batch Emacs has no graphical
+;; frame -- false, and corrected here.  Batch's `(selected-frame)' is
+;; itself a real, live frame (`frame-live-p' is t there), so pointing
+;; the session's frame slot at it exercises the genuine
+;; `set-frame-parameter'/`set-face-background'/`color-defined-p' code
+;; paths under `make test', not only the documented no-frame-at-all
+;; no-op; see `orgacle-test-with-restored-frame-background' and the
+;; tests built on it in test/orgacle-test.el.  What a real, non-batch
+;; Emacs process under a locally started `Xvfb' virtual display added
+;; beyond that (`DISPLAY=:99 Emacs -Q ...', no `--batch'; batch Emacs
+;; errors on `x-open-connection' with "Unknown terminal type"): the
+;; specific colours a real X frame's `make-frame' and `color-defined-p'
+;; produce and recognize, and one full, unstubbed `orgacle-run' against
+;; test/fixtures/appearance.org read directly off that real frame --
+;; matching the batch-tested sequence exactly, red / default / default
+;; / default / red across the four fixture slides and back via three
+;; `p' presses, with the fringe face equal to the frame parameter at
+;; every step and `orgacle-quit' leaving the frame dead and the
+;; buffer's `face-remapping-alist' nil -- see the task report for the
+;; verbatim session.
 
 ;;; Code:
 
@@ -78,17 +73,30 @@ where point is wherever the presenter was editing, not necessarily the
 heading; `orgacle--apply-appearance' has no such caller, only the page
 hook, so point is reliable here.
 
-A missing property, or one that is present but not a positive number
-after `string-to-number' -- an empty string, a non-numeric value such
-as \"banana\", zero, or a negative number -- both return nil: no
-distinction is drawn between \"not set\" and \"set to something
-unusable\", so a presenter's typo behaves exactly like the property
-being absent rather than breaking the slide or spamming the log on
-every visit; see `orgacle-test-appearance-malformed-text-scale-is-ignored'
-for how this was verified against a real malformed value, both for the
-buffer-local remapping and for the absence of any new log entry."
+A missing property, or one that is present but does not match a whole
+number (`string-match-p' against the property text before
+`string-to-number' is ever called), or matches but is not positive --
+an empty string, a non-numeric value such as \"banana\", zero, or a
+negative number -- all return nil: no distinction is drawn between
+\"not set\" and \"set to something unusable\", so a presenter's typo
+behaves exactly like the property being absent rather than breaking
+the slide or spamming the log on every visit.
+
+The whole-string match is deliberate, not merely `(> number 0)' on
+whatever `string-to-number' returns: that function parses a numeric
+*prefix* of its argument, not the whole thing, so \"2x\" gives 2,
+\"1,5\" (a decimal comma, a highly plausible typo) gives 1, \"1/2\"
+gives 1 and \"1.5.2\" gives 1.5 -- every one of these used to pass the
+old positivity check alone and become a real, silent remapping, one
+small enough on a real frame to render a slide blank to the audience
+rather than being rejected the way this docstring already claimed; see
+`orgacle-test-appearance-text-scale-rejects-a-numeric-prefix', added in
+fix round 1, for how this was reproduced and fixed, and
+`orgacle-test-appearance-malformed-text-scale-is-ignored' for the
+already-nil-under-`string-to-number'-alone cases this does not change."
   (let ((value (org-entry-get nil "ORGACLE_TEXT_SCALE")))
-    (when value
+    (when (and value
+               (string-match-p "\\`[+-]?\\([0-9]+\\.?[0-9]*\\|\\.[0-9]+\\)\\'" value))
       (let ((number (string-to-number value)))
         (and (> number 0) number)))))
 
@@ -151,43 +159,70 @@ paid for nothing more than the cleanup call and one property lookup."
 
 (defun orgacle--appearance-apply-background ()
   "Restore the session frame's background, then override it if requested.
-A no-op when the session has no live frame -- true throughout the
-batch test suite, and true of any session on which `orgacle--get-frame'
-has never run -- since there is then nothing to set a frame parameter
-on; see orgacle-appearance.el's Commentary for how this was verified
-with a real one instead.
+A no-op when the session has no live frame -- true before
+`orgacle--get-frame' has ever run for this session -- or when no
+default has been captured for it yet (F3, fix round 1: guarded
+explicitly, see below); both are exercised in batch, by pointing the
+session's frame slot at `(selected-frame)', which is always live
+there, rather than the claim this used to make that the whole of this
+function was untestable outside a real, non-batch frame -- see
+orgacle-appearance.el's Commentary for what a real frame under Xvfb
+added beyond that.
 
-Restores `background-color' to the session's appearance-default-background
-slot -- the same \"undo, then maybe reapply\" shape
+Restores both `background-color' and the `fringe' face's own
+`:background' to the session's appearance-default-background slot --
+the same \"undo, then maybe reapply\" shape
 `orgacle--appearance-apply-text-scale' uses -- so a slide with no
 ORGACLE_BACKGROUND property looks exactly like the deck's own default,
-not whatever colour a previous slide left behind, then overrides that
+not whatever colour a previous slide left behind, then overrides both
 when the current slide's ORGACLE_BACKGROUND is both present and a
 colour `color-defined-p' recognizes on this frame; a missing or
 unrecognized value -- a typo, for instance -- leaves the just-restored
 default in place rather than signalling or applying a nonsense value,
 so a presenter's mistake never breaks navigation and never leaves a
-stray colour on screen for the rest of the talk.
+stray colour on screen for the rest of the talk.  The `fringe' face is
+set explicitly, not left to follow `background-color' on its own,
+because nothing does that automatically: `orgacle--get-frame' only
+ever sets it once, from the frame's *original* background, at frame
+creation (F1, fix round 1) -- without this, a coloured slide left a
+visibly mismatched fringe strip down the edge of the frame for as long
+as that slide was on screen, confirmed by pixel-sampling a real frame
+before this fix.
 
-Only actually calls `set-frame-parameter' when the target colour
-differs from what the frame's `background-color' already is: a deck
-that never sets ORGACLE_BACKGROUND would otherwise still make one such
-call on every single slide, over and over restoring the frame to a
-colour it was already showing -- a real, if small, per-redisplay X
+Guarded explicitly on appearance-default-background being non-nil
+before doing anything else (F3, fix round 1, latent): without this
+guard, a live frame with nothing captured for it yet -- reachable only
+if something other than `orgacle--get-frame' ever puts a live frame in
+the session's frame slot, which nothing in this package does today,
+which is exactly why this was invisible from here -- would fall
+through to calling `set-frame-parameter' with a nil `background-color'
+value on every property-less slide.  Confirmed directly on a real X
+frame that this signals `wrong-type-argument stringp nil'; that
+`orgacle--run-page-hook' would have caught, and logged as a fresh
+failure on every single redisplay of every plain slide for the rest of
+the talk.  Never restore what was never saved.
+
+Only actually calls `set-frame-parameter'/`set-face-background' when
+the target colour differs from what the frame already shows: a deck
+that never sets ORGACLE_BACKGROUND would otherwise still make two such
+calls on every single slide, over and over restoring the frame to
+colours it was already showing -- a real, if small, per-redisplay X
 round-trip a presenter who never touches this feature should not pay,
 the same \"costs nothing when unused\" standard the reveal-* and
 appearance-text-scale slots already meet by staying nil until
-something actually uses them."
+something actually uses them; measured directly, by spying on both
+functions, in `orgacle-test-appearance-background-costs-nothing-when-unused'."
   (let* ((session (orgacle--session-ensure))
-         (frame (orgacle--session-frame session)))
-    (when (frame-live-p frame)
-      (let* ((default
-              (orgacle--session-appearance-default-background session))
-             (value (orgacle--appearance-background))
+         (frame (orgacle--session-frame session))
+         (default (orgacle--session-appearance-default-background session)))
+    (when (and (frame-live-p frame) default)
+      (let* ((value (orgacle--appearance-background))
              (target (if (and value (color-defined-p value frame))
                          value default)))
         (unless (equal target (frame-parameter frame 'background-color))
-          (set-frame-parameter frame 'background-color target))))))
+          (set-frame-parameter frame 'background-color target))
+        (unless (equal target (face-attribute 'fringe :background frame))
+          (set-face-background 'fringe target frame))))))
 
 (defun orgacle--apply-appearance ()
   "Apply the current slide's ORGACLE_TEXT_SCALE and ORGACLE_BACKGROUND.
@@ -219,7 +254,8 @@ slide's own settings first."
 ;; after orgacle-media.el's or orgacle-notes.el's requires, since
 ;; neither `orgacle-show-file-auto'/`orgacle-show-indicators-maybe' nor
 ;; `orgacle-position-notes' forces a redisplay the way slide-in does.
-;; This file is required last of the six page-hook contributors --
+;; This file is required last of the five files that register a
+;; page-hook member, contributing the sixth and last member itself --
 ;; after orgacle-reveal.el -- which lands it ahead of
 ;; `orgacle-reveal-reset' too, but that ordering, unlike
 ;; appearance-before-slide-in, is not a correctness dependency: text

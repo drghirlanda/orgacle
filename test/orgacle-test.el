@@ -2367,6 +2367,36 @@ have already created it for an unrelated reason."
                          (with-current-buffer orgacle--log-buffer-name (buffer-string)))))
         (should (equal before after))))))
 
+(ert-deftest orgacle-test-appearance-text-scale-rejects-a-numeric-prefix ()
+  "F4, fix round 1: `string-to-number' accepts a numeric *prefix*, not
+only a fully-numeric string -- \"2x\" gives 2, \"1,5\" gives 1, \"1/2\"
+gives 1, \"1.5.2\" gives 1.5 -- so a highly plausible typo, a decimal
+comma among them, used to pass the old `(> number 0)' guard and become
+a real, silent remapping instead of being treated as absent the way
+the docstring and the README both claimed.  Confirmed live on a real
+frame before this fix: `:height 1' (from a value like \"1,5\") rendered
+a text line at 34x2 pixels against 272x17 unremapped -- the slide is
+blank to the audience, with no log entry anywhere.  Requires the whole
+property string to match a number now, via `string-match-p' before
+`string-to-number' is ever called; also re-confirms every previously-
+accepted shape still works, including a leading-dot value
+`orgacle-test-appearance-malformed-text-scale-is-ignored' does not
+cover: \"600\" (absolute), \"1.5\" (relative) and \".5\" (relative, no
+leading digit)."
+  (with-temp-buffer
+    (insert "* Slide\n:PROPERTIES:\n:ORGACLE_TEXT_SCALE: 600\n:END:\n")
+    (let ((org-mode-hook nil)) (org-mode))
+    (goto-char (point-min))
+    (dolist (value '("2x" "1,5" "1/2" "1.5.2"))
+      (org-entry-put (point) "ORGACLE_TEXT_SCALE" value)
+      (should-not (orgacle--appearance-text-scale)))
+    (org-entry-put (point) "ORGACLE_TEXT_SCALE" "600")
+    (should (equal 600 (orgacle--appearance-text-scale)))
+    (org-entry-put (point) "ORGACLE_TEXT_SCALE" "1.5")
+    (should (equal 1.5 (orgacle--appearance-text-scale)))
+    (org-entry-put (point) "ORGACLE_TEXT_SCALE" ".5")
+    (should (equal 0.5 (orgacle--appearance-text-scale)))))
+
 (ert-deftest orgacle-test-appearance-runs-before-slide-in-sit-for ()
   "Correctness dependency mirroring reveal's own (Task 3, fix round 1,
 I1): `orgacle-slide-in-effect' calls `sit-for', forcing a real
@@ -2394,26 +2424,177 @@ the real registration."
       (should (equal (car captured) '(:height 2.0))))))
 
 (ert-deftest orgacle-test-appearance-clean-text-scale-is-a-safe-no-op ()
-  "Safe to call with nothing to clean -- a fresh session that never
-applied a text-scale remapping at all -- matching
-`orgacle-reveal-clean-overlays''s own no-op contract."
-  (let ((orgacle--session nil))
-    (should (progn (orgacle-appearance-clean-text-scale) t))))
+  "F8, fix round 1: strengthened from a bare `(should (progn ... t))'
+that asserted nothing about the slot or about leaving other
+remappings alone.  Now checks both: the session's own slot stays nil
+across the call (still true by construction of a fresh session, but
+now actually inspected rather than merely surviving without a signal),
+and, more to the point, an unrelated `face-remapping-alist' entry --
+one this code never added -- is left completely untouched.  Confirmed
+by mutation: temporarily changing `orgacle-appearance-clean-text-scale'
+to `(setq-local face-remapping-alist nil)' unconditionally, instead of
+removing only the session's own recorded cookie, makes this test fail
+on the second `should' (the unrelated `italic' entry vanishes); the
+weak version before this round could not have caught that."
+  (with-temp-buffer
+    (let ((org-mode-hook nil)) (org-mode))
+    (let ((cookie (face-remap-add-relative 'italic '(:weight bold))))
+      (unwind-protect
+          (let ((orgacle--session nil))
+            (orgacle-appearance-clean-text-scale)
+            (should-not (orgacle--session-appearance-text-scale (orgacle--session-ensure)))
+            (should (equal (car (alist-get 'italic face-remapping-alist)) '(:weight bold))))
+        (face-remap-remove-relative cookie)))))
 
 (ert-deftest orgacle-test-appearance-background-is-a-no-op-without-a-live-frame ()
-  "ORGACLE_BACKGROUND sets a frame parameter, which batch Emacs has no
-usable frame for; see orgacle-appearance.el's Commentary for how the
-frame-parameter path was actually verified, with a real, non-batch
-Emacs process under Xvfb.  This only pins what batch can prove: with
-the session's frame slot nil -- the state every test in this suite
-leaves it in, since nothing here ever calls the real
-`orgacle--get-frame' -- applying appearance on a slide that sets
-ORGACLE_BACKGROUND neither signals nor touches any live frame; there
-is nothing further to assert without a real one."
+  "The session's frame slot nil -- true before `orgacle--get-frame' has
+ever run for this session, and the state every other test in this
+buffer leaves it in -- is a real, distinct code path from a live frame
+with nothing captured yet (F3, covered separately below): there is
+nothing to set a frame parameter or fringe face on at all, so nothing
+further to assert here.  F2, fix round 1: this test alone used to be
+the entire background half of this feature's coverage, honestly
+labelled as covering only this one no-frame-at-all case but wrongly
+described elsewhere as \"not testable in batch\" altogether; the tests
+below it now exercise the real frame-parameter and fringe-face code
+using `(selected-frame)', which is always live in batch."
   (orgacle-test-with-fixture "appearance.org"
     (orgacle--start-slides)
     (should-not (frame-live-p (orgacle--session-frame (orgacle--session-ensure))))
     (should (progn (orgacle-top) t))))
+
+(defmacro orgacle-test-with-restored-frame-background (&rest body)
+  "Run BODY, then restore `(selected-frame)''s background and fringe.
+F2, fix round 1: batch Emacs's `(selected-frame)' is a real, live
+frame (`frame-live-p' is t), so the background half of this feature is
+testable in batch after all by pointing the session's frame slot at
+it, rather than the selected frame `orgacle--get-frame' would create.
+It is the one real frame the whole batch process shares across every
+test, though, so any test that mutates its `background-color' or
+`fringe' face must restore both afterward -- in an `unwind-protect', so
+a failing assertion still restores them -- or it would leak into
+whatever test happens to run next in the same process.  Also resets
+`orgacle--session' to nil afterward for the same reason: pointing the
+session's frame slot at a real, live frame is not something any other
+test in this suite does (every other one either leaves it nil or has
+`orgacle--get-frame' stubbed out entirely), so a body that sets it must
+not leave that live frame reachable through a stale session for
+whatever test runs next -- caught directly, in this round, by
+`orgacle-test-appearance-background-is-a-no-op-without-a-live-frame'
+starting to fail only when run after one of these, never alone."
+  (declare (indent 0))
+  `(let ((orgacle-test--original-bg
+          (frame-parameter (selected-frame) 'background-color))
+         (orgacle-test--original-fringe
+          (face-attribute 'fringe :background (selected-frame))))
+     (unwind-protect
+         (progn ,@body)
+       (set-frame-parameter (selected-frame) 'background-color
+                             orgacle-test--original-bg)
+       (set-face-background 'fringe orgacle-test--original-fringe
+                             (selected-frame))
+       (setq orgacle--session nil))))
+
+(ert-deftest orgacle-test-appearance-background-applies-and-resets-with-a-real-frame ()
+  "F2/F1, fix round 1: the live counterpart of
+`orgacle-test-appearance-text-scale-is-reset-entering-a-plain-slide',
+now runnable under `make test' instead of only by hand under Xvfb, and
+checking the fringe face alongside the frame parameter (F1: a coloured
+slide used to leave a visibly mismatched fringe strip, because only
+`background-color' was ever touched, never the `fringe' face
+`orgacle--get-frame' pins to it at frame creation).  Walks all four
+fixture slides plus three `p' presses back to slide 1, matching the
+sequence verified live under Xvfb in the task report: red / default /
+default / default / red, with the fringe face equal to the frame
+parameter at every single step, not just the coloured ones."
+  (orgacle-test-with-restored-frame-background
+    (orgacle-test-with-fixture "appearance.org"
+      (orgacle--start-slides)
+      (let* ((session (orgacle--session-ensure))
+             (frame (selected-frame))
+             (default (frame-parameter frame 'background-color)))
+        (setf (orgacle--session-frame session) frame)
+        (setf (orgacle--session-appearance-default-background session) default)
+        (cl-flet ((bg () (frame-parameter frame 'background-color))
+                  (fringe () (face-attribute 'fringe :background frame)))
+          (orgacle-top)
+          (should (equal "red" (bg)))
+          (should (equal "red" (fringe)))
+          (orgacle-next-page)
+          (should (equal default (bg)))
+          (should (equal default (fringe)))
+          (orgacle-next-page)
+          (should (equal default (bg)))
+          (should (equal default (fringe)))
+          (orgacle-next-page)
+          (should (equal default (bg)))
+          (should (equal default (fringe)))
+          (orgacle-previous-page)
+          (orgacle-previous-page)
+          (orgacle-previous-page)
+          (should (equal "red" (bg)))
+          (should (equal "red" (fringe))))))))
+
+(ert-deftest orgacle-test-appearance-background-skips-when-no-default-was-captured ()
+  "F3, fix round 1 (latent, reproduced live on a real X frame in the
+report): `orgacle--session-appearance-default-background' nil, on a
+live frame, on a property-less slide, used to fall through to
+`(set-frame-parameter frame 'background-color nil)' unguarded --
+confirmed directly on a real Xvfb frame to signal
+`wrong-type-argument stringp nil', which `orgacle--run-page-hook'
+would have caught and re-logged on every redisplay of every plain
+slide for the rest of the talk.  Batch's tty frame does not signal on
+that same call (confirmed directly: it silently sets the parameter to
+nil instead), so this pins the guard itself rather than the signal: the
+frame parameter must stay exactly what it was, unchanged, proving the
+write was never attempted.  Confirmed by mutation: removing the
+`default' guard from `orgacle--appearance-apply-background' makes this
+test fail, with the frame parameter reading nil afterward instead of
+its original value."
+  (orgacle-test-with-restored-frame-background
+    (orgacle-test-with-fixture "appearance.org"
+      (orgacle--start-slides)
+      (let* ((session (orgacle--session-ensure))
+             (frame (selected-frame))
+             (before (frame-parameter frame 'background-color)))
+        (setf (orgacle--session-frame session) frame)
+        (setf (orgacle--session-appearance-default-background session) nil)
+        (should (progn (orgacle-jump-to-page 2) t))
+        (should (equal before (frame-parameter frame 'background-color)))))))
+
+(ert-deftest orgacle-test-appearance-background-costs-nothing-when-unused ()
+  "The \"costs nothing when unused\" standing constraint, measured
+directly rather than argued: on a deck that never sets
+ORGACLE_BACKGROUND, `orgacle--appearance-apply-background' must not
+call `set-frame-parameter' or `set-face-background' at all, even once
+-- not merely restore-to-the-same-value repeatedly.  Spies on both via
+`cl-letf' around a single property-less redisplay and asserts zero
+calls to either.
+
+Sets the `fringe' face's `:background' to match the captured default
+explicitly first, mirroring what a real `orgacle--get-frame' call
+always does at frame creation (F1): without this, the fringe face's
+real starting value (whatever an ordinary, unconfigured Emacs frame
+happens to default to) legitimately differs from the captured
+default, and the very first redisplay correctly spends one call
+bringing them in sync -- a real cost this test would otherwise
+misattribute to a bug, not a false negative to hide from it."
+  (orgacle-test-with-restored-frame-background
+    (orgacle-test-with-fixture "appearance.org"
+      (orgacle--start-slides)
+      (let* ((session (orgacle--session-ensure))
+             (frame (selected-frame))
+             (default (frame-parameter frame 'background-color))
+             (calls 0))
+        (setf (orgacle--session-frame session) frame)
+        (setf (orgacle--session-appearance-default-background session) default)
+        (set-face-background 'fringe default frame)
+        (cl-letf (((symbol-function 'set-frame-parameter)
+                   (lambda (&rest _) (setq calls (1+ calls))))
+                  ((symbol-function 'set-face-background)
+                   (lambda (&rest _) (setq calls (1+ calls)))))
+          (orgacle-jump-to-page 2))
+        (should (= 0 calls))))))
 
 (ert-deftest orgacle-test-quit-removes-the-text-scale-remapping ()
   "`orgacle-quit' must leave the presented buffer looking exactly as it
@@ -2422,20 +2603,20 @@ on display when `q' was pressed.  Batch-testable in full, unlike the
 background half of this feature: this is buffer-local state, no frame
 required.
 
-Pins the *outcome*, not the mechanism: confirmed directly, by mutating
-`orgacle-quit' locally and re-running this test, that
-`orgacle-appearance-clean-text-scale''s own call at that site is
-currently redundant on this exact path -- switching the buffer's major
-mode back to `org-mode', which `orgacle-quit' already does for an
-unrelated reason, resets `face-remapping-alist' to nil by itself, via
-the ordinary `kill-all-local-variables' every major-mode function
-runs.  This test still passed with that call removed.  It is kept in
-`orgacle-quit' anyway, and this test is kept as documentation of the
-observable contract a presenter actually cares about, not as proof
-that call is load-bearing; see the comment at that call site in
-orgacle.el for the rest of this reasoning, including why
-`orgacle-reveal-clean-overlays' just above it does not have the same
-problem."
+Corrected in fix round 1: this test's own scenario -- the recorded
+buffer *is* the session's org-buffer -- happens to be redundant with a
+side effect of switching that same buffer's major mode back to
+`org-mode' a few lines earlier in `orgacle-quit', which resets
+`face-remapping-alist' via the ordinary `kill-all-local-variables'
+every major-mode function runs; confirmed by mutating `orgacle-quit'
+locally and re-running this test, which still passed with the call
+removed.  That is *not* true in general, though: see
+`orgacle-test-quit-cleans-a-text-scale-buffer-distinct-from-org-buffer'
+immediately below, where the recorded buffer is a different, still-live
+buffer that mode-switching org-buffer never touches -- there, the call
+is genuinely load-bearing, confirmed the same way.  Both tests are kept:
+this one documents the observable contract in the common case, the
+other pins the case where the call actually does the work."
   (orgacle-test-with-fixture "appearance.org"
     (unwind-protect
         (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
@@ -2445,6 +2626,51 @@ problem."
           (orgacle-quit)
           (should-not (alist-get 'default face-remapping-alist)))
       (orgacle-quit))))
+
+(ert-deftest orgacle-test-quit-cleans-a-text-scale-buffer-distinct-from-org-buffer ()
+  "Report correction, fix round 1: the reviewer is right that
+`orgacle-appearance-clean-text-scale''s call in `orgacle-quit' is not
+universally redundant -- it is load-bearing whenever the buffer
+recorded in the session's appearance-text-scale slot differs from
+`org-buffer' and stays alive through quit.  This happens for real,
+interactively, with a narrowed presentation: the presented buffer is a
+temporary export buffer, killed by an earlier step in `orgacle-quit'
+via plain `kill-buffer' -- which prompts, and can be declined, if that
+buffer has unsaved edits (for example from `orgacle-edit-text').  A
+declined kill leaves that buffer alive, still holding the remapping,
+while `orgacle-quit' goes on to switch a *different* buffer,
+`org-buffer', back to `org-mode' -- whose `kill-all-local-variables'
+has no way to reach a buffer it is not running in.
+
+Simulated directly with two distinct buffers, rather than by stubbing
+the interactive kill-buffer prompt itself: the essential fact under
+test is \"the remapping's buffer is not org-buffer and survives quit\",
+not the particular interactive mechanism that can produce it.
+Confirmed by mutation: with `orgacle-appearance-clean-text-scale''s
+call removed from `orgacle-quit', this test fails -- the remapping
+buffer's `face-remapping-alist' still shows the `:height' entry after
+quit -- while `orgacle-test-quit-removes-the-text-scale-remapping'
+above keeps passing under the same mutation, confirming the asymmetry
+the reviewer described exactly."
+  (let ((remap-buf (generate-new-buffer "orgacle-test-appearance-remap"))
+        (org-buf (generate-new-buffer "orgacle-test-appearance-orgbuf")))
+    (unwind-protect
+        (progn
+          (with-current-buffer org-buf
+            (let ((org-mode-hook nil)) (org-mode)))
+          (with-current-buffer remap-buf
+            (let ((org-mode-hook nil)) (org-mode))
+            (let ((cookie (face-remap-add-relative 'default (list :height 2.0)))
+                  (session (orgacle--session-ensure)))
+              (setf (orgacle--session-org-buffer session) org-buf)
+              (setf (orgacle--session-appearance-text-scale session)
+                    (cons remap-buf cookie))))
+          (should (alist-get 'default (buffer-local-value 'face-remapping-alist remap-buf)))
+          (orgacle-quit)
+          (should-not (alist-get 'default (buffer-local-value 'face-remapping-alist remap-buf))))
+      (orgacle-quit)
+      (when (buffer-live-p remap-buf) (kill-buffer remap-buf))
+      (when (buffer-live-p org-buf) (kill-buffer org-buf)))))
 
 (ert-deftest orgacle-test-run-cleans-the-previous-sessions-text-scale-remapping ()
   "Mirrors `orgacle-test-run-cleans-the-previous-sessions-reveal-overlays'

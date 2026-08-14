@@ -62,16 +62,21 @@
 (require 'orgacle-src)
 (require 'orgacle-media)
 (require 'orgacle-notes)
-;; Required after orgacle-fontify and orgacle-media specifically --
-;; the fourth of six page-hook contributors here, though only the first
-;; two are load-bearing -- so that orgacle-reveal.el's own prepending
-;; `add-hook' call runs after `orgacle-slide-in-effect's and
-;; `orgacle-show-file-auto's, the only other two page-hook members that
-;; also prepend, and so lands ahead of both in the real, default
-;; `orgacle-page-hook'; see orgacle-reveal.el's own `add-hook' comment
-;; for why reveal has to run before slide-in specifically.
+;; Required after orgacle-fontify and orgacle-media specifically -- the
+;; fourth of the five files that register a page-hook member here
+;; (fifth of the six members themselves, after slide-in, show-file-auto,
+;; show-indicators-maybe and position-notes -- F5, fix round 1:
+;; corrected from "the fourth of six", which was wrong under both a
+;; files reading and a members reading), though only the first two are
+;; load-bearing -- so that orgacle-reveal.el's own prepending `add-hook'
+;; call runs after `orgacle-slide-in-effect's and `orgacle-show-file-auto's,
+;; the only other two page-hook members that also prepend, and so
+;; lands ahead of both in the real, default `orgacle-page-hook'; see
+;; orgacle-reveal.el's own `add-hook' comment for why reveal has to run
+;; before slide-in specifically.
 (require 'orgacle-reveal)
-;; Required last of all six page-hook contributors, for the same
+;; Required last of the five files that register a page-hook member,
+;; contributing the sixth and last member itself, for the same
 ;; before-slide-in reason as orgacle-reveal.el immediately above; see
 ;; orgacle-appearance.el's own `add-hook' comment for why this position
 ;; is enough, and why its position relative to orgacle-reveal.el
