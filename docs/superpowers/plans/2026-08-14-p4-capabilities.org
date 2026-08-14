@@ -1,0 +1,296 @@
+#+TITLE: P4 — New capabilities: implementation plan
+#+AUTHOR: Stefano Ghirlanda
+#+DATE: 2026-08-14
+#+OPTIONS: toc:2 num:nil
+
+#+begin_quote
+*For agentic workers:* REQUIRED SUB-SKILL: use =superpowers:subagent-driven-development= (recommended) or =superpowers:executing-plans= to implement this plan task-by-task. Steps use checkbox (=- [ ]=) syntax for tracking.
+#+end_quote
+
+*Goal:* Add the four capabilities section 8 of the design document specifies — a presenter console, a talk timer, incremental reveal, and per-slide appearance — and close the four items P3 deferred.
+
+*Architecture:* All four build on the slide vector P3 introduced, and all four hang off =orgacle-page-hook= rather than being wired into navigation. Two new feature modules appear, =orgacle-reveal.el= and =orgacle-appearance.el=, which the design document's section 5.1 has always listed and which P2 could not create because the features did not exist. The presenter console replaces the notes frame in place, so =orgacle-notes.el= grows rather than splitting.
+
+*Tech stack:* Emacs Lisp, ERT, =checkdoc=, =package-lint=, GNU Make, GitHub Actions.
+
+* Global constraints
+
+- Package is =orgacle=, symbol prefix =orgacle-=, main file =orgacle.el=.
+- Version floor stays =((emacs "29.1") (org "9.6"))=. Nothing beyond Emacs and Org may become a hard requirement.
+- No feature module may require a sibling. Shared state and helpers live in =orgacle-core.el=; cross-module behaviour goes through =orgacle-page-hook=.
+- All four gates stay green after every task: =make compile= (with =byte-compile-error-on-warn=), =make checkdoc=, =make lint=, =make test=. CI covers Emacs 29.4, 30.2 and snapshot.
+- The suite is 89 tests at the start and must never shrink.
+- Every new file needs its own header with =lexical-binding=, =;;; Commentary:=, =;;; Code:=, a =provide= and a closing =;;; name.el ends here=.
+- **Each feature must be off by default and cost nothing when unused.** A presenter who wants none of this should not be able to tell it was added.
+
+* What this phase inherits
+
+Carried from the P3 ledger, which lives in a git-ignored workspace.
+
+- =orgacle-goto-top-level= is dead — no callers anywhere since the navigation rewrite. It is a public interactive command, so removing it is a user-visible decision rather than a cleanup. Task 6 decides.
+- =orgacle-refresh= rebuilds the slide vector and the notes buffer but does not re-narrow the presentation buffer, so deleting the heading you are narrowed to leaves a stale view until the next navigation command. Task 6.
+- A second =orgacle-run= from a different Org buffer while one is presenting replaces the session and orphans the first frame, which =orgacle-quit= can then never reach. Task 6.
+- =e= (=org-edit-src-code=) is the one buffer-mutating command with no rebuild on the way out. Task 6.
+
+* The shape of the four features
+
+Two of them — the timer and the presenter console — are displays of state that already exists. Two of them — reveal and appearance — add state of their own, and both need the same discipline the phase before learned the hard way: **anything applied to a slide must be undone when leaving it**, or it leaks into the next.
+
+The reveal state machine is the one with real logic. Today =ORGACLE_STEPWISE= hides a subtree and calls =org-next-visible-heading=, which cannot step backwards correctly because it has no memory of what it hid. Replacing it with a list of targets and an index makes forward and backward symmetric by construction, exactly as the slide vector did for navigation.
+
+* Task 1: The talk timer
+
+Smallest of the four, and the presenter console will display it, so it comes first.
+
+*Files:* modify =orgacle-core.el=, =test/orgacle-test.el=.
+
+*Interfaces produced:*
+- =orgacle-duration= (defcustom, integer or nil) — target minutes, nil for none.
+- =(orgacle--duration)= → integer or nil. The target for this buffer: =#+ORGACLE_DURATION:= if present, else the defcustom.
+- =(orgacle--elapsed)= → integer seconds since the session started.
+- =(orgacle--timer-string)= → propertized string for the mode line, or "" when there is no session.
+
+- [ ] *Step 1: Write the failing tests*
+
+The timer reads a clock, so make the clock injectable rather than sleeping in tests. Bind the session's start time and compare against a fixed "now".
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-duration-from-keyword ()
+    "#+ORGACLE_DURATION overrides the option."
+    (orgacle-test-with-fixture "duration.org"
+      (let ((orgacle-duration 5))
+        (should (equal 20 (orgacle--duration))))))
+
+  (ert-deftest orgacle-test-duration-falls-back-to-the-option ()
+    (orgacle-test-with-fixture "plain.org"
+      (let ((orgacle-duration 30))
+        (should (equal 30 (orgacle--duration))))
+      (let ((orgacle-duration nil))
+        (should-not (orgacle--duration)))))
+
+  (ert-deftest orgacle-test-timer-string-is-empty-with-no-session ()
+    (let ((orgacle--session nil))
+      (should (equal "" (orgacle--timer-string)))))
+#+end_src
+
+For elapsed time and the over-time face, add tests that set the session's start-time slot to a known value and assert on the formatted string. Decide how you inject "now" — an optional argument, or a variable the tests can bind — and say which in your report.
+
+- [ ] *Step 2: Run them and watch them fail*
+
+- [ ] *Step 3: Implement*
+
+Add a =start-time= slot to =orgacle--session=, set in =orgacle-run=. =orgacle--timer-string= shows elapsed as =M:SS=; with a target it shows =elapsed/target= and takes a warning face at 90% and an over-time face at 100%. Define both faces in =orgacle-core.el= beside the others.
+
+- [ ] *Step 4: Put it in the mode line, without breaking the existing one*
+
+=orgacle-mode-line= currently defaults to the page number, and a user may have customized it or set =#+ORGACLE_MODE_LINE:=. Do **not** change the default in a way that discards their setting. Add the timer as a separate element that the default composes, so a user who has replaced the mode line keeps exactly what they asked for. Say in your report what a user with a custom mode line sees.
+
+- [ ] *Step 5: Gates, then commit*
+
+* Task 2: The presenter console
+
+*Files:* modify =orgacle-notes.el=, =orgacle-core.el=, =test/orgacle-test.el=.
+
+Today =orgacle-make-notes-buffer= builds =*Orgacle Notes*= and shows it in a second frame. This task turns that buffer into a console: the current slide's notes, the *next* slide's title, =N/M=, and the timer.
+
+*Interfaces produced:*
+- =(orgacle--presenter-header)= → string. The header block for the current slide.
+- =orgacle-presenter-view= (defcustom, boolean, default t) — whether to add the header at all.
+
+- [ ] *Step 1: Write the failing tests*
+
+Test the header as a string; the frame is not testable in batch.
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-presenter-header-shows-position ()
+    "The header names the current slide number and the total."
+    (orgacle-test-with-fixture "slides.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (should (string-match-p "1/3" (orgacle--presenter-header)))))
+
+  (ert-deftest orgacle-test-presenter-header-shows-the-next-slide ()
+    (orgacle-test-with-fixture "slides.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (should (string-match-p "Second slide" (orgacle--presenter-header)))))
+
+  (ert-deftest orgacle-test-presenter-header-on-the-last-slide ()
+    "On the last slide there is no next one, and that is not an error."
+    (orgacle-test-with-fixture "slides.org"
+      (orgacle--start-slides)
+      (orgacle-jump-to-page 3)
+      (should (stringp (orgacle--presenter-header)))))
+#+end_src
+
+- [ ] *Step 2: Run them, watch them fail, then implement*
+
+The header is rebuilt by a page-hook member. Note that =orgacle-position-notes= is already a hook member and already narrows the notes buffer to the current slide's segment — so decide whether the header lives inside that narrowing or outside it, and say which. Putting it inside means it scrolls away; putting it outside means widening.
+
+- [ ] *Step 3: Keep it optional*
+
+With =orgacle-presenter-view= nil, the notes buffer must be exactly what it is today. Test that.
+
+- [ ] *Step 4: Gates, then commit*
+
+* Task 3: Incremental reveal
+
+The one with real logic.
+
+*Files:* create =orgacle-reveal.el=; modify =orgacle-core.el=, =orgacle.el=, =Makefile=, =test/orgacle-test.el=.
+
+*Interfaces produced:*
+- =(orgacle--reveal-targets)= → list of (BEG . END) for the current slide, in document order.
+- =(orgacle-reveal-next)= / =(orgacle-reveal-previous)= → move one step, return non-nil if it moved.
+- =(orgacle--reveal-exhausted-p)= → non-nil when everything is revealed.
+
+- [ ] *Step 1: Decide what a target is, and write the fixture*
+
+The property is =:ORGACLE_REVEAL:= on a slide. Its value selects what to reveal: =items= for top-level list items, =headings= for subheadings, =blocks= for source and example blocks. Support at least =items= and =headings=; say in your report what you did about =blocks=.
+
+Write =test/fixtures/reveal.org= with one slide of each kind plus a slide with no property, which must behave exactly as it does today.
+
+- [ ] *Step 2: Write the failing tests for the state machine*
+
+The state machine is the deliverable, so test it directly rather than through the display:
+
+#+begin_src emacs-lisp :eval no
+  (ert-deftest orgacle-test-reveal-starts-hidden ()
+    (orgacle-test-with-fixture "reveal.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (should (= 0 orgacle--reveal-index))
+      (should (= 3 (length (orgacle--reveal-targets))))))
+
+  (ert-deftest orgacle-test-reveal-is-symmetric ()
+    "Forward then back returns to the same state."
+    (orgacle-test-with-fixture "reveal.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (orgacle-reveal-next)
+      (orgacle-reveal-next)
+      (should (= 2 orgacle--reveal-index))
+      (orgacle-reveal-previous)
+      (should (= 1 orgacle--reveal-index))))
+
+  (ert-deftest orgacle-test-reveal-stops-at-the-ends ()
+    (orgacle-test-with-fixture "reveal.org"
+      (orgacle--start-slides)
+      (orgacle-top)
+      (orgacle-reveal-previous)
+      (should (= 0 orgacle--reveal-index))
+      (dotimes (_ 10) (orgacle-reveal-next))
+      (should (orgacle--reveal-exhausted-p))))
+
+  (ert-deftest orgacle-test-reveal-absent-property-has-no-targets ()
+    "A slide without the property reveals nothing and hides nothing."
+    (orgacle-test-with-fixture "reveal.org"
+      (orgacle--start-slides)
+      (orgacle-jump-to-page 3)
+      (should (null (orgacle--reveal-targets)))))
+#+end_src
+
+Check the expected counts against the fixture you actually write rather than trusting the numbers above — the numbers here are illustrative and I have been wrong about such counts repeatedly in this project.
+
+- [ ] *Step 3: Implement with overlays, and reset on leaving the slide*
+
+Hide targets with overlays carrying an =orgacle-reveal= property so they can be found and deleted wholesale. Register a page-hook member that rebuilds the targets and resets the index for the new slide, and make sure the previous slide's overlays are gone — this is the leak the phase before spent three fix rounds on.
+
+- [ ] *Step 4: Wire it to =n= and =p=, configurably*
+
+=orgacle-reveal-on-navigation= (defcustom, default t): when a slide has reveal targets left, =n= advances the reveal instead of changing slide, and =p= steps back before leaving. With it nil, reveal is only on its own keys. Choose the keys and say which; =N= and =P= are currently the subheading commands that reveal replaces.
+
+- [ ] *Step 5: Retire or keep =ORGACLE_STEPWISE=*
+
+=orgacle-next-subheading= and =orgacle-previous-subheading= implement the old hack, and =ORGACLE_STEPWISE= is documented in the README. Decide: make =STEPWISE= an alias for =:ORGACLE_REVEAL: headings=, or keep both and document the difference. Either is defensible; a silent behaviour change for existing decks is not. Say which and update the README.
+
+- [ ] *Step 6: Gates, then commit*
+
+* Task 4: Per-slide appearance
+
+*Files:* create =orgacle-appearance.el=; modify =orgacle-core.el=, =orgacle.el=, =Makefile=, =test/orgacle-test.el=.
+
+*Interfaces produced:*
+- =(orgacle--apply-appearance)= — page-hook member; applies this slide's appearance and undoes the previous slide's.
+
+- [ ] *Step 1: Write the failing tests*
+
+=:ORGACLE_TEXT_SCALE:= is testable in batch through =face-remapping-alist=; =:ORGACLE_BACKGROUND:= sets a frame parameter and is not. Test what is testable and say plainly what is not.
+
+- [ ] *Step 2: Implement*
+
+Text scale through buffer-local =face-remapping-alist=; background through a frame parameter on the session's frame, not the selected frame — the mistake the phase before had to fix in =orgacle--get-frame=.
+
+- [ ] *Step 3: Reset on every page change*
+
+A slide with no appearance properties must look exactly like the deck's default, even immediately after a slide that set both. Test that explicitly: set, move on, assert the remapping is gone.
+
+- [ ] *Step 4: Gates, then commit*
+
+* Task 5: Demonstrate all four in present.org
+
+The design document's exit criterion for this phase is that each feature is demonstrated in =present.org=.
+
+*Files:* modify =present.org=, =README.org=.
+
+- [ ] *Step 1: Add a slide per feature*
+
+A slide with reveal targets, a slide with a background and a text scale, a =#+ORGACLE_DURATION:= at the top, and something that exercises the presenter console.
+
+- [ ] *Step 2: Document all four in the README's Manual*
+
+Each with its property, its default, and what it does when unset. Follow the shape of the existing sections.
+
+- [ ] *Step 3: Gates, then commit*
+
+* Task 6: Close what P3 deferred
+
+*Files:* modify =orgacle-nav.el=, =orgacle-fontify.el=, =orgacle.el=, =test/orgacle-test.el=.
+
+- [ ] *Step 1: =orgacle-goto-top-level=*
+
+Dead since the navigation rewrite. It is an interactive command, so someone may have bound it. Decide between removing it and keeping it as a thin wrapper that moves point to the current slide's heading, and say which. If you remove it, note it in the README's breaking-changes section.
+
+- [ ] *Step 2: =orgacle-refresh= does not re-narrow*
+
+Deleting the heading you are narrowed to leaves a stale view until the next navigation command. P3 judged fixing it too expensive because =orgacle-refresh= runs from =org-babel-after-execute-hook= on every source-block execution, and re-narrowing would fire the whole page hook each time. Now that reveal and appearance are also page-hook members, that cost is higher, not lower. Look again and choose: re-narrow only, without running the hook; or leave it and document. Say which and why.
+
+- [ ] *Step 3: A second =orgacle-run= orphans the first frame*
+
+=orgacle-run='s guard only inspects the current buffer's major mode, so running it from a second Org buffer replaces the session and leaves the first frame unreachable by =orgacle-quit=. Either refuse when a session is live, or quit the old one first. Test it.
+
+- [ ] *Step 4: =e= has no rebuild on exit*
+
+=org-edit-src-code= can change the buffer, including adding a heading inside a source block, without rebuilding the slide vector. Lowest impact of the four; fix or document.
+
+- [ ] *Step 5: Gates, then commit*
+
+* Task 7: Verify and publish
+
+- [ ] *Step 1: Boundaries and standalone compiles*
+
+No feature module requires a sibling; all ten files compile alone with warnings as errors; =ox-orgacle.el= still loads without the rest.
+
+- [ ] *Step 2: Each feature is off by default*
+
+Present a deck with none of the new properties and confirm nothing changed: no header in the notes buffer beyond what P3 produced, no overlays, no face remapping, no timer in a customized mode line.
+
+- [ ] *Step 3: A real frame*
+
+As in P3, drive a real rendered Emacs under =Xvfb= and exercise all four features. Report what you saw, including anything that looked wrong. If you cannot, say so plainly and say what you did instead.
+
+- [ ] *Step 4: Full gates, push, CI green on all three versions*
+
+- [ ] *Step 5: Record P4 complete in the design document*
+
+* Verification
+
+P4 is done when:
+
+- =make clean && make all= exits 0 and CI is green on 29.4, 30.2 and snapshot;
+- the four capabilities work and each is off by default;
+- reveal is symmetric — forward then back returns to the same state — and leaves no overlays behind on the slide it left;
+- per-slide appearance does not leak into the following slide;
+- the timer appears without discarding a user's customized mode line;
+- all four P3 deferrals are closed or explicitly documented;
+- =present.org= demonstrates each feature and the README documents each.
