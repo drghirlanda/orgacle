@@ -21,7 +21,7 @@
 - All four gates stay green after every task: =make compile= (with =byte-compile-error-on-warn=), =make checkdoc=, =make lint=, =make test=. CI covers Emacs 29.4, 30.2 and snapshot.
 - The suite is 89 tests at the start and must never shrink.
 - Every new file needs its own header with =lexical-binding=, =;;; Commentary:=, =;;; Code:=, a =provide= and a closing =;;; name.el ends here=.
-- **Each feature must be off by default and cost nothing when unused.** A presenter who wants none of this should not be able to tell it was added.
+- *Each feature must be off by default and cost nothing when unused.* A presenter who wants none of this should not be able to tell it was added.
 
 * What this phase inherits
 
@@ -34,7 +34,7 @@ Carried from the P3 ledger, which lives in a git-ignored workspace.
 
 * The shape of the four features
 
-Two of them — the timer and the presenter console — are displays of state that already exists. Two of them — reveal and appearance — add state of their own, and both need the same discipline the phase before learned the hard way: **anything applied to a slide must be undone when leaving it**, or it leaks into the next.
+Two of them — the timer and the presenter console — are displays of state that already exists. Two of them — reveal and appearance — add state of their own, and both need the same discipline the phase before learned the hard way: *anything applied to a slide must be undone when leaving it*, or it leaks into the next.
 
 The reveal state machine is the one with real logic. Today =ORGACLE_STEPWISE= hides a subtree and calls =org-next-visible-heading=, which cannot step backwards correctly because it has no memory of what it hid. Replacing it with a list of targets and an index makes forward and backward symmetric by construction, exactly as the slide vector did for navigation.
 
@@ -83,7 +83,7 @@ Add a =start-time= slot to =orgacle--session=, set in =orgacle-run=. =orgacle--t
 
 - [ ] *Step 4: Put it in the mode line, without breaking the existing one*
 
-=orgacle-mode-line= currently defaults to the page number, and a user may have customized it or set =#+ORGACLE_MODE_LINE:=. Do **not** change the default in a way that discards their setting. Add the timer as a separate element that the default composes, so a user who has replaced the mode line keeps exactly what they asked for. Say in your report what a user with a custom mode line sees.
+=orgacle-mode-line= currently defaults to the page number, and a user may have customized it or set =#+ORGACLE_MODE_LINE:=. Do *not* change the default in a way that discards their setting. Add the timer as a separate element that the default composes, so a user who has replaced the mode line keeps exactly what they asked for. Say in your report what a user with a custom mode line sees.
 
 - [ ] *Step 5: Gates, then commit*
 
