@@ -217,6 +217,22 @@ screen, and follows the slide being presented."
   :type 'boolean
   :group 'orgacle)
 
+(defcustom orgacle-presenter-view t
+  "Whether the speaker-notes buffer shows a presenter-console header.
+The header names the current slide's position as N/M, the following
+slide's title, and the talk timer, via `orgacle--presenter-header';
+see that function for exactly what appears.  It lives in the notes
+buffer's `header-line-format', not in its text, so turning this off
+leaves that buffer's contents exactly as they were before this option
+existed.  Only takes effect the next time `orgacle--build-notes-buffer'
+runs -- the same as `orgacle-speaker-notes' itself -- so toggling it
+mid-presentation has no effect until the notes buffer is next rebuilt,
+for example by `orgacle-refresh'.  Has no effect at all when
+`orgacle-speaker-notes' is nil, since there is then no notes buffer for
+a header to appear in."
+  :type 'boolean
+  :group 'orgacle)
+
 (defcustom orgacle-wpm 150
   "Words-per-minute factor used to estimate a presentation's speaking time."
   :type 'integer

@@ -232,6 +232,26 @@ replacement cleaned up here, not the original."
        (setf (orgacle--session-notes-markers session)
              orgacle-test--saved-notes-markers))))
 
+(defmacro orgacle-test-preserving-notes-slots (&rest body)
+  "Run BODY, restoring the session's notes-buffer and notes-markers
+slots afterwards and killing whatever buffer BODY leaves behind in the
+slot.  Unlike `orgacle-test-with-notes-buffer', this does not itself
+build a notes buffer or require a window: it is for tests that call
+`orgacle--build-notes-buffer' directly, more than once, with different
+option values, such as the presenter-view gating tests below."
+  (declare (indent 0) (debug (body)))
+  `(let* ((session (orgacle--session-ensure))
+          (orgacle-test--saved-notes-buffer (orgacle--session-notes-buffer session))
+          (orgacle-test--saved-notes-markers (orgacle--session-notes-markers session)))
+     (unwind-protect
+         (progn ,@body)
+       (when (buffer-live-p (orgacle--session-notes-buffer session))
+         (kill-buffer (orgacle--session-notes-buffer session)))
+       (setf (orgacle--session-notes-buffer session)
+             orgacle-test--saved-notes-buffer)
+       (setf (orgacle--session-notes-markers session)
+             orgacle-test--saved-notes-markers))))
+
 (ert-deftest orgacle-test-position-notes-disambiguates-same-titled-slides ()
   "Two slides with the same title each keep their own notes block.
 
@@ -1613,6 +1633,138 @@ entirely must not gain it too."
   (orgacle-test-with-fixture "plain.org"
     (let ((orgacle-mode-line '(:eval "just the page number, my way")))
       (should (equal orgacle-mode-line (orgacle-get-mode-line))))))
+
+;;; Presenter console
+
+(ert-deftest orgacle-test-presenter-header-shows-position ()
+  "The header names the current slide number and the total."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (string-match-p "1/3" (orgacle--presenter-header)))))
+
+(ert-deftest orgacle-test-presenter-header-shows-the-next-slide ()
+  "The header names the following slide's title."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (string-match-p "Second slide" (orgacle--presenter-header)))))
+
+(ert-deftest orgacle-test-presenter-header-on-the-last-slide ()
+  "On the last slide there is no next one, and that is not an error."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 3)
+    (should (stringp (orgacle--presenter-header)))))
+
+(ert-deftest orgacle-test-presenter-header-exact-on-the-first-slide ()
+  "The first slide's header: its position and the following slide's
+title, joined by two spaces, nothing else -- no target duration is
+configured for this fixture, so the timer segment is absent."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (should (equal "1/3  Next: Second slide" (orgacle--presenter-header)))))
+
+(ert-deftest orgacle-test-presenter-header-exact-on-a-middle-slide ()
+  "A middle slide's header: its own position and the slide after it,
+not the one before."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 2)
+    (should (equal "2/3  Next: Third slide" (orgacle--presenter-header)))))
+
+(ert-deftest orgacle-test-presenter-header-exact-on-the-last-slide ()
+  "The last slide's header is the position alone: no stray separator is
+left behind where the missing \"Next\" segment and the timer would
+otherwise have gone."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-jump-to-page 3)
+    (should (equal "3/3" (orgacle--presenter-header)))))
+
+(ert-deftest orgacle-test-presenter-header-includes-the-timer-when-configured ()
+  "With a target duration configured, the timer segment appears too,
+after the \"Next\" segment, still joined by two spaces and with no
+stray separator anywhere."
+  (orgacle-test-with-fixture "slides.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (let ((orgacle-duration 20))
+      (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 65)))
+        (should (equal "1/3  Next: Second slide  1:05/20:00"
+                       (orgacle--presenter-header)))))))
+
+(ert-deftest orgacle-test-presenter-header-reads-the-timer-from-the-presented-buffer ()
+  "The header's timer honours a file-level #+ORGACLE_DURATION: keyword
+even when some unrelated buffer is current when the header is
+computed -- the ordinary case, since the header is installed as the
+notes buffer's `header-line-format', and a header-line `:eval' form
+runs with the buffer displaying it current, not the presented Org
+buffer.  Without reading the timer in the context of the buffer the
+slide markers actually point into, `orgacle--duration' would search
+the wrong buffer for the keyword, find nothing, and silently fall back
+to no target at all."
+  (orgacle-test-with-fixture "duration.org"
+    (orgacle--start-slides)
+    (orgacle-top)
+    (let ((orgacle-duration nil))
+      (with-temp-buffer
+        ;; some unrelated buffer is current here, standing in for the
+        ;; notes buffer a real header-line `:eval' would run from
+        (cl-letf (((symbol-function 'orgacle--elapsed) (lambda () 65)))
+          (should (string-match-p "1:05/20:00" (orgacle--presenter-header))))))))
+
+(ert-deftest orgacle-test-presenter-view-off-leaves-notes-text-unchanged ()
+  "With `orgacle-presenter-view' nil, the notes buffer's text is
+byte-for-byte identical to a build with the option on.  The header
+lives in `header-line-format', never in the buffer's text, so this
+holds by construction; the test guards against a future change that
+moves the header into the text without keeping this task's gating."
+  (orgacle-test-with-fixture "notes.org"
+    (orgacle--start-slides)
+    (orgacle-test-preserving-notes-slots
+      (let (text-on text-off)
+        (let ((orgacle-presenter-view t))
+          (orgacle--build-notes-buffer)
+          (setq text-on
+                (with-current-buffer
+                    (orgacle--session-notes-buffer (orgacle--session-ensure))
+                  (buffer-string))))
+        (let ((orgacle-presenter-view nil))
+          (orgacle--build-notes-buffer)
+          (setq text-off
+                (with-current-buffer
+                    (orgacle--session-notes-buffer (orgacle--session-ensure))
+                  (buffer-string))))
+        (should (equal text-on text-off))))))
+
+(ert-deftest orgacle-test-presenter-view-off-sets-no-header-line ()
+  "With the option off, the notes buffer gets no header-line at all --
+exactly the buffer `orgacle-make-notes-buffer' produced before this
+feature existed."
+  (orgacle-test-with-fixture "notes.org"
+    (orgacle--start-slides)
+    (orgacle-test-preserving-notes-slots
+      (let ((orgacle-presenter-view nil))
+        (orgacle--build-notes-buffer)
+        (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
+          (should-not header-line-format))))))
+
+(ert-deftest orgacle-test-presenter-view-on-sets-a-header-line ()
+  "With the option on, the notes buffer's header-line evaluates
+`orgacle--presenter-header' on every redisplay, the same way
+`orgacle-mode-line' already evaluates `orgacle--default-mode-line' for
+the presentation frame -- so no page-hook member is needed to keep it
+in step with navigation."
+  (orgacle-test-with-fixture "notes.org"
+    (orgacle--start-slides)
+    (orgacle-test-preserving-notes-slots
+      (let ((orgacle-presenter-view t))
+        (orgacle--build-notes-buffer)
+        (with-current-buffer (orgacle--session-notes-buffer (orgacle--session-ensure))
+          (should (equal header-line-format
+                         '(:eval (orgacle--presenter-header)))))))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
