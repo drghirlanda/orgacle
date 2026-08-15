@@ -4584,12 +4584,31 @@ not handle: `orgacle-mode' adds `orgacle-setup-src-edit' to the
 *global* `org-src-mode-hook' for the duration of a presentation \(see
 `orgacle-mode''s own body\), and that entry is not scoped to any one
 buffer or session -- it stays on the hook, package-wide, until
-`orgacle-quit' removes it or the presentation's buffer's `orgacle-mode'
-happens to be re-entered.  A maintainer or reviewer who calls
-`unload-feature' directly, rather than `orgacle-quit' first, during a
-live presentation, previously left that entry on the hook with its own
-function now void, breaking `org-src-mode' package-wide for every
-Org buffer, not only Orgacle's.
+`orgacle-quit' removes it.  Re-entering `orgacle-mode' does not remove
+it either -- confirmed directly, entering twice with no intervening
+`orgacle-quit' -- `add-hook' is idempotent, so a second entry leaves
+the existing entry exactly as it was, neither duplicated nor removed;
+only `orgacle-quit''s own explicit `remove-hook' call ever takes it
+off.
+
+Corrected here, code review (fix round 2, Important 3): an earlier
+version of this docstring additionally claimed that a maintainer or
+reviewer calling `unload-feature' directly, rather than `orgacle-quit'
+first, during a live presentation, \"previously left that entry on the
+hook with its own function now void, breaking `org-src-mode' package-wide
+for every Org buffer.\"  Measured directly against round 0's shipped
+version of `orgacle-unload-function': false.  Round 0 never unloaded
+`orgacle-src' at all -- see that function's own docstring -- so
+`orgacle-setup-src-edit' stayed `fboundp' throughout, and a real
+`org-edit-src-code'/`org-edit-src-exit' round trip completed with no
+error, both confirmed directly.  The hook-entry leak this test pins is
+real and was real at round 0 too -- the entry itself did sit on
+`org-src-mode-hook' pointing at a symbol untouched by round 0's unload
+-- but the *harm* the previous docstring described, a void function
+breaking ordinary Org editing package-wide, never actually happened in
+any shipped version; only this round's own cascade, which does unload
+`orgacle-src', could have caused it, and this fix closes it in the
+same change that introduced the cascade.
 
 Seeds the hook by hand rather than entering `orgacle-mode' for real:
 this file's own `orgacle-test-mode-enters' and its neighbours already
@@ -4713,13 +4732,29 @@ real frame: the *user's own*, whichever one they happened to be
 looking at when they ran `M-x orgacle-mode' with no presentation
 behind it.  Confirmed live, on two real X frames, not merely in batch:
 `M-x orgacle-mode' in a plain Org buffer on frame 1, with frame 2
-merely present, took frame 1's `default' face from height 101 to 400
-and left it there -- `M-x orgacle-quit' afterward left it at 398,
-never restored -- while frame 2 and the global default (`t' as FRAME)
-stayed untouched throughout.  The correct fix does not fall back to
-any frame at all: it only ever touches the session's own frame, and
-only when that frame is genuinely `frame-live-p', which is never true
-on this standalone path.
+merely present, changed frame 1's own `default' face height and left
+it changed -- `M-x orgacle-quit' afterward restored nothing, since
+nothing was ever saved to restore -- while frame 2 and the global
+default (`t' as FRAME) stayed untouched throughout.  Corrected here,
+code review (fix round 2, Important 3), from this docstring's own
+earlier, false \"101 to 400, quit leaves it at 398\" account, which
+implied `orgacle-quit' itself changed something: measured directly,
+the height was already 398, not 400, immediately after `orgacle-mode'
+returned, and still 398 after `orgacle-quit' -- it was never 400, and
+quit changed nothing.
+
+The correct fix does not fall back to any frame at all: it only ever
+touches the session's own frame, and only when that frame is genuinely
+`frame-live-p'.  On *this* standalone path -- no presentation running
+anywhere at all -- that is always false, which is what this test pins;
+corrected here from an earlier, overstated \"never true on this
+standalone path\", since a presentation already running in some
+*other* buffer entirely, with `M-x orgacle-mode' then entered
+standalone in an unrelated one, does leave the session's frame slot
+live \(`orgacle--session' is one global session, not scoped to any one
+buffer\) -- harmless, since it is still a real frame Orgacle itself
+owns and is actively presenting on, but a case this docstring should
+not have claimed away.
 
 Resets *both* the global height and the selected frame's own height to
 a fixed sentinel before running, rather than merely capturing whatever
@@ -4827,12 +4862,132 @@ the selected one -- the fix this test pins."
     (unwind-protect
         (cl-letf (((orgacle--session-notes-buffer session) notes-buf)
                   ((symbol-function 'get-buffer-window)
-                   (lambda (&optional _buffer-or-name all-frames)
-                     (setq seen-all-frames all-frames)
+                   ;; Fix round 2 nit: filters on the notes buffer
+                   ;; specifically, rather than recording whichever call
+                   ;; happens to run last -- `orgacle-quit' makes only
+                   ;; this one `get-buffer-window' call today, so an
+                   ;; unfiltered stub already discriminates correctly,
+                   ;; but would silently start recording a *different*
+                   ;; call's ALL-FRAMES argument instead if `orgacle-quit'
+                   ;; ever grew a second one, with nothing here to catch
+                   ;; that this test had quietly stopped testing what its
+                   ;; own name says it tests.
+                   (lambda (&optional buffer-or-name all-frames)
+                     (when (eq (get-buffer buffer-or-name) notes-buf)
+                       (setq seen-all-frames all-frames))
                      nil)))
           (orgacle-quit)
           (should (eq seen-all-frames t)))
       (when (buffer-live-p notes-buf) (kill-buffer notes-buf)))))
+
+(ert-deftest orgacle-test-unload-orgacle-removes-the-export-backend ()
+  "The cascade also unregisters the `orgacle' export backend from Org's
+own dispatcher, not only unbinding this package's own functions.
+
+Important 1 (code review, fix round 2).  `org-export-define-derived-backend',
+in ox-orgacle.el, registers a backend struct in the separate,
+Org-owned `org-export-registered-backends' list; that registration is
+not itself a symbol ox-orgacle.el's own load-history contains \(the
+registered struct is data pushed onto a list, not a `defun' or
+`defvar' this file's own history entry would cover\), so it is invisible
+to `unload-feature''s standard unloading the same way the six
+`orgacle-page-hook' members and the `org-edit-src-exit' advice were:
+outside any single file's own load-history, in Org's own bookkeeping.
+Confirmed directly, before this fix: after `(unload-feature \\='orgacle
+t)', `(org-export-get-backend \\='orgacle)' still returned the full
+struct, still pointing at `orgacle-export-to-pdf' and the rest by
+name, all four now void -- meaning `C-c C-e' still listed \"[E] Orgacle
+to LaTeX\" with all four entries, and choosing any one of them would
+have signalled `void-function'.  The same \"looks loaded, silently
+dead\" shape item 2 exists to eliminate for the rest of the package,
+just relocated into Org's own export dispatcher instead of into this
+package's own functions.
+
+Fixed with `orgacle--ox-remove-backend', in ox-orgacle.el itself,
+called explicitly by `orgacle-unload-function' rather than left for
+`unload-feature' to auto-discover as `ox-orgacle-unload-function' the
+way `orgacle-src-unload-function' already is -- see that helper's own
+docstring for why -- which removes exactly the `orgacle' backend from
+`org-export-registered-backends' and nothing else there, the same
+by-name discipline `orgacle-unload-function' already uses for
+`orgacle-page-hook'."
+  (should (org-export-get-backend 'orgacle))
+  (unwind-protect
+      (progn
+        (unload-feature 'orgacle t)
+        (should-not (org-export-get-backend 'orgacle)))
+    (require 'orgacle)
+    (should (org-export-get-backend 'orgacle))))
+
+(ert-deftest orgacle-test-unload-during-a-live-presentation-restores-user-state ()
+  "Unloading `orgacle' while a presentation is live restores the user's
+own global state first, rather than stranding it permanently.
+
+Important 2 (code review, fix round 2).  `orgacle--saved-state' and
+`orgacle-user-tooltip-mode' -- the presenter's own prior values for
+`orgacle-saved-variables' \(`org-hide-emphasis-markers',
+`org-pretty-entities' and `org-fontify-quote-and-verse-blocks'\) and
+for `tooltip-mode' -- live in orgacle-core.el, which the cascade
+unloads and `makunbound's.  Measured directly, before this fix, on a
+live presentation: unload, `require' again, then `M-x orgacle-quit' --
+all four stayed in their *presentation* values, globally, for the rest
+of the Emacs session, with nothing left able to restore them, since
+`orgacle--restore-user-state' itself had already gone void and come
+back defining a fresh, empty `orgacle--saved-state' on reload, with no
+memory of what the presentation had been holding.  `unload-feature'
+itself already switches any buffer in the doomed `orgacle-mode' back
+to `org-mode' as part of its own standard unloading -- confirmed
+separately, not this test's own concern -- but that leaves the tracked
+*global* variables and `tooltip-mode' untouched, which is the actual
+regression this test pins.
+
+Fixed by calling `orgacle--restore-user-state' at the very start of
+`orgacle-unload-function', before the cascade unloads `orgacle-core':
+at that point the function and the state it needs are both still
+live, so the restore happens as part of the unload itself rather than
+depending on a `orgacle-quit' that, after reload, has nothing left to
+restore.  A no-op when no presentation was live to begin with, since
+`orgacle--restore-user-state' already guards itself on
+`orgacle--saved-state' being non-nil -- confirmed by the existing
+`orgacle-test-quit-with-no-session-does-not-touch-tooltip-mode' shape
+of check, not re-proven here.
+
+`orgacle--get-frame' stubbed to nil, the same convention every other
+`orgacle-run'-driving test in this file that has no real frame to work
+with already uses."
+  (let ((original-tooltip tooltip-mode))
+    (unwind-protect
+        (orgacle-test-with-fixture "plain.org"
+          (let ((orig-hide org-hide-emphasis-markers)
+                (orig-pretty org-pretty-entities)
+                (orig-quote org-fontify-quote-and-verse-blocks))
+            (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                      (orgacle-speaker-notes nil))
+              (tooltip-mode 1)
+              (orgacle-run)
+              ;; sanity: the presentation really did change these, so
+              ;; restoring them afterward is checking something real
+              (should-not tooltip-mode)
+              (should org-hide-emphasis-markers)
+              (unwind-protect
+                  (progn
+                    (unload-feature 'orgacle t)
+                    ;; restored by the unload itself, before any reload
+                    (should tooltip-mode)
+                    (should (eq org-hide-emphasis-markers orig-hide))
+                    (should (eq org-pretty-entities orig-pretty))
+                    (should (eq org-fontify-quote-and-verse-blocks orig-quote))
+                    (require 'orgacle)
+                    ;; still restored after reload, matching the
+                    ;; review's own measurement, which additionally
+                    ;; called `orgacle-quit' at this point
+                    (should tooltip-mode)
+                    (should (eq org-hide-emphasis-markers orig-hide))
+                    (should (eq org-pretty-entities orig-pretty))
+                    (should (eq org-fontify-quote-and-verse-blocks orig-quote)))
+                (require 'orgacle)
+                (orgacle-quit)))))
+      (tooltip-mode (if original-tooltip 1 -1)))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

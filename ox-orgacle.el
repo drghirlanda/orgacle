@@ -114,5 +114,41 @@ ASYNC, SUBTREEP, VISIBLE-ONLY, BODY-ONLY and EXT-PLIST are passed to
       async subtreep visible-only body-only ext-plist
       (lambda (file) (org-latex-compile file)))))
 
+(defun orgacle--ox-remove-backend ()
+  "Remove the `orgacle' export backend from Org's own dispatcher.
+`org-export-define-derived-backend', above, registers a backend struct
+in `org-export-registered-backends' -- a list Org itself owns, not
+something in this file's own `load-history' -- so `unload-feature'
+never touches it on its own: unloading this file unbinds
+`orgacle-latex-property-drawer', `orgacle-export-as-latex' and the
+rest, but leaves the registered backend struct still pointing at all
+of them by name.  Confirmed directly, before this fix: after
+unloading, `(org-export-get-backend \\='orgacle)' still returned that
+struct, `org-export-dispatch' still listed \"[E] Orgacle to LaTeX\"
+with all four entries, and choosing any one of them signalled
+`void-function'.
+
+Removes only the `orgacle' backend from `org-export-registered-backends',
+by name, leaving every other registered backend -- including `latex'
+and `org', which `orgacle' derives from and this file also requires --
+untouched.
+
+Named `orgacle--ox-remove-backend', not `ox-orgacle-unload-function':
+the latter is the name `unload-feature' would auto-discover and call
+on its own for the `ox-orgacle' feature -- the usual, idiomatic way to
+hook cleanup into unloading a specific file, and the name every other
+`FEATURE-unload-function' in this package uses, including
+`orgacle-src-unload-function' -- but `ox-orgacle', unlike every other
+feature this package provides, does not itself start with `orgacle-',
+so a function of that exact name fails `package-lint''s package-prefix
+check, which orgacle.el's own `orgacle-unload-function' is not
+exempt from either and does not try to be.  Called explicitly instead,
+by `orgacle-unload-function', before that function's own cascade
+unloads `ox-orgacle' -- which must happen in that order, since this
+function itself lives in ox-orgacle.el and would otherwise go void
+along with everything else that file defines before ever running."
+  (setq org-export-registered-backends
+        (delq (org-export-get-backend 'orgacle) org-export-registered-backends)))
+
 (provide 'ox-orgacle)
 ;;; ox-orgacle.el ends here
