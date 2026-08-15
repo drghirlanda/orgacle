@@ -1993,16 +1993,19 @@ matching `orgacle-test-quit-restores-tooltip-mode'."
 A smoke test, not a characterization of everything the mode does: it
 exists because nothing in the suite called `orgacle-mode' at all,
 which let a byte-compile-only crash in its display-table handling
-reach users unnoticed.  Batch mode has no frame of its own, so the
-session's frame slot stays nil here; the mode's own frame-facing
-`set-face-attribute' call falls back to the selected frame, which
-exists even in batch, whenever the session's own frame slot is not
-`frame-live-p' -- corrected here from this docstring's own earlier,
-false claim that a nil FRAME argument to `set-face-attribute' *means*
-\"the selected frame\": it does not, it means *every* frame, current
-and future, which is exactly the bug
-`orgacle-test-mode-scopes-default-height-to-a-real-frame' pins further
-down this file.
+reach users unnoticed.  Batch mode has no frame of its own, but that
+does not matter to this smoke test either way: the mode's own
+frame-facing `set-face-attribute' call is a no-op here, since the
+session's frame slot stays nil throughout -- only `orgacle--get-frame',
+called by `orgacle-run', not by this mode function itself, ever sets
+it -- and the call is guarded on `frame-live-p', so nothing on any
+frame actually changes.  Corrected here from this docstring's own
+earlier, false claim that a nil FRAME argument to `set-face-attribute'
+*means* \"the selected frame\": it does not, it means *every* frame,
+current and future, which is exactly the bug
+`orgacle-test-mode-does-not-touch-any-frame-without-a-live-session-frame'
+and `orgacle-test-mode-sets-height-only-on-its-own-live-session-frame'
+pin further down this file.
 
 Quits at the end, in an `unwind-protect': other tests rely on
 `orgacle--save-user-state' having nothing already saved when they
@@ -4493,6 +4496,13 @@ costs nothing: grepping the whole package and test suite for
 `copy-orgacle--session' turns up no caller."
   (should-not (fboundp 'copy-orgacle--session)))
 
+(defconst orgacle-test--page-hook-members
+  '(orgacle-slide-in-effect orgacle-show-file-auto
+    orgacle-show-indicators-maybe orgacle-position-notes
+    orgacle-reveal-reset orgacle--apply-appearance)
+  "The six functions a fully loaded `orgacle' installs on `orgacle-page-hook'.
+Shared between the unload tests below so the list is written once.")
+
 (ert-deftest orgacle-test-unload-orgacle-removes-page-hook-members-and-src-advice ()
   "`unload-feature' on the top-level `orgacle' feature undoes everything
 outside its own symbols that loading the package installed: all six
@@ -4511,48 +4521,90 @@ directly before writing the fix: `orgacle-page-hook' still held all
 six members and the advice was still installed immediately after
 `(unload-feature \\='orgacle t)' returned.
 
+`orgacle-page-hook' itself becomes *unbound*, not merely nil-valued,
+once the fix cascade-unloads `orgacle-core' -- the file that `defvar's
+it -- along with every other submodule; asserted with `boundp' rather
+than a bare `orgacle-page-hook' reference, which would itself signal
+`void-variable' and abort the test rather than fail it cleanly.
+
 Also confirms a real Org edit/exit round trip -- `org-edit-src-code'
 then `org-edit-src-exit', not merely calling `org-edit-src-exit' with
-nothing to exit -- still completes once the advice is gone, the same
-shape of check `orgacle-test-unload-orgacle-src-removes-the-org-edit-src-exit-advice'
-already makes for unloading `orgacle-src' directly.  `orgacle-unload-function'
-calls `orgacle-src-unload-function' directly rather than unloading the
-whole of `orgacle-src' via `unload-feature', to avoid unbinding every
-other function that file defines for no reason connected to either
-symptom this exists to fix; `orgacle--refresh-after-src-edit' itself
-stays fbound throughout, so this also rules out the advice merely
-calling a now-void function without signalling, rather than genuinely
-being gone.
+nothing to exit -- still completes once the advice is gone: it relies
+only on Org's own functions, none of Orgacle's, so it is unaffected by
+`orgacle--refresh-after-src-edit' itself also going void here (fix
+round 1: the first version of `orgacle-unload-function' called
+`orgacle-src-unload-function' directly, leaving that one function
+fbound throughout; this version fully unloads `orgacle-src' instead --
+see that function's own docstring for why -- so this is no longer
+true, and this test no longer asserts it).
 
-Restores the advice directly in the `unwind-protect' cleanup, not via
-`(require \\='orgacle-src)': `orgacle-src' itself was never removed
-from `features' by this unload -- only `orgacle' itself was -- so a
-plain `require' would be a no-op and leave the advice missing for
-every test that runs after this one in the same batch process,
-confirmed directly.  `(require \\='orgacle)' alone is enough to restore
-orgacle.el's own definitions, since `unload-feature' does remove
-`orgacle' itself from `features'."
-  (dolist (fn '(orgacle-slide-in-effect orgacle-show-file-auto
-                orgacle-show-indicators-maybe orgacle-position-notes
-                orgacle-reveal-reset orgacle--apply-appearance))
+Also confirms fix round 1's own finding (I2): load, unload, load
+leaves the package *fully* restored, not merely `orgacle-mode' looking
+`fboundp' again while its hook wiring and advice stay silently dead.
+`(require \\='orgacle)' genuinely reloads every submodule here, unlike
+before fix round 1, because the fix now removes all nine from
+`features' as part of the unload, not only `orgacle' itself."
+  (dolist (fn orgacle-test--page-hook-members)
     (should (memq fn orgacle-page-hook)))
   (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
   (unwind-protect
       (progn
         (unload-feature 'orgacle t)
-        (should-not orgacle-page-hook)
+        (should-not (boundp 'orgacle-page-hook))
         (should-not (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
-        (should (fboundp 'orgacle--refresh-after-src-edit))
+        (should-not (fboundp 'orgacle--refresh-after-src-edit))
         (with-temp-buffer
           (insert "#+begin_src emacs-lisp\n(+ 1 1)\n#+end_src\n")
           (let ((org-mode-hook nil)) (org-mode))
           (goto-char (point-min))
           (org-edit-src-code)
-          (should (progn (org-edit-src-exit) t))))
-    (advice-add 'org-edit-src-exit :after #'orgacle--refresh-after-src-edit)
+          (should (progn (org-edit-src-exit) t)))
+        ;; I2: reload and confirm everything -- not just `orgacle-mode'
+        ;; itself -- comes back, not merely `fboundp'
+        (require 'orgacle)
+        (should (fboundp 'orgacle-mode))
+        (dolist (fn orgacle-test--page-hook-members)
+          (should (memq fn orgacle-page-hook)))
+        (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit)))
+    ;; belt-and-braces: `(require \\='orgacle)' above already restores
+    ;; everything on the success path, and calling it again here is a
+    ;; harmless no-op then; on a failure path that never reached it,
+    ;; this is what keeps every test after this one in the same batch
+    ;; process from inheriting a half-unloaded package
     (require 'orgacle)
     (should (fboundp 'orgacle-mode))
-    (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))))
+    (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
+    (dolist (fn orgacle-test--page-hook-members)
+      (should (memq fn orgacle-page-hook)))))
+
+(ert-deftest orgacle-test-unload-orgacle-removes-the-live-org-src-mode-hook-entry ()
+  "The same cascade also reaches a third, narrower leak the first
+version of `orgacle-unload-function' \(fix round 1's own review\) did
+not handle: `orgacle-mode' adds `orgacle-setup-src-edit' to the
+*global* `org-src-mode-hook' for the duration of a presentation \(see
+`orgacle-mode''s own body\), and that entry is not scoped to any one
+buffer or session -- it stays on the hook, package-wide, until
+`orgacle-quit' removes it or the presentation's buffer's `orgacle-mode'
+happens to be re-entered.  A maintainer or reviewer who calls
+`unload-feature' directly, rather than `orgacle-quit' first, during a
+live presentation, previously left that entry on the hook with its own
+function now void, breaking `org-src-mode' package-wide for every
+Org buffer, not only Orgacle's.
+
+Seeds the hook by hand rather than entering `orgacle-mode' for real:
+this file's own `orgacle-test-mode-enters' and its neighbours already
+cover entering the mode itself, and doing so here as well would only
+add an unrelated frame/session dependency to a test that is really
+about `org-src-mode-hook', not about `orgacle-mode' entry."
+  (add-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
+  (should (memq 'orgacle-setup-src-edit org-src-mode-hook))
+  (unwind-protect
+      (progn
+        (unload-feature 'orgacle t)
+        (should-not (memq 'orgacle-setup-src-edit org-src-mode-hook)))
+    (remove-hook 'org-src-mode-hook 'orgacle-setup-src-edit)
+    (require 'orgacle)
+    (should (fboundp 'orgacle-mode))))
 
 (ert-deftest orgacle-test-package-requires-does-not-redeclare-org ()
   "orgacle.el's `Package-Requires' header does not separately declare
@@ -4561,13 +4613,26 @@ orgacle.el's own definitions, since `unload-feature' does remove
 Emacs 29.1 already bundles Org 9.6.6, so declaring `(emacs \"29.1\")'
 already implies an Org new enough for this package's own floor \(Org
 9.6, per README.org's \"Installation\" section\); declaring `org' as
-well invites `package.el' to additionally pull Org from ELPA
-alongside the Org Emacs itself ships, which is the known source of
-mixed-installation breakage where a half-loaded newer Org fights the
-built-in one.  Read directly off the file's own header via `lm-header',
-the same mechanism `package-buffer-info' and `package-lint' both use to
-parse it, rather than asserted separately from what ships in the file,
-so this fails if the header ever regains an `org' entry."
+well is redundant metadata.  Corrected here, code review (Minors): an
+earlier version of this docstring additionally claimed declaring `org'
+\"invites `package.el' to pull Org from ELPA\" -- false for the actual
+case this package ships on.  Verified directly, on real Emacs 29.1:
+`(package-installed-p \\='org \\='(9 6))' is already `t' there, because
+`package-installed-p' recognizes a bundled, built-in package as
+satisfying a version constraint without consulting any archive, so
+`package.el' fetches nothing for this exact combination regardless of
+whether `org' is declared.  The real reason to remove it is narrower
+than the false claim made it sound: redundant metadata is worth
+dropping on its own terms, and not declaring `org' at all removes any
+dependency-resolution role for it from `package.el''s view of this
+package, rather than relying on `package-installed-p''s built-in-package
+recognition to keep behaving this way across every Emacs version and
+Org-bundling combination this package might ever run on.
+
+Read directly off the file's own header via `lm-header', the same
+mechanism `package-buffer-info' and `package-lint' both use to parse
+it, rather than asserted separately from what ships in the file, so
+this fails if the header ever regains an `org' entry."
   (with-temp-buffer
     (insert-file-contents (expand-file-name "orgacle.el" orgacle-test-project-directory))
     (let ((requires (lm-header "Package-Requires")))
@@ -4631,55 +4696,143 @@ for the window manager's own frame destruction."
       (orgacle-quit)
       (when (buffer-live-p buffer-a) (kill-buffer buffer-a)))))
 
-(ert-deftest orgacle-test-mode-scopes-default-height-to-a-real-frame ()
-  "`orgacle-mode' never sets the `default' face's `:height' on *every*
-frame, only on one real, live one.
+(ert-deftest orgacle-test-mode-does-not-touch-any-frame-without-a-live-session-frame ()
+  "`orgacle-mode', entered standalone -- with no `orgacle-run', the same
+way `orgacle-test-mode-enters' and every re-entrancy test above already
+do -- leaves the `default' face's `:height' completely untouched, on
+every frame, not merely on \"every frame except whichever one the user
+happened to be looking at.\"
 
-`orgacle-mode' reaches `(set-face-attribute \\='default (orgacle--session-frame
-(orgacle--session-ensure)) :height orgacle-text-scale)'.  Entered
-standalone -- with no `orgacle-run' -- as this test does, the same way
-`orgacle-test-mode-enters' and every re-entrancy test above already
-do, `orgacle--session-ensure' auto-vivifies a session whose frame slot
-is nil, and `set-face-attribute' treats a nil FRAME argument as *all*
-frames, current and future -- not the selected frame, whatever an
-earlier version of this test suite's own `orgacle-test-mode-enters'
-docstring claimed.  Confirmed directly, before this fix: entering
-`orgacle-mode' this way left `(face-attribute \\='default :height t)' --
-`t' as FRAME means \"the value new frames would inherit\", the same
-convention `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
-already uses for the `fringe' face -- at `orgacle-text-scale' instead
-of its untouched, pre-existing value, i.e. leaked package-wide and
-permanently, for the rest of the Emacs session, not merely for the
-frame being presented on.
+`orgacle--session-ensure' auto-vivifies a session whose frame slot is
+nil when there is no real `orgacle-run' behind it, since only
+`orgacle--get-frame' \(called by `orgacle-run', not by this mode
+function itself\) ever sets that slot.  A fix that falls back to
+`(selected-frame)' whenever the session's own frame is not
+`frame-live-p' -- an earlier version of this fix -- still damages a
+real frame: the *user's own*, whichever one they happened to be
+looking at when they ran `M-x orgacle-mode' with no presentation
+behind it.  Confirmed live, on two real X frames, not merely in batch:
+`M-x orgacle-mode' in a plain Org buffer on frame 1, with frame 2
+merely present, took frame 1's `default' face from height 101 to 400
+and left it there -- `M-x orgacle-quit' afterward left it at 398,
+never restored -- while frame 2 and the global default (`t' as FRAME)
+stayed untouched throughout.  The correct fix does not fall back to
+any frame at all: it only ever touches the session's own frame, and
+only when that frame is genuinely `frame-live-p', which is never true
+on this standalone path.
 
-Checks a *delta* against a value captured immediately before entering
-the mode, not a fixed expected value: a previous test in the same
-batch run may already have entered `orgacle-mode' at least once, and
-before this fix that leaked the global default permanently -- so this
-test's own outcome must not depend on run order, or on whether it
-happens to run first.
+Resets *both* the global height and the selected frame's own height to
+a fixed sentinel before running, rather than merely capturing whatever
+they happened to be: a code review caught that gap in an earlier
+version of this test -- an earlier test in the same batch run may
+already have entered `orgacle-mode' and, on code with this same bug,
+already left both at `orgacle-text-scale', which makes a plain
+before/after delta trivially satisfied by the very bug it exists to
+catch, confirmed directly by reverting this fix and running the whole
+suite rather than this test alone: reverted, the suite still reported
+0 unexpected, because `orgacle-test-mode-enters' -- alphabetically
+earlier, so it always runs first -- had already leaked the global to
+`orgacle-text-scale' by the time this test's own \"before\" value was
+captured.  A fixed sentinel closes that gap regardless of what ran
+earlier.  Restores the real, pre-test values in the cleanup, not the
+sentinel, since the sentinel is only a fixture for this test, not a
+value worth leaving behind for whatever runs next."
+  (let ((global-real (face-attribute 'default :height t))
+        (frame-real (face-attribute 'default :height (selected-frame))))
+    (unwind-protect
+        (progn
+          (set-face-attribute 'default t :height 'unspecified)
+          (set-face-attribute 'default (selected-frame) :height 12345)
+          (orgacle-test-with-fixture "plain.org"
+            (unwind-protect
+                (progn
+                  (orgacle-mode)
+                  (should (eq (face-attribute 'default :height t) 'unspecified))
+                  (should (eql (face-attribute 'default :height (selected-frame)) 12345)))
+              (orgacle-quit))))
+      (set-face-attribute 'default t :height global-real)
+      (set-face-attribute 'default (selected-frame) :height frame-real))))
 
-`orgacle-mode' is deliberately still usable this way, with no live
-`orgacle-run' session behind it: the existing test suite already
-relies on entering it standalone throughout \(see `orgacle-test-mode-enters'
-and the re-entrancy tests immediately below it\), so refusing to run
-without a real presentation frame was not an option -- what changes
-here is only that the frame-facing call inside it can no longer damage
-frames it does not own.  The fix falls back to `(selected-frame)',
-which -- like every other batch test in this suite that needs a real,
-live frame -- exists even in batch, when the session's own frame slot
-is not `frame-live-p'."
-  (let ((global-before (face-attribute 'default :height t))
-        (frame-before (face-attribute 'default :height (selected-frame))))
-    (orgacle-test-with-fixture "plain.org"
-      (unwind-protect
-          (progn
-            (orgacle-mode)
-            (should (eq (face-attribute 'default :height t) global-before))
-            (should (eql (face-attribute 'default :height (selected-frame))
-                         orgacle-text-scale)))
-        (orgacle-quit)
-        (set-face-attribute 'default (selected-frame) :height frame-before)))))
+(ert-deftest orgacle-test-mode-sets-height-only-on-its-own-live-session-frame ()
+  "The positive-path counterpart to the test above: with the session's
+own frame slot genuinely `frame-live-p' -- as it always is on the real
+`orgacle-run' path, where `orgacle--get-frame' sets that slot, live and
+selected, before ever calling this mode function -- `orgacle-mode'
+does apply `orgacle-text-scale' to that frame, and leaves the global
+default \(`t' as FRAME\) alone.
+
+Batch Emacs cannot create a second frame to play \"the session's own
+frame\" against \"some other frame\" directly, so this seeds the
+session's frame slot with the one real, live frame batch does have,
+the same convention `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
+and `orgacle-test-get-frame-resyncs-mouse-visible-across-a-quit' already
+use for exactly this reason.  Unseeds the frame slot again before
+`orgacle-quit' in the cleanup, for the same reason those two tests do:
+left seeded, `orgacle-quit' would find `(frame-live-p (orgacle--session-frame
+session))' true and try to `delete-frame' the one real frame this
+batch process has."
+  (let ((global-real (face-attribute 'default :height t))
+        (frame-real (face-attribute 'default :height (selected-frame))))
+    (unwind-protect
+        (progn
+          (set-face-attribute 'default t :height 'unspecified)
+          (orgacle-test-with-fixture "plain.org"
+            (unwind-protect
+                (progn
+                  (setf (orgacle--session-frame (orgacle--session-ensure)) (selected-frame))
+                  (orgacle-mode)
+                  (should (eq (face-attribute 'default :height t) 'unspecified))
+                  (should (eql (face-attribute 'default :height (selected-frame))
+                               orgacle-text-scale)))
+              (setf (orgacle--session-frame (orgacle--session-ensure)) nil)
+              (orgacle-quit))))
+      (set-face-attribute 'default t :height global-real)
+      (set-face-attribute 'default (selected-frame) :height frame-real))))
+
+(ert-deftest orgacle-test-quit-searches-every-frame-for-the-notes-window ()
+  "`orgacle-quit' searches *every* frame for the notes buffer's own
+window when deciding whether to delete a notes frame, not only the
+selected one.
+
+I4 (code review, fix round 1).  `(get-buffer-window (orgacle--session-notes-buffer
+session))', with no ALL-FRAMES argument, only ever looks at windows on
+the *selected* frame -- `get-buffer-window''s own docstring says a nil
+or omitted ALL-FRAMES means exactly that.  The realistic case this
+misses: the window manager kills the presentation frame, leaving the
+notes frame as the only one still showing anything Orgacle-related; by
+the time `orgacle-quit' runs \(via item 4's recovery route, from
+`orgacle--quit-previous-session-if-any'\), whichever frame Emacs falls
+back to as \"selected\" need not be the notes frame at all.
+`get-buffer-window' then finds no window for the notes buffer on the
+wrong frame, `win' stays nil, `delete-frame' is never called, and the
+notes buffer is killed out from under a frame that survives, showing
+whatever Emacs put in its now-buffer-less window next -- confirmed
+live, with two real frames: after the window manager kills the
+presentation frame, `M-x orgacle-run' from the deck buffer leaves four
+frames total, the stale notes frame among them, now showing the deck
+file itself, alongside a brand-new notes frame the new session opened.
+
+Batch Emacs cannot create a second frame to show the notes buffer
+displayed on a frame other than the selected one, to reproduce that
+geometry directly -- so this instead stubs `get-buffer-window' to
+record the ALL-FRAMES argument `orgacle-quit' actually passes it, the
+same way `orgacle-test-quit-does-not-delete-an-unrelated-frame-titled-orgacle'
+already stubs `delete-frame' to record what it is called with rather
+than really deleting anything.  `t' as ALL-FRAMES is what makes
+`get-buffer-window' consider every window on every frame, not merely
+the selected one -- the fix this test pins."
+  (let ((session (orgacle--session-ensure))
+        (notes-buf (generate-new-buffer "orgacle-test-notes-window-search"))
+        (seen-all-frames 'not-called))
+    (unwind-protect
+        (cl-letf (((orgacle--session-notes-buffer session) notes-buf)
+                  ((symbol-function 'get-buffer-window)
+                   (lambda (&optional _buffer-or-name all-frames)
+                     (setq seen-all-frames all-frames)
+                     nil)))
+          (orgacle-quit)
+          (should (eq seen-all-frames t)))
+      (when (buffer-live-p notes-buf) (kill-buffer notes-buf)))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

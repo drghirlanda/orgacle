@@ -201,9 +201,28 @@ narrowed `org-restriction' slot."
           ;; in this same `unwind-protect', so there is nothing to
           ;; restore ORGACLE_BACKGROUND against either
           (orgacle-appearance-clean-text-scale)
-          ;; kill notes buffer and associated frame, if present
+          ;; kill notes buffer and associated frame, if present.
+          ;; ALL-FRAMES is t here (I4, code review, fix round 1) --
+          ;; `get-buffer-window' with no ALL-FRAMES argument only looks
+          ;; at windows on the *selected* frame, and the realistic
+          ;; caller of this function via item 4's recovery route is
+          ;; exactly the case where that assumption fails: the window
+          ;; manager has already killed the presentation frame, so
+          ;; whichever frame Emacs falls back to as "selected" by the
+          ;; time this runs need not be the notes frame at all.  With
+          ;; no ALL-FRAMES, `win' stayed nil on that path, `delete-frame'
+          ;; was never called, and the notes buffer was killed out from
+          ;; under a frame that survived orphaned -- confirmed live,
+          ;; with two real frames: the window manager kills the
+          ;; presentation frame, `M-x orgacle-run' from the deck buffer
+          ;; leaves four frames total afterward, the stale notes frame
+          ;; among them, now showing the deck file itself.  The ordinary
+          ;; `q' path never hit this, since the selected frame there is
+          ;; still whatever frame `q' was pressed in, which is why it
+          ;; went unnoticed until item 4 gave this function a second,
+          ;; less well-trodden way to be reached.
           (when (and session (bufferp (orgacle--session-notes-buffer session)))
-            (let ((win (get-buffer-window (orgacle--session-notes-buffer session))))
+            (let ((win (get-buffer-window (orgacle--session-notes-buffer session) t)))
               (when win (delete-frame (window-frame win))))
             (kill-buffer (orgacle--session-notes-buffer session))))
       ;; restore the user's Org-mode variables, tooltip setting,
@@ -321,18 +340,30 @@ Each frame-level heading becomes a slide.  Navigate with
   ;; never touched, with nothing anywhere restoring it afterward.
   ;; `orgacle-quit''s own discipline is to restore only what it recorded
   ;; saving; there was never a saved "previous height" here to restore
-  ;; it to, so the fix is to stop the damage at its source instead --
-  ;; always resolve to a real, live frame, falling back to the selected
-  ;; frame, which exists even in batch, exactly like every other
-  ;; frame-facing test in this suite that has no real presentation frame
-  ;; to work with.  This makes `orgacle-mode' safe to enter standalone,
-  ;; which it already had to remain: it is `M-x'-reachable regardless of
-  ;; how it gets there, and the test suite's own longstanding use of it
-  ;; without `orgacle-run' means refusing to run without a live session
-  ;; frame was never a real option.
+  ;; it to, so the fix is to stop the damage at its source instead.
+  ;;
+  ;; Fix round 1 (code review): a first version of this fix fell back to
+  ;; `(selected-frame)' whenever the session's own frame was not
+  ;; `frame-live-p', reasoning that batch has no real frame of its own
+  ;; to work with otherwise.  That still damages a real frame -- the
+  ;; *user's own*, whichever one they happened to be looking at when
+  ;; they ran `M-x orgacle-mode' with no presentation behind it --
+  ;; confirmed live, on two real X frames: entering this mode in a
+  ;; plain Org buffer on frame 1, with frame 2 merely present, took
+  ;; frame 1 from height 101 to 400 and left it there, `orgacle-quit'
+  ;; afterward included, which never restores a height nothing ever
+  ;; saved.  There is no frame this call may fall back to that is
+  ;; guaranteed not to be a real one the user cares about, so it does
+  ;; not fall back at all: only the session's own frame, and only when
+  ;; that frame is genuinely `frame-live-p', which is always true on
+  ;; the real `orgacle-run' path -- `orgacle--get-frame' is the only
+  ;; setter of this slot, and always leaves it live and selected before
+  ;; `orgacle-run' calls this mode function -- and never true when this
+  ;; mode is entered standalone, which is exactly when there is no
+  ;; presentation frame of Orgacle's own to apply this to.
   (let ((frame (orgacle--session-frame (orgacle--session-ensure))))
-    (set-face-attribute 'default (if (frame-live-p frame) frame (selected-frame))
-                         :height orgacle-text-scale))
+    (when (frame-live-p frame)
+      (set-face-attribute 'default frame :height orgacle-text-scale)))
   ;; fontify the buffer
   (add-to-invisibility-spec '(orgacle-hide))
   ;; remove flyspell overlays
@@ -680,61 +711,75 @@ unsaved changes, ask first: saving it would write those changes too."
 ;;; Unloading
 
 (defun orgacle-unload-function ()
-  "Undo what loading Orgacle installed outside its own symbols.
+  "Unload the nine submodules `orgacle.el' itself `require's above.
 `unload-feature' -- see its own docstring -- only removes, from a hook
 variable, functions *defined by the file actually being unloaded*, and
-`(unload-feature \\='orgacle)' only ever unloads this file, orgacle.el,
-never the nine submodules it `require's above.  Two things Orgacle
-installs live outside orgacle.el's own symbols entirely, and so are
-never in scope for that automatic cleanup without this function:
+by default `(unload-feature \\='orgacle)' only ever unloads this file,
+orgacle.el, never the submodules it `require's.  That misses real
+state Orgacle installs outside orgacle.el's own symbols entirely: all
+six `orgacle-page-hook' members -- `orgacle-slide-in-effect'
+\(orgacle-fontify.el\), `orgacle-show-file-auto' and
+`orgacle-show-indicators-maybe' \(orgacle-media.el\),
+`orgacle-position-notes' \(orgacle-notes.el\), `orgacle-reveal-reset'
+\(orgacle-reveal.el\) and `orgacle--apply-appearance'
+\(orgacle-appearance.el\) -- and the `:after' advice orgacle-src.el
+puts on Org's own `org-edit-src-exit' \(see that file's own
+`orgacle--refresh-after-src-edit' and `orgacle-src-unload-function'\).
+Confirmed directly, before writing this function: `(unload-feature
+\\='orgacle t)' alone left all six hook members installed and the
+advice in place.
 
-- All six `orgacle-page-hook' members: `orgacle-slide-in-effect'
-  \(orgacle-fontify.el\), `orgacle-show-file-auto' and
-  `orgacle-show-indicators-maybe' \(orgacle-media.el\),
-  `orgacle-position-notes' \(orgacle-notes.el\), `orgacle-reveal-reset'
-  \(orgacle-reveal.el\) and `orgacle--apply-appearance'
-  \(orgacle-appearance.el\).  Removed here by exact symbol, matching
-  `unload-feature''s own surgical discipline -- only what Orgacle
-  itself put there -- rather than `(setq orgacle-page-hook nil)',
-  which would also discard a third party's own hook member if one were
-  ever added directly to this public variable.
+Fix round 1 (code review), replacing this function's first version,
+which instead removed the six hook members by exact symbol and called
+`orgacle-src-unload-function' directly, leaving the other eight
+submodules -- and every ordinary function they define -- loaded and
+untouched.  That fixed the two symptoms above, but left a worse one
+behind: load, unload, load \(`(require \\='orgacle)', `(unload-feature
+\\='orgacle t)', `(require \\='orgacle)' again\) left `orgacle-mode'
+`fboundp' again, looking loaded, while `orgacle-page-hook' stayed
+empty and the advice stayed gone -- because the eight submodules were
+never removed from `features' in the first place, so the second
+`require' saw them all already provided and reloaded none of them,
+silently skipping every one of their own top-level `add-hook' and
+`advice-add' calls.  A live presentation after that reload would
+navigate slides while slide-in, automatic image display, fringe
+indicators, notes positioning, incremental reveal and per-slide
+appearance all stayed dead, with nothing anywhere signalling an error.
+`package.el' itself never calls `unload-feature', but a maintainer or
+a MELPA reviewer checking this exact function does, and a package that
+only pretends to reload is worse than one honest about not
+supporting it.
 
-- The `:after' advice orgacle-src.el puts on Org's own
-  `org-edit-src-exit', so a live presentation's speaker-notes buffer
-  stays in sync with an edited source block; see that file's own
-  `orgacle--refresh-after-src-edit'.  `org-edit-src-exit' is Org's
-  function, not orgacle-src.el's, so advice on it is never in
-  `unload-feature''s scope either, for the same reason as the hook
-  members above.  `orgacle-src-unload-function' already exists and
-  already handles exactly this -- see orgacle-src.el -- but only runs
-  automatically when `orgacle-src' itself is the feature being
-  unloaded.  Called directly here instead, rather than through
-  `(unload-feature \\='orgacle-src t)': that would additionally unbind
-  every ordinary function orgacle-src.el defines
-  \(`orgacle-next-src-block' and the rest\), which is no part of either
-  symptom this function exists to fix.
+The fix: unload every submodule, not just handle the two symptoms by
+hand.  `(unload-feature FEATURE t)' on each -- FORCE is needed since
+every later submodule in this list still `require's `orgacle-core',
+which would otherwise refuse as still depended-on -- triggers each
+submodule's own standard unloading in turn, which is what actually
+removes the six hook members \(each one is `defined by the file
+actually being unloaded' from that submodule's own point of view\) and
+runs `orgacle-src-unload-function' for the advice, exactly the way
+`unload-feature' is meant to work, with no need to hand-duplicate any
+of it here.  It also incidentally reaches a third, narrower leak the
+first version of this function did not handle: `orgacle-mode' adds
+`orgacle-setup-src-edit' to the *global* `org-src-mode-hook' for the
+duration of a presentation, and unloading `orgacle-src' removes that
+too, by the same standard mechanism, if a presentation happened to be
+live when unload ran -- confirmed directly, seeding that hook by hand
+before unloading.  Order is reverse of the `require's above -- most
+specific first, `orgacle-core' last -- though passing FORCE makes the
+actual order immaterial to whether each call succeeds.
 
-MELPA reviewers check this specifically because the package advises a
-core Org function; confirmed directly, before writing this function,
-that `(unload-feature \\='orgacle t)' left all six hook members
-installed and the advice in place, and that a real
-`org-edit-src-code'/`org-edit-src-exit' round trip still completes
-once both are actually gone.
-
-Returns nil, like `orgacle-src-unload-function' itself, so
-`unload-feature' still performs its own standard unloading of
-orgacle.el's own definitions -- `orgacle-mode', `orgacle-quit',
-`orgacle-run', `orgacle-mode-map' and the rest -- after this function
-returns; a non-nil return here would suppress that entirely, per
-`unload-feature''s own docstring, which is not what this is for."
-  (remove-hook 'orgacle-page-hook #'orgacle-slide-in-effect)
-  (remove-hook 'orgacle-page-hook #'orgacle-show-file-auto)
-  (remove-hook 'orgacle-page-hook #'orgacle-show-indicators-maybe)
-  (remove-hook 'orgacle-page-hook #'orgacle-position-notes)
-  (remove-hook 'orgacle-page-hook #'orgacle-reveal-reset)
-  (remove-hook 'orgacle-page-hook #'orgacle--apply-appearance)
-  (when (fboundp 'orgacle-src-unload-function)
-    (orgacle-src-unload-function))
+Returns nil, so `unload-feature' still performs its own standard
+unloading of orgacle.el's own definitions -- `orgacle-mode',
+`orgacle-quit', `orgacle-run', `orgacle-mode-map' and the rest -- after
+this function returns; a non-nil return here would suppress that
+entirely, per `unload-feature''s own docstring, which is not what this
+is for."
+  (dolist (feature '(ox-orgacle orgacle-appearance orgacle-reveal
+                      orgacle-notes orgacle-media orgacle-src
+                      orgacle-fontify orgacle-nav orgacle-core))
+    (when (featurep feature)
+      (unload-feature feature t)))
   nil)
 
 (provide 'orgacle)
