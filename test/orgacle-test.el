@@ -1033,7 +1033,20 @@ member -- never ran."
           (widen)
           (goto-char (point-min))
           (re-search-forward "^\\* Slide A")
-          (org-back-to-heading)
+          ;; `t': `orgacle-fontify' hides every heading's leading stars
+          ;; with an `invisible' overlay, in every live `orgacle-mode'
+          ;; buffer, as part of ordinary rendering -- nothing to do
+          ;; with folding.  Org main's `org-back-to-heading' (unlike
+          ;; 9.6 through 9.7's, bundled with the 29.1/29.4/30.2 CI
+          ;; legs) rejects an invisible heading through the generic,
+          ;; spec-agnostic `invisible-p' rather than the folding-only
+          ;; `org-fold-folded-p', so it now also rejects one hidden by
+          ;; a third-party overlay unrelated to Org's own folding.
+          ;; Whether the star happens to be visible is irrelevant to
+          ;; locating this heading to delete it, so `t' is the honest
+          ;; argument -- the same one `orgacle-notes.el's own
+          ;; `org-back-to-heading' call already passes.
+          (org-back-to-heading t)
           (let ((beg (point))) (org-end-of-subtree t t) (delete-region beg (point)))
           (goto-char (point-min))
           (re-search-forward "^\\* Slide B")
@@ -1065,7 +1078,7 @@ argument rather than actually deleting the buffer's sole real window."
             (widen)
             (goto-char (point-min))
             (re-search-forward "^\\* Slide A")
-            (org-back-to-heading)
+            (org-back-to-heading t) ; see orgacle-test-refresh-resets-appearance-when-the-slide-changes above for why `t'
             (let ((beg (point))) (org-end-of-subtree t t) (delete-region beg (point)))
             (goto-char (point-min))
             (re-search-forward "^\\* Slide B")
@@ -1106,7 +1119,7 @@ have caught."
           (widen)
           (goto-char (point-min))
           (re-search-forward "^\\* Slide A")
-          (org-back-to-heading)
+          (org-back-to-heading t) ; see orgacle-test-refresh-resets-appearance-when-the-slide-changes above for why `t'
           (let ((beg (point))) (org-end-of-subtree t t) (delete-region beg (point)))
           (goto-char (point-min))
           (re-search-forward "^\\* Slide B")
