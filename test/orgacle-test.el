@@ -10,6 +10,7 @@
 
 (require 'ert)
 (require 'org)
+(require 'lisp-mnt)
 (require 'orgacle)
 (require 'ox-orgacle)
 
@@ -1993,9 +1994,15 @@ A smoke test, not a characterization of everything the mode does: it
 exists because nothing in the suite called `orgacle-mode' at all,
 which let a byte-compile-only crash in its display-table handling
 reach users unnoticed.  Batch mode has no frame of its own, so the
-session's frame slot stays nil here; `set-face-attribute' with a nil
-frame argument means the selected frame, which exists even in batch,
-so the mode's frame-facing calls do not need a real one to complete.
+session's frame slot stays nil here; the mode's own frame-facing
+`set-face-attribute' call falls back to the selected frame, which
+exists even in batch, whenever the session's own frame slot is not
+`frame-live-p' -- corrected here from this docstring's own earlier,
+false claim that a nil FRAME argument to `set-face-attribute' *means*
+\"the selected frame\": it does not, it means *every* frame, current
+and future, which is exactly the bug
+`orgacle-test-mode-scopes-default-height-to-a-real-frame' pins further
+down this file.
 
 Quits at the end, in an `unwind-protect': other tests rely on
 `orgacle--save-user-state' having nothing already saved when they
@@ -4470,6 +4477,209 @@ reason for testing the helper directly rather than through
             (should (eq major-mode 'org-mode))))
       (orgacle-quit)
       (when (buffer-live-p buffer-a) (kill-buffer buffer-a)))))
+
+;;; MELPA submission blockers
+
+(ert-deftest orgacle-test-session-struct-has-no-package-prefix-violating-copier ()
+  "`cl-defstruct' generates a `copy-STRUCT' function unless told not to,
+and for `orgacle--session' that lands on `copy-orgacle--session' -- a
+symbol that does not start with `orgacle-', violating the package
+prefix convention every other symbol this package defines follows.
+`package-lint' does not catch this one because it is produced at
+macroexpansion time rather than written as a literal `defun', but a
+human MELPA reviewer checking symbol names by eye would.  `:copier nil'
+on the `cl-defstruct' form suppresses generating it at all, which
+costs nothing: grepping the whole package and test suite for
+`copy-orgacle--session' turns up no caller."
+  (should-not (fboundp 'copy-orgacle--session)))
+
+(ert-deftest orgacle-test-unload-orgacle-removes-page-hook-members-and-src-advice ()
+  "`unload-feature' on the top-level `orgacle' feature undoes everything
+outside its own symbols that loading the package installed: all six
+`orgacle-page-hook' members -- contributed by orgacle-fontify.el,
+orgacle-media.el (two), orgacle-notes.el, orgacle-reveal.el and
+orgacle-appearance.el, none of which are orgacle.el's own symbols --
+and the `:after' advice on Org's own `org-edit-src-exit', installed by
+orgacle-src.el.  `unload-feature' only ever removes, from a hook
+variable, functions *defined by the file actually being unloaded* --
+see its own docstring -- and `unload-feature \\='orgacle' only ever
+unloads orgacle.el itself, never the nine submodules it `require's, so
+without an explicit `orgacle-unload-function' neither the hook members
+nor the advice, both installed by those submodules rather than by
+orgacle.el, are ever in scope for that automatic cleanup.  Confirmed
+directly before writing the fix: `orgacle-page-hook' still held all
+six members and the advice was still installed immediately after
+`(unload-feature \\='orgacle t)' returned.
+
+Also confirms a real Org edit/exit round trip -- `org-edit-src-code'
+then `org-edit-src-exit', not merely calling `org-edit-src-exit' with
+nothing to exit -- still completes once the advice is gone, the same
+shape of check `orgacle-test-unload-orgacle-src-removes-the-org-edit-src-exit-advice'
+already makes for unloading `orgacle-src' directly.  `orgacle-unload-function'
+calls `orgacle-src-unload-function' directly rather than unloading the
+whole of `orgacle-src' via `unload-feature', to avoid unbinding every
+other function that file defines for no reason connected to either
+symptom this exists to fix; `orgacle--refresh-after-src-edit' itself
+stays fbound throughout, so this also rules out the advice merely
+calling a now-void function without signalling, rather than genuinely
+being gone.
+
+Restores the advice directly in the `unwind-protect' cleanup, not via
+`(require \\='orgacle-src)': `orgacle-src' itself was never removed
+from `features' by this unload -- only `orgacle' itself was -- so a
+plain `require' would be a no-op and leave the advice missing for
+every test that runs after this one in the same batch process,
+confirmed directly.  `(require \\='orgacle)' alone is enough to restore
+orgacle.el's own definitions, since `unload-feature' does remove
+`orgacle' itself from `features'."
+  (dolist (fn '(orgacle-slide-in-effect orgacle-show-file-auto
+                orgacle-show-indicators-maybe orgacle-position-notes
+                orgacle-reveal-reset orgacle--apply-appearance))
+    (should (memq fn orgacle-page-hook)))
+  (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
+  (unwind-protect
+      (progn
+        (unload-feature 'orgacle t)
+        (should-not orgacle-page-hook)
+        (should-not (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))
+        (should (fboundp 'orgacle--refresh-after-src-edit))
+        (with-temp-buffer
+          (insert "#+begin_src emacs-lisp\n(+ 1 1)\n#+end_src\n")
+          (let ((org-mode-hook nil)) (org-mode))
+          (goto-char (point-min))
+          (org-edit-src-code)
+          (should (progn (org-edit-src-exit) t))))
+    (advice-add 'org-edit-src-exit :after #'orgacle--refresh-after-src-edit)
+    (require 'orgacle)
+    (should (fboundp 'orgacle-mode))
+    (should (advice-member-p #'orgacle--refresh-after-src-edit #'org-edit-src-exit))))
+
+(ert-deftest orgacle-test-package-requires-does-not-redeclare-org ()
+  "orgacle.el's `Package-Requires' header does not separately declare
+`org' alongside `emacs \"29.1\"'.
+
+Emacs 29.1 already bundles Org 9.6.6, so declaring `(emacs \"29.1\")'
+already implies an Org new enough for this package's own floor \(Org
+9.6, per README.org's \"Installation\" section\); declaring `org' as
+well invites `package.el' to additionally pull Org from ELPA
+alongside the Org Emacs itself ships, which is the known source of
+mixed-installation breakage where a half-loaded newer Org fights the
+built-in one.  Read directly off the file's own header via `lm-header',
+the same mechanism `package-buffer-info' and `package-lint' both use to
+parse it, rather than asserted separately from what ships in the file,
+so this fails if the header ever regains an `org' entry."
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "orgacle.el" orgacle-test-project-directory))
+    (let ((requires (lm-header "Package-Requires")))
+      (should requires)
+      (should-not (string-match-p "(org " requires)))))
+
+(ert-deftest orgacle-test-run-recovers-from-orgacle-mode-with-a-dead-frame ()
+  "`orgacle-run', called again from the deck buffer itself while it is
+still in `orgacle-mode', recovers instead of silently doing nothing.
+
+The realistic trigger: the presenter closes the presentation frame
+with their window manager instead of pressing `q'.  That leaves the
+deck buffer in `orgacle-mode' with a stale session -- nothing ever
+called `orgacle-quit' -- and the frame slot pointing at a frame that
+no longer exists.  Before this fix, `orgacle-run''s own top-level
+guard was `(unless (eq major-mode \\='orgacle-mode) BODY)': being
+already in `orgacle-mode' skipped the *entire* body, including the
+\"not even Org\" error check, so `M-x orgacle-run' from that buffer
+returned with no error and no effect whatsoever, interactively or as a
+plain Lisp call -- confirmed directly, before writing this fix, that
+`orgacle--session' after the second call was still `eq' to the
+session the first call created, proving nothing happened.
+
+Recovery routes through `orgacle--quit-previous-session-if-any', the
+same helper Task 6 built for the \"switch decks\" case: with the frame
+slot already dead, `(frame-live-p ...)' is nil, so its own `ASK'
+gate is skipped regardless of ASK's value here -- there is nothing
+live left to lose, so nothing to confirm -- and it quits the stale
+session silently, restoring the buffer to plain `org-mode', before
+`orgacle-run' proceeds to build a fresh one exactly as if called from
+an ordinary Org buffer.  `yes-or-no-p' is stubbed to signal if called
+at all, pinning that this recovery genuinely takes the silent branch
+rather than merely happening to answer a prompt truthfully.
+
+`orgacle--get-frame' stubbed to nil throughout, the same convention as
+`orgacle-test-run-does-not-prompt-when-the-previous-frames-already-dead':
+batch Emacs cannot create a real frame, and nil here is what keeps
+`frame-live-p' on the stale session's frame slot false, standing in
+for the window manager's own frame destruction."
+  (let ((buffer-a (generate-new-buffer "orgacle-test-run-recover-a")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                  ((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _)
+                     (error "must not prompt: the previous frame is already dead")))
+                  (orgacle-speaker-notes nil))
+          (with-current-buffer buffer-a
+            (insert-file-contents
+             (expand-file-name "slides.org" orgacle-test-fixture-directory))
+            (let ((org-mode-hook nil)) (org-mode))
+            (orgacle-run)
+            (should (eq major-mode 'orgacle-mode))
+            (let ((first-session orgacle--session))
+              ;; the window manager just destroyed the presentation
+              ;; frame; buffer-a is still in `orgacle-mode', and this is
+              ;; the presenter trying to start over from it directly
+              (should (progn (orgacle-run t) t))
+              (should (eq major-mode 'orgacle-mode))
+              (should-not (eq orgacle--session first-session))
+              (should (orgacle--session-start-time orgacle--session)))))
+      (orgacle-quit)
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a)))))
+
+(ert-deftest orgacle-test-mode-scopes-default-height-to-a-real-frame ()
+  "`orgacle-mode' never sets the `default' face's `:height' on *every*
+frame, only on one real, live one.
+
+`orgacle-mode' reaches `(set-face-attribute \\='default (orgacle--session-frame
+(orgacle--session-ensure)) :height orgacle-text-scale)'.  Entered
+standalone -- with no `orgacle-run' -- as this test does, the same way
+`orgacle-test-mode-enters' and every re-entrancy test above already
+do, `orgacle--session-ensure' auto-vivifies a session whose frame slot
+is nil, and `set-face-attribute' treats a nil FRAME argument as *all*
+frames, current and future -- not the selected frame, whatever an
+earlier version of this test suite's own `orgacle-test-mode-enters'
+docstring claimed.  Confirmed directly, before this fix: entering
+`orgacle-mode' this way left `(face-attribute \\='default :height t)' --
+`t' as FRAME means \"the value new frames would inherit\", the same
+convention `orgacle-test-get-frame-sets-fringe-only-on-its-own-frame'
+already uses for the `fringe' face -- at `orgacle-text-scale' instead
+of its untouched, pre-existing value, i.e. leaked package-wide and
+permanently, for the rest of the Emacs session, not merely for the
+frame being presented on.
+
+Checks a *delta* against a value captured immediately before entering
+the mode, not a fixed expected value: a previous test in the same
+batch run may already have entered `orgacle-mode' at least once, and
+before this fix that leaked the global default permanently -- so this
+test's own outcome must not depend on run order, or on whether it
+happens to run first.
+
+`orgacle-mode' is deliberately still usable this way, with no live
+`orgacle-run' session behind it: the existing test suite already
+relies on entering it standalone throughout \(see `orgacle-test-mode-enters'
+and the re-entrancy tests immediately below it\), so refusing to run
+without a real presentation frame was not an option -- what changes
+here is only that the frame-facing call inside it can no longer damage
+frames it does not own.  The fix falls back to `(selected-frame)',
+which -- like every other batch test in this suite that needs a real,
+live frame -- exists even in batch, when the session's own frame slot
+is not `frame-live-p'."
+  (let ((global-before (face-attribute 'default :height t))
+        (frame-before (face-attribute 'default :height (selected-frame))))
+    (orgacle-test-with-fixture "plain.org"
+      (unwind-protect
+          (progn
+            (orgacle-mode)
+            (should (eq (face-attribute 'default :height t) global-before))
+            (should (eql (face-attribute 'default :height (selected-frame))
+                         orgacle-text-scale)))
+        (orgacle-quit)
+        (set-face-attribute 'default (selected-frame) :height frame-before)))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here

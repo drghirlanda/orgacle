@@ -15,7 +15,7 @@
 ;; Created: 12 Jun 2008
 ;; Version: 2.0.0
 ;; Keywords: outlines, hypermedia, multimedia
-;; Package-Requires: ((emacs "29.1") (org "9.6"))
+;; Package-Requires: ((emacs "29.1"))
 
 ;; This file is not (yet) part of GNU Emacs.
 ;; However, it is distributed under the same license.
@@ -309,8 +309,30 @@ Each frame-level heading becomes a slide.  Navigate with
         (org-latex-preview '(16)))
     (error
      (message "Unable to imagify latex [%s]" (error-message-string ex))))
-  (set-face-attribute 'default (orgacle--session-frame (orgacle--session-ensure))
-                       :height orgacle-text-scale)
+  ;; `set-face-attribute' treats a nil FRAME argument as *all* frames,
+  ;; current and future, not "the selected frame" -- confirmed directly,
+  ;; before this fix: entering this mode standalone, with no `orgacle-run'
+  ;; -- which the existing test suite already does throughout, see
+  ;; `orgacle-test-mode-enters' and the re-entrancy tests just below it
+  ;; -- leaves the session's frame slot nil, since only `orgacle--get-frame'
+  ;; (called by `orgacle-run', not by this mode function itself) ever
+  ;; sets it, so the call below used to permanently resize the `default'
+  ;; face on every frame Emacs has, including ones this presentation
+  ;; never touched, with nothing anywhere restoring it afterward.
+  ;; `orgacle-quit''s own discipline is to restore only what it recorded
+  ;; saving; there was never a saved "previous height" here to restore
+  ;; it to, so the fix is to stop the damage at its source instead --
+  ;; always resolve to a real, live frame, falling back to the selected
+  ;; frame, which exists even in batch, exactly like every other
+  ;; frame-facing test in this suite that has no real presentation frame
+  ;; to work with.  This makes `orgacle-mode' safe to enter standalone,
+  ;; which it already had to remain: it is `M-x'-reachable regardless of
+  ;; how it gets there, and the test suite's own longstanding use of it
+  ;; without `orgacle-run' means refusing to run without a live session
+  ;; frame was never a real option.
+  (let ((frame (orgacle--session-frame (orgacle--session-ensure))))
+    (set-face-attribute 'default (if (frame-live-p frame) frame (selected-frame))
+                         :height orgacle-text-scale))
   ;; fontify the buffer
   (add-to-invisibility-spec '(orgacle-hide))
   ;; remove flyspell overlays
@@ -476,107 +498,136 @@ explicitly, the same way any Emacs command that wants to relay \"this
 is happening for a real, present user\" to something it calls has to
 say so explicitly; nothing here can infer that safely on a caller's
 behalf.  See `orgacle--quit-previous-session-if-any' for what ASK
-actually gates."
+actually gates.
+
+Also works from inside the very buffer already being presented: with
+the current buffer already in `orgacle-mode' -- for example because
+the presentation frame was closed by the window manager instead of
+`q', leaving a stale session with nothing to tear it down -- this
+treats it exactly like switching decks from a different buffer, via
+`orgacle--quit-previous-session-if-any', and then starts fresh, rather
+than silently doing nothing."
   (interactive (list t))
-  (unless (eq major-mode 'orgacle-mode)
-    (unless (eq major-mode 'org-mode)
-      (error "Orgacle can only be used from Org Mode"))
-    ;; The Ruling, P4 Task 6 fix round 2, replacing fix round 1's own
-    ;; `called-interactively-p'-based version: that signal turned out
-    ;; to be backwards on both cases that actually matter, and
-    ;; untestable in the specific way that would have caught it --
-    ;; Findings 2 and 3 of that round's review.  `called-interactively-p'
-    ;; asks whether *this* function's own immediate caller reached it
-    ;; through the command loop, which is the wrong question for a
-    ;; wrapper command like the one this docstring's own example
-    ;; describes: such a wrapper *is* a real key press from the
-    ;; presenter's own perspective, but its own call to `(orgacle-run)'
-    ;; is, textually, just an ordinary Lisp form, so
-    ;; `(called-interactively-p 'interactive)' evaluated *inside*
-    ;; `orgacle-run' returns nil there regardless -- the exact "torn
-    ;; down with no confirmation" failure mode this whole feature
-    ;; exists to prevent.  A plain ASK argument, with its own
-    ;; `interactive' spec supplying it automatically for a direct key
-    ;; press or `M-x', is the fix Emacs's own `called-interactively-p'
-    ;; docstring already names for exactly this situation.  It is also
-    ;; what makes both branches ordinary, direct batch tests:
-    ;; `(orgacle-run)' and `(orgacle-run t)' need no live command loop
-    ;; to differ, and `(call-interactively 'orgacle-run)' correctly
-    ;; evaluates this function's own `interactive' spec even in batch,
-    ;; confirmed directly, unlike `called-interactively-p' itself.
-    (orgacle--quit-previous-session-if-any ask)
-    ;; delete the previous presentation's reveal overlays and
-    ;; text-scale remapping before its session is replaced below.
-    ;; Independent of the block just above, which only fires for a
-    ;; session that actually reached a real presentation: a session
-    ;; auto-vivified by some other caller -- again, a navigation
-    ;; command run directly, or the test suite -- can still carry
-    ;; leftover reveal overlays or a text-scale remapping of its own
-    ;; (both are reachable through plain navigation, with no
-    ;; `orgacle-run' involved), and the block above deliberately leaves
-    ;; such a session alone rather than tearing it down or asking about
-    ;; it.  `orgacle-quit' already cleans both for any session the
-    ;; block above did handle, so these two calls are a safe no-op
-    ;; there -- `orgacle-reveal-clean-overlays' and
-    ;; `orgacle-appearance-clean-text-scale' both auto-vivify a fresh,
-    ;; empty session via `orgacle--session-ensure' when `orgacle--session'
-    ;; is nil, which is exactly what the block above just set it to.
-    (orgacle-reveal-clean-overlays)
-    (orgacle-appearance-clean-text-scale)
-    ;; a fresh session, not a mutated leftover one: a presentation whose
-    ;; frame was killed without going through `orgacle-quit' must not be
-    ;; able to leave this one inheriting its state
-    (setq orgacle--session (orgacle--session-create))
-    ;; the talk timer measures from here, not from whenever the mode
-    ;; line happens to first redisplay
-    (setf (orgacle--session-start-time orgacle--session) (float-time))
-    (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
-    ;; regenerate image previews
-    (orgacle--link-preview-refresh)
-    ;; To present narrowed region use temporary buffer
-    (when (and (or (> (point-min) (save-restriction (widen) (point-min)))
-                   (< (point-max) (save-restriction (widen) (point-max))))
-               (save-excursion (goto-char (point-min)) (org-at-heading-p)))
-      (let ((title (nth 4 (org-heading-components))))
-        (setf (orgacle--session-org-restriction orgacle--session)
-              (list (point-min) (point-max)))
-        (require 'ox-org)
-        (setf (orgacle--session-org-file orgacle--session)
-              (org-org-export-to-org nil 'subtree))
-        (find-file (orgacle--session-org-file orgacle--session))
-        (goto-char (point-min))
-        (insert (format "#+Title: %s\n\n" title))))
-    (setq orgacle-frame-level (orgacle-get-frame-level))
-    ;; build the slide vector navigation is index arithmetic over
-    (orgacle--start-slides)
-    ;; save the user's state before `orgacle--get-frame' sets the mouse
-    ;; pointer to the presentation's own shape: `orgacle--save-user-state'
-    ;; is a no-op once a save is already pending, so `orgacle-mode's own
-    ;; call below stays harmless, but the pointer capture inside this one
-    ;; has to happen before that mutation, not after it, to see the
-    ;; user's real prior setting rather than the presentation's own
-    (orgacle--save-user-state)
-    (orgacle--get-frame)
-    (orgacle-mode)
-    (set-buffer-modified-p nil)
-    (setf (orgacle--session-presentation-window orgacle--session) (selected-window))
-    ;; set/unset tooltips; `orgacle-mode', called above, has already
-    ;; saved the user's prior setting via `orgacle--save-user-state'
-    (tooltip-mode (if orgacle-tooltip-mode 1 -1))
-    ;; create speaker notes
-    (when orgacle-speaker-notes (orgacle-make-notes-buffer))
-    ;; display the first slide: `orgacle--start-slides' only builds the
-    ;; slide vector and resets the index and page number, it does not
-    ;; narrow the buffer or run the page hook, so without this call the
-    ;; buffer would stay unnarrowed with `orgacle-page-number' at 1 but
-    ;; nothing actually on display, and the first `orgacle-next-page'
-    ;; would compute (1+ 0) and jump straight to slide 2 -- slide 1
-    ;; would then be reachable only via `orgacle-top', `t' or `1'.
-    ;; Called after `orgacle-make-notes-buffer' so the page hook's
-    ;; `orgacle-position-notes' has a notes buffer to position when it
-    ;; fires as part of showing this first slide.
-    (orgacle-top)
-    (run-hooks 'orgacle-start-presentation-hook)))
+  (unless (or (eq major-mode 'orgacle-mode) (eq major-mode 'org-mode))
+    (error "Orgacle can only be used from Org Mode"))
+  ;; Being already in `orgacle-mode' used to skip this entire function
+  ;; body outright -- `(unless (eq major-mode 'orgacle-mode) BODY)' --
+  ;; which made a second `orgacle-run' from the deck buffer itself a
+  ;; silent no-op, interactively and as a plain Lisp call alike.  The
+  ;; realistic way a presenter reaches that: the window manager closes
+  ;; the presentation frame instead of `q', leaving the deck buffer in
+  ;; `orgacle-mode' with a stale session and no live frame to quit.
+  ;; `orgacle--quit-previous-session-if-any' below already exists for
+  ;; exactly this shape of teardown -- it was built for the "switch
+  ;; decks" case, but nothing about it depends on the *new* presentation
+  ;; being a different buffer -- so this now runs unconditionally
+  ;; instead, whether the current buffer is already `orgacle-mode' or a
+  ;; plain `org-mode' buffer, and relies entirely on its own start-time
+  ;; and `frame-live-p' gates to stay a no-op when there is truly
+  ;; nothing to tear down.  Confirmed directly, before this fix, that
+  ;; `orgacle--session' after a second `(orgacle-run t)' called from the
+  ;; still-`orgacle-mode' buffer was still `eq' to the first call's own
+  ;; session -- proving nothing had happened -- and that with the frame
+  ;; slot already dead, `yes-or-no-p' is never reached either, so this
+  ;; recovers silently rather than asking a question the presenter has
+  ;; no live presentation left to answer about.
+  ;;
+  ;; The Ruling, P4 Task 6 fix round 2, replacing fix round 1's own
+  ;; `called-interactively-p'-based version: that signal turned out
+  ;; to be backwards on both cases that actually matter, and
+  ;; untestable in the specific way that would have caught it --
+  ;; Findings 2 and 3 of that round's review.  `called-interactively-p'
+  ;; asks whether *this* function's own immediate caller reached it
+  ;; through the command loop, which is the wrong question for a
+  ;; wrapper command like the one this docstring's own example
+  ;; describes: such a wrapper *is* a real key press from the
+  ;; presenter's own perspective, but its own call to `(orgacle-run)'
+  ;; is, textually, just an ordinary Lisp form, so
+  ;; `(called-interactively-p 'interactive)' evaluated *inside*
+  ;; `orgacle-run' returns nil there regardless -- the exact "torn
+  ;; down with no confirmation" failure mode this whole feature
+  ;; exists to prevent.  A plain ASK argument, with its own
+  ;; `interactive' spec supplying it automatically for a direct key
+  ;; press or `M-x', is the fix Emacs's own `called-interactively-p'
+  ;; docstring already names for exactly this situation.  It is also
+  ;; what makes both branches ordinary, direct batch tests:
+  ;; `(orgacle-run)' and `(orgacle-run t)' need no live command loop
+  ;; to differ, and `(call-interactively 'orgacle-run)' correctly
+  ;; evaluates this function's own `interactive' spec even in batch,
+  ;; confirmed directly, unlike `called-interactively-p' itself.
+  (orgacle--quit-previous-session-if-any ask)
+  ;; delete the previous presentation's reveal overlays and
+  ;; text-scale remapping before its session is replaced below.
+  ;; Independent of the block just above, which only fires for a
+  ;; session that actually reached a real presentation: a session
+  ;; auto-vivified by some other caller -- again, a navigation
+  ;; command run directly, or the test suite -- can still carry
+  ;; leftover reveal overlays or a text-scale remapping of its own
+  ;; (both are reachable through plain navigation, with no
+  ;; `orgacle-run' involved), and the block above deliberately leaves
+  ;; such a session alone rather than tearing it down or asking about
+  ;; it.  `orgacle-quit' already cleans both for any session the
+  ;; block above did handle, so these two calls are a safe no-op
+  ;; there -- `orgacle-reveal-clean-overlays' and
+  ;; `orgacle-appearance-clean-text-scale' both auto-vivify a fresh,
+  ;; empty session via `orgacle--session-ensure' when `orgacle--session'
+  ;; is nil, which is exactly what the block above just set it to.
+  (orgacle-reveal-clean-overlays)
+  (orgacle-appearance-clean-text-scale)
+  ;; a fresh session, not a mutated leftover one: a presentation whose
+  ;; frame was killed without going through `orgacle-quit' must not be
+  ;; able to leave this one inheriting its state
+  (setq orgacle--session (orgacle--session-create))
+  ;; the talk timer measures from here, not from whenever the mode
+  ;; line happens to first redisplay
+  (setf (orgacle--session-start-time orgacle--session) (float-time))
+  (setf (orgacle--session-org-buffer orgacle--session) (current-buffer))
+  ;; regenerate image previews
+  (orgacle--link-preview-refresh)
+  ;; To present narrowed region use temporary buffer
+  (when (and (or (> (point-min) (save-restriction (widen) (point-min)))
+                 (< (point-max) (save-restriction (widen) (point-max))))
+             (save-excursion (goto-char (point-min)) (org-at-heading-p)))
+    (let ((title (nth 4 (org-heading-components))))
+      (setf (orgacle--session-org-restriction orgacle--session)
+            (list (point-min) (point-max)))
+      (require 'ox-org)
+      (setf (orgacle--session-org-file orgacle--session)
+            (org-org-export-to-org nil 'subtree))
+      (find-file (orgacle--session-org-file orgacle--session))
+      (goto-char (point-min))
+      (insert (format "#+Title: %s\n\n" title))))
+  (setq orgacle-frame-level (orgacle-get-frame-level))
+  ;; build the slide vector navigation is index arithmetic over
+  (orgacle--start-slides)
+  ;; save the user's state before `orgacle--get-frame' sets the mouse
+  ;; pointer to the presentation's own shape: `orgacle--save-user-state'
+  ;; is a no-op once a save is already pending, so `orgacle-mode's own
+  ;; call below stays harmless, but the pointer capture inside this one
+  ;; has to happen before that mutation, not after it, to see the
+  ;; user's real prior setting rather than the presentation's own
+  (orgacle--save-user-state)
+  (orgacle--get-frame)
+  (orgacle-mode)
+  (set-buffer-modified-p nil)
+  (setf (orgacle--session-presentation-window orgacle--session) (selected-window))
+  ;; set/unset tooltips; `orgacle-mode', called above, has already
+  ;; saved the user's prior setting via `orgacle--save-user-state'
+  (tooltip-mode (if orgacle-tooltip-mode 1 -1))
+  ;; create speaker notes
+  (when orgacle-speaker-notes (orgacle-make-notes-buffer))
+  ;; display the first slide: `orgacle--start-slides' only builds the
+  ;; slide vector and resets the index and page number, it does not
+  ;; narrow the buffer or run the page hook, so without this call the
+  ;; buffer would stay unnarrowed with `orgacle-page-number' at 1 but
+  ;; nothing actually on display, and the first `orgacle-next-page'
+  ;; would compute (1+ 0) and jump straight to slide 2 -- slide 1
+  ;; would then be reachable only via `orgacle-top', `t' or `1'.
+  ;; Called after `orgacle-make-notes-buffer' so the page hook's
+  ;; `orgacle-position-notes' has a notes buffer to position when it
+  ;; fires as part of showing this first slide.
+  (orgacle-top)
+  (run-hooks 'orgacle-start-presentation-hook))
 
 ;;; Migration
 
@@ -625,6 +676,66 @@ unsaved changes, ask first: saving it would write those changes too."
       (message "Converted %d name%s in %s"
                count (if (= count 1) "" "s") (file-name-nondirectory file))
       count)))
+
+;;; Unloading
+
+(defun orgacle-unload-function ()
+  "Undo what loading Orgacle installed outside its own symbols.
+`unload-feature' -- see its own docstring -- only removes, from a hook
+variable, functions *defined by the file actually being unloaded*, and
+`(unload-feature \\='orgacle)' only ever unloads this file, orgacle.el,
+never the nine submodules it `require's above.  Two things Orgacle
+installs live outside orgacle.el's own symbols entirely, and so are
+never in scope for that automatic cleanup without this function:
+
+- All six `orgacle-page-hook' members: `orgacle-slide-in-effect'
+  \(orgacle-fontify.el\), `orgacle-show-file-auto' and
+  `orgacle-show-indicators-maybe' \(orgacle-media.el\),
+  `orgacle-position-notes' \(orgacle-notes.el\), `orgacle-reveal-reset'
+  \(orgacle-reveal.el\) and `orgacle--apply-appearance'
+  \(orgacle-appearance.el\).  Removed here by exact symbol, matching
+  `unload-feature''s own surgical discipline -- only what Orgacle
+  itself put there -- rather than `(setq orgacle-page-hook nil)',
+  which would also discard a third party's own hook member if one were
+  ever added directly to this public variable.
+
+- The `:after' advice orgacle-src.el puts on Org's own
+  `org-edit-src-exit', so a live presentation's speaker-notes buffer
+  stays in sync with an edited source block; see that file's own
+  `orgacle--refresh-after-src-edit'.  `org-edit-src-exit' is Org's
+  function, not orgacle-src.el's, so advice on it is never in
+  `unload-feature''s scope either, for the same reason as the hook
+  members above.  `orgacle-src-unload-function' already exists and
+  already handles exactly this -- see orgacle-src.el -- but only runs
+  automatically when `orgacle-src' itself is the feature being
+  unloaded.  Called directly here instead, rather than through
+  `(unload-feature \\='orgacle-src t)': that would additionally unbind
+  every ordinary function orgacle-src.el defines
+  \(`orgacle-next-src-block' and the rest\), which is no part of either
+  symptom this function exists to fix.
+
+MELPA reviewers check this specifically because the package advises a
+core Org function; confirmed directly, before writing this function,
+that `(unload-feature \\='orgacle t)' left all six hook members
+installed and the advice in place, and that a real
+`org-edit-src-code'/`org-edit-src-exit' round trip still completes
+once both are actually gone.
+
+Returns nil, like `orgacle-src-unload-function' itself, so
+`unload-feature' still performs its own standard unloading of
+orgacle.el's own definitions -- `orgacle-mode', `orgacle-quit',
+`orgacle-run', `orgacle-mode-map' and the rest -- after this function
+returns; a non-nil return here would suppress that entirely, per
+`unload-feature''s own docstring, which is not what this is for."
+  (remove-hook 'orgacle-page-hook #'orgacle-slide-in-effect)
+  (remove-hook 'orgacle-page-hook #'orgacle-show-file-auto)
+  (remove-hook 'orgacle-page-hook #'orgacle-show-indicators-maybe)
+  (remove-hook 'orgacle-page-hook #'orgacle-position-notes)
+  (remove-hook 'orgacle-page-hook #'orgacle-reveal-reset)
+  (remove-hook 'orgacle-page-hook #'orgacle--apply-appearance)
+  (when (fboundp 'orgacle-src-unload-function)
+    (orgacle-src-unload-function))
+  nil)
 
 (provide 'orgacle)
 ;;; orgacle.el ends here
