@@ -285,7 +285,7 @@ Supported players are \"mplayer\" and \"vlc\"."
   :type 'string
   :group 'orgacle)
 
-(cl-defstruct (orgacle--session (:constructor orgacle--session-create))
+(cl-defstruct (orgacle--session (:constructor orgacle--session-create) (:copier nil))
   "The state one running presentation keeps.
 Slots replace what used to be individually loose `defvar' forms: the
 presentation frame, the original Org buffer and its restriction, the
