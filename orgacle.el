@@ -218,28 +218,20 @@ narrowed `org-restriction' slot."
           ;; leaves four frames total afterward, the stale notes frame
           ;; among them, now showing the deck file itself.
           ;;
-          ;; The ordinary `q' path never surfaced this -- not, as an
-          ;; earlier version of this comment claimed, because the
-          ;; selected frame there is "still whatever frame `q' was
-          ;; pressed in": `q' is pressed *in* the presentation frame,
-          ;; and this same function deletes that exact frame some
-          ;; twenty lines above this point, so by the time execution
-          ;; reaches here the presentation frame is already gone and
-          ;; Emacs has already re-selected some other one.  Corrected,
-          ;; code review (fix round 2, Important 3), instrumented on a
-          ;; real live `q': the frame selected by this point is the
-          ;; *notes* frame, simply because it is the only other frame
-          ;; left once the presentation frame above is deleted, in the
-          ;; ordinary one-presentation-plus-one-notes-frame case -- and
-          ;; the notes frame is exactly the one this call needs to
-          ;; find, so the ordinary path worked by this coincidence of
-          ;; frame re-selection, not for the reason originally given.
-          ;; Item 4's recovery route breaks that coincidence, not the
-          ;; underlying assumption it was never safe to make: it can
-          ;; leave a *third* frame selected by this point -- neither
-          ;; the presentation frame just deleted nor the notes frame --
-          ;; which is what actually made ALL-FRAMES the fix rather than
-          ;; any particular frame-selection order.
+          ;; The ordinary `q' path never surfaced this: instrumented on
+          ;; a real live `q', the frame selected by this point is the
+          ;; notes frame, which is exactly the one this call needs to
+          ;; find.  Two earlier versions of this comment each tried to
+          ;; explain *why* the ordinary path lands there -- both wrong,
+          ;; the second one measured wrong in the same review round
+          ;; that corrected the first -- so this states only what was
+          ;; actually measured and stops there, per this project's own
+          ;; standing rule: an unmeasured "because" is worse than none.
+          ;; What matters for this fix either way: item 4's recovery
+          ;; route can leave some other frame selected by this point,
+          ;; whichever one the ordinary path relies on, confirmed live,
+          ;; which is what makes ALL-FRAMES the fix rather than any
+          ;; particular frame already being selected.
           (when (and session (bufferp (orgacle--session-notes-buffer session)))
             (let ((win (get-buffer-window (orgacle--session-notes-buffer session) t)))
               (when win (delete-frame (window-frame win))))
@@ -371,14 +363,14 @@ Each frame-level heading becomes a slide.  Navigate with
   ;; plain Org buffer on frame 1, with frame 2 merely present, changed
   ;; frame 1's own height and left it changed, `orgacle-quit' afterward
   ;; included, which never restores a height nothing ever saved, while
-  ;; frame 2 and the global default stayed untouched throughout --
-  ;; corrected here, code review (fix round 2, Important 3), from this
-  ;; comment's own earlier, false "101 to 400, quit leaves it at 398"
-  ;; account, which implied `orgacle-quit' itself changed something:
-  ;; measured directly, `face-attribute' already reported 398, not 400,
-  ;; immediately after `orgacle-mode' returned, before `orgacle-quit'
-  ;; ran at all, and still 398 afterward -- it was never 400, and quit
-  ;; changed nothing.  There is no frame this call may fall back to
+  ;; frame 2 and the global default stayed untouched throughout.  The
+  ;; specific before/after numbers this comment gave in two earlier
+  ;; versions were both wrong -- font rounding on the reviewer's own X
+  ;; session, not a portable fact -- and are deliberately not repeated
+  ;; here; the load-bearing claim, that `orgacle-quit' changes nothing
+  ;; because nothing was ever saved to restore, is what was actually
+  ;; measured and reproduces regardless of the exact numbers involved.
+  ;; There is no frame this call may fall back to
   ;; that is guaranteed not to be a real one the user cares about, so
   ;; it does not fall back at all: only the session's own frame, and
   ;; only when that frame is genuinely `frame-live-p', which is always
@@ -812,7 +804,9 @@ one of them, but not for the reason an earlier version of this
 docstring gave -- \"every later submodule still requires
 `orgacle-core'\" -- which covers at most one call and, measured
 directly, not even that one cleanly: attempting all nine without FORCE
-shows the blocker named in the error is `orgacle.elc' itself, still
+shows the blocker named in the error is orgacle.el's own loaded file
+itself \(the exact name depends on whether it is currently loaded
+compiled or from source -- confirmed directly, both ways\), still
 counted as a loaded dependent of *every* submodule, for all nine calls
 including `orgacle-core' once the other eight have already been
 unloaded first.  That is because `orgacle.el' itself is not yet
@@ -824,10 +818,14 @@ all nine of these, is still \"loaded\" throughout, and would refuse
 every single one of these calls without FORCE regardless of any
 dependency the nine submodules have among themselves.  Order here is
 reverse of the `require's above, most specific first and `orgacle-core'
-last, on general principle -- unloading a dependency before its own
-dependents matches how `unload-feature' itself is written to prefer
-being used -- though FORCE makes the actual order immaterial to
-whether any individual call here succeeds.
+last -- unloading each submodule's own dependents \(everything that
+itself `require's `orgacle-core'\) before the shared dependency they
+all rely on, not the other way around: `unload-feature' without FORCE
+refuses to unload something another *loaded* file still depends on, so
+this order is the one that would keep working the furthest if FORCE
+were ever dropped, even though FORCE is what actually makes the
+present order immaterial to whether any individual call here
+succeeds.
 
 Trade-off, previously undocumented: round 0's version of this function
 removed the six hook members by exact symbol, deliberately preserving
@@ -864,29 +862,60 @@ recover it.  Fixed by calling `orgacle--restore-user-state' here
 first, while `orgacle-core' and the state it needs are both still
 live, so the restore happens as part of the unload itself; a no-op,
 via that function's own guard, when no presentation was live to begin
-with.  This does only that one, narrow restore -- not a full
-`orgacle-quit', which would also delete the presentation's own frame
-and kill its notes buffer, side effects a maintainer calling
-`unload-feature' directly has not asked for and this function has no
-business taking on their behalf.
+with.
 
-Important 1 (code review, fix round 2).  `org-export-define-derived-backend',
-in ox-orgacle.el, registers a backend struct in Org's own
-`org-export-registered-backends', outside any single file's own
-`load-history' the same way the six `orgacle-page-hook' members and
-the `org-edit-src-exit' advice were, and so outside `unload-feature''s
-standard unloading for the same reason.  Confirmed directly, before
-this fix: after this cascade unloaded `ox-orgacle', `(org-export-get-backend
-\\='orgacle)' still returned the full struct, still naming
-`orgacle-export-to-pdf' and the rest, all four now void.  Fixed by
-calling `orgacle--ox-remove-backend' -- see ox-orgacle.el's own
-docstring on that function for why it is not simply named
-`ox-orgacle-unload-function' and left for `unload-feature' to
-auto-discover, the way `orgacle-src-unload-function' already is --
-explicitly, before this function's own cascade reaches `ox-orgacle'
-below, since `orgacle--ox-remove-backend' itself would otherwise go
-void along with everything else ox-orgacle.el defines before ever
-running.
+Important B (code review, fix round 3).  The same \"stranded
+permanently\" shape survives buffer-locally, not only globally:
+measured directly, before this fix, on a live presentation on the
+\"plain.org\" fixture \(104 characters\), unloading left the buffer
+still narrowed to the 26 characters of its first slide, and every
+overlay `orgacle-clean-overlays' would otherwise delete -- title and
+heading fontification, any hide overlays a slide created -- still live
+in the buffer, with no later `orgacle-quit' able to undo either, since
+both `widen'/`narrow-to-region' and `orgacle-clean-overlays', in
+`orgacle-quit' itself, are guarded on `orgacle--session', which this
+cascade discards along with `orgacle-core'.  Fixed the same way as
+Important 2: widen the presented buffer -- or restore its own recorded
+restriction, for a narrowed-subtree presentation, the same choice
+`orgacle-quit' itself makes -- and delete every overlay in
+`orgacle-overlays', both here, before the cascade discards the session
+and the functions this needs.
+
+Both of the restores just above are deliberately narrower than a full
+`orgacle-quit': they restore exactly what was measured broken --
+global Emacs state, the buffer's own narrowing, Orgacle's own
+overlays -- not `orgacle-quit''s other steps, deleting the
+presentation's own frame and killing its notes buffer, which stay
+session-management side effects a maintainer calling `unload-feature'
+directly has not asked for and this function has no business taking on
+their behalf.  Widening the buffer and removing Orgacle's own overlays
+are a different kind of thing than those two: restoring what the
+presentation changed, not ending something still running, and so
+belong here even though the frame and notes buffer do not.
+
+Important 1 (code review, fix round 2; revised fix round 3).
+`org-export-define-derived-backend', in ox-orgacle.el, registers a
+backend struct in Org's own `org-export-registered-backends', outside
+any single file's own `load-history' the same way the six
+`orgacle-page-hook' members and the `org-edit-src-exit' advice were,
+and so outside `unload-feature''s standard unloading for the same
+reason.  Confirmed directly, before the round 2 fix: after this
+cascade unloaded `ox-orgacle', `(org-export-get-backend \\='orgacle)'
+still returned the full struct, still naming `orgacle-export-to-pdf'
+and the rest, all four now void.  Round 2's own fix called
+`orgacle--ox-remove-backend' explicitly from here, before this
+function's own cascade reached `ox-orgacle' below -- necessary at the
+time, since that function would otherwise have gone void along with
+everything else ox-orgacle.el defines before ever running, but Finding
+A, fix round 3: that left the same bug reachable on the genuinely
+standalone path ox-orgacle.el's own Commentary advertises, where
+`orgacle' itself is never loaded at all and this function never runs
+to call anything.  `orgacle--ox-remove-backend' is now `fset' to
+`ox-orgacle-unload-function' instead, in ox-orgacle.el itself -- see
+that function's own docstring for why `fset' specifically -- which
+`unload-feature' auto-discovers and calls on its own once the cascade
+below reaches `ox-orgacle', the same way it already does for
+`orgacle-src-unload-function'; no call from here is needed any more.
 
 Returns nil, so `unload-feature' still performs its own standard
 unloading of orgacle.el's own definitions -- `orgacle-mode',
@@ -896,8 +925,15 @@ entirely, per `unload-feature''s own docstring, which is not what this
 is for."
   (when (fboundp 'orgacle--restore-user-state)
     (orgacle--restore-user-state))
-  (when (fboundp 'orgacle--ox-remove-backend)
-    (orgacle--ox-remove-backend))
+  (when (and (boundp 'orgacle--session) orgacle--session
+             (fboundp 'orgacle--session-org-buffer)
+             (buffer-live-p (orgacle--session-org-buffer orgacle--session)))
+    (with-current-buffer (orgacle--session-org-buffer orgacle--session)
+      (if (orgacle--session-org-restriction orgacle--session)
+          (apply #'narrow-to-region (orgacle--session-org-restriction orgacle--session))
+        (widen))))
+  (when (fboundp 'orgacle-clean-overlays)
+    (orgacle-clean-overlays))
   (dolist (feature '(ox-orgacle orgacle-appearance orgacle-reveal
                       orgacle-notes orgacle-media orgacle-src
                       orgacle-fontify orgacle-nav orgacle-core))

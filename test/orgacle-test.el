@@ -4735,13 +4735,14 @@ behind it.  Confirmed live, on two real X frames, not merely in batch:
 merely present, changed frame 1's own `default' face height and left
 it changed -- `M-x orgacle-quit' afterward restored nothing, since
 nothing was ever saved to restore -- while frame 2 and the global
-default (`t' as FRAME) stayed untouched throughout.  Corrected here,
-code review (fix round 2, Important 3), from this docstring's own
-earlier, false \"101 to 400, quit leaves it at 398\" account, which
-implied `orgacle-quit' itself changed something: measured directly,
-the height was already 398, not 400, immediately after `orgacle-mode'
-returned, and still 398 after `orgacle-quit' -- it was never 400, and
-quit changed nothing.
+default (`t' as FRAME) stayed untouched throughout.  Specific
+before/after numbers were given here in two earlier versions of this
+docstring, code review (fix round 2, then fix round 3 again) -- both
+wrong, font rounding on whichever X session took the measurement, not
+a portable fact -- and are deliberately not repeated: the load-bearing
+claim, that `orgacle-quit' changes nothing because nothing was ever
+saved to restore, is what was actually measured and reproduces
+regardless of the exact numbers involved.
 
 The correct fix does not fall back to any frame at all: it only ever
 touches the session's own frame, and only when that frame is genuinely
@@ -4871,9 +4872,20 @@ the selected one -- the fix this test pins."
                    ;; call's ALL-FRAMES argument instead if `orgacle-quit'
                    ;; ever grew a second one, with nothing here to catch
                    ;; that this test had quietly stopped testing what its
-                   ;; own name says it tests.
+                   ;; own name says it tests.  BUFFER-OR-NAME defaults
+                   ;; to `(current-buffer)' before calling `get-buffer',
+                   ;; not passed through as-is: fix round 3 nit,
+                   ;; `get-buffer-window' itself treats a nil or omitted
+                   ;; BUFFER-OR-NAME as the current buffer, but
+                   ;; `(get-buffer nil)' signals `wrong-type-argument'
+                   ;; rather than doing the same -- confirmed directly
+                   ;; -- so the unguarded version of this stub would
+                   ;; itself have crashed on exactly the kind of
+                   ;; different, future `get-buffer-window' call this
+                   ;; nit fix exists to keep discriminating correctly
+                   ;; against, rather than merely fail to discriminate.
                    (lambda (&optional buffer-or-name all-frames)
-                     (when (eq (get-buffer buffer-or-name) notes-buf)
+                     (when (eq (get-buffer (or buffer-or-name (current-buffer))) notes-buf)
                        (setq seen-all-frames all-frames))
                      nil)))
           (orgacle-quit)
@@ -4904,13 +4916,23 @@ just relocated into Org's own export dispatcher instead of into this
 package's own functions.
 
 Fixed with `orgacle--ox-remove-backend', in ox-orgacle.el itself,
-called explicitly by `orgacle-unload-function' rather than left for
-`unload-feature' to auto-discover as `ox-orgacle-unload-function' the
-way `orgacle-src-unload-function' already is -- see that helper's own
-docstring for why -- which removes exactly the `orgacle' backend from
-`org-export-registered-backends' and nothing else there, the same
-by-name discipline `orgacle-unload-function' already uses for
-`orgacle-page-hook'."
+which removes exactly the `orgacle' backend from
+`org-export-registered-backends' and nothing else there.  Round 2's
+own version of this fix called that function explicitly from
+`orgacle-unload-function', rather than relying on `unload-feature' to
+auto-discover it as `ox-orgacle-unload-function' the way
+`orgacle-src-unload-function' already is; fix round 3 (Important A)
+replaced that with `fset' instead -- see `orgacle--ox-remove-backend's
+own docstring in ox-orgacle.el for why -- so this test now exercises
+that same auto-discovery path, reached through the cascade here,
+rather than an explicit call.  Corrected here, code review (fix round
+3): an earlier version of this docstring additionally claimed this
+followed \"the same by-name discipline `orgacle-unload-function'
+already uses for `orgacle-page-hook'\" -- false as of the very commit
+that introduced it, and contradicted by that same commit's own
+trade-off paragraph in `orgacle-unload-function's own docstring, which
+documents that the cascade abandoned by-name removal for the hook
+entirely."
   (should (org-export-get-backend 'orgacle))
   (unwind-protect
       (progn
@@ -4988,6 +5010,120 @@ with already uses."
                 (require 'orgacle)
                 (orgacle-quit)))))
       (tooltip-mode (if original-tooltip 1 -1)))))
+
+(ert-deftest orgacle-test-unload-ox-orgacle-alone-removes-the-export-backend ()
+  "`(unload-feature \\='ox-orgacle)', with `orgacle' itself never
+loaded at all, still removes the `orgacle' export backend -- not only
+when reached through `orgacle-unload-function''s own cascade.
+
+Important A (code review, fix round 3).  ox-orgacle.el's own
+Commentary advertises exactly this independence -- \"an Org file can
+be exported through this backend without starting a presentation\" --
+and all three of its export commands carry `;;;###autoload', so
+`M-x orgacle-export-to-pdf' on an installed package loads ox-orgacle.el
+by itself, with none of the rest of Orgacle involved.  Confirmed
+directly, before this fix: with `orgacle--ox-remove-backend' only ever
+called *from* `orgacle-unload-function', a plain, no-FORCE
+`(unload-feature \\='ox-orgacle)' left `orgacle-export-to-pdf' unbound
+while the backend stayed registered, byte-for-byte the state
+Important 1 exists to eliminate, just reached by the realistic
+standalone path rather than through the full package.
+
+Fixed by wiring `orgacle--ox-remove-backend' up as
+`ox-orgacle-unload-function' via `fset' -- see that function's own
+docstring in ox-orgacle.el for why `fset' rather than a second `defun'
+or a `defalias' -- which `unload-feature' auto-discovers and calls for
+`ox-orgacle' specifically, the same way it already does for
+`orgacle-src-unload-function', with no need for
+`orgacle-unload-function' to call it explicitly at all any more.
+
+Runs in a genuinely separate Emacs subprocess, the same way
+`orgacle-test-loads-without-x11' does and for the same underlying
+reason: this file's own top-level `(require \\='orgacle)' has already
+loaded `orgacle.el' by the time any test in this suite runs, which
+would make `orgacle.el' itself a loaded dependent of `ox-orgacle' and
+either force a no-FORCE `unload-feature' call to error outright
+\(confirmed directly\) or, with FORCE, no longer test the genuinely
+standalone scenario the review's own \"orgacle itself never loaded at
+all\" wording specifically describes.  `-l test/init.el' provisions
+`load-path' without itself requiring `orgacle' -- confirmed by reading
+that file, which only sets up `package-user-dir' and `load-path' --
+so the subprocess loads only `ox-orgacle.el' and Org's own `ox.el',
+`ox-latex.el' and `ox-org.el', exactly the standalone path."
+  (let* ((default-directory orgacle-test-project-directory)
+         (emacs (expand-file-name invocation-name invocation-directory))
+         (output (get-buffer-create "*orgacle-test-ox-orgacle-alone*"))
+         (status (call-process
+                  emacs nil output nil
+                  "-Q" "--batch"
+                  "-l" "test/init.el"
+                  "--eval" "(require 'ox-orgacle)"
+                  "--eval" "(unless (org-export-get-backend 'orgacle) (error \"backend missing before unload\"))"
+                  "--eval" "(unless (fboundp 'orgacle-export-to-pdf) (error \"function missing before unload\"))"
+                  "--eval" "(unload-feature 'ox-orgacle)"
+                  "--eval" "(when (org-export-get-backend 'orgacle) (error \"backend still registered after unload\"))"
+                  "--eval" "(when (fboundp 'orgacle-export-to-pdf) (error \"function still bound after unload\"))")))
+    (unless (equal 0 status)
+      (with-current-buffer output (message "subprocess output:\n%s" (buffer-string))))
+    (should (equal 0 status))
+    (kill-buffer output)))
+
+(ert-deftest orgacle-test-unload-during-a-live-presentation-restores-the-buffer ()
+  "Unloading `orgacle' while a presentation is live also restores the
+presented buffer itself, not only global Emacs state.
+
+Important B (code review, fix round 3).  Measured directly, before
+this fix, on a live presentation on the \"plain.org\" fixture (104
+characters): after `(unload-feature \\='orgacle t)', the buffer was
+still narrowed to the 26 characters of its first slide, and every
+overlay `orgacle-clean-overlays' would otherwise have deleted -- the
+title/heading fontification and any hide overlays a slide created --
+was still live in the buffer.  No later `orgacle-quit' can undo
+either: both `widen'/`narrow-to-region' and `orgacle-clean-overlays',
+in `orgacle-quit' itself, are guarded on `orgacle--session', which the
+cascade discards along with `orgacle-core' before any such `orgacle-quit'
+could run.
+
+Fixed by widening the presented buffer -- or restoring its own
+recorded restriction, for a narrowed-subtree presentation, the same
+choice `orgacle-quit' itself makes -- and deleting every overlay in
+`orgacle-overlays', both at the same point `orgacle--restore-user-state'
+is already called: before the cascade discards the session and the
+functions this needs.  Deliberately narrower than a full `orgacle-quit':
+this restores exactly the two things measured broken above, not
+`orgacle-quit''s other steps -- deleting the presentation frame,
+killing the notes buffer, deleting the narrowed-subtree temp file --
+which stay session-management side effects a maintainer calling
+`unload-feature' directly has not asked for, not restoration of
+something the presentation changed.
+
+Captures the first overlay object itself, not merely
+`orgacle-overlays' the variable, to check afterward: the variable goes
+unbound along with `orgacle-core' once the cascade completes, so
+`(should-not orgacle-overlays)' after `unload-feature' returns would
+signal `void-variable' rather than fail cleanly; `(overlay-buffer ov)'
+on an already-`delete-overlay'd overlay reliably returns nil
+regardless, which is what `orgacle-clean-overlays' itself does to
+every overlay it deletes."
+  (unwind-protect
+      (orgacle-test-with-fixture "plain.org"
+        (let ((full-size (buffer-size))
+              (buf (current-buffer)))
+          (cl-letf (((symbol-function 'orgacle--get-frame) (lambda () nil))
+                    (orgacle-speaker-notes nil))
+            (orgacle-run)
+            (should (buffer-narrowed-p))
+            (should orgacle-overlays)
+            (let ((first-overlay (car orgacle-overlays)))
+              (unwind-protect
+                  (progn
+                    (unload-feature 'orgacle t)
+                    (with-current-buffer buf
+                      (should-not (buffer-narrowed-p))
+                      (should (= (- (point-max) (point-min)) full-size)))
+                    (should-not (overlay-buffer first-overlay)))
+                (require 'orgacle)
+                (orgacle-quit))))))))
 
 (provide 'orgacle-test)
 ;;; orgacle-test.el ends here
